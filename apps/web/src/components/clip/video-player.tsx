@@ -173,20 +173,7 @@ export function VideoPlayer({
         </button>
       </div>
 
-      {/* Mute toggle */}
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          toggleMute();
-        }}
-        className="absolute right-4 top-4 flex h-8 w-8 items-center justify-center rounded-full bg-black/40 backdrop-blur-sm"
-      >
-        {isMuted ? (
-          <VolumeX className="h-4 w-4 text-white" />
-        ) : (
-          <Volume2 className="h-4 w-4 text-white" />
-        )}
-      </button>
+      
     </div>
   );
 }

@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
 import { useUserStore } from "@/stores/user-store";
+import { useFeedStore } from "@/stores/feed-store";
 import { getUserQueued } from "@/lib/supabase/client";
 import { formatCompactNumber } from "@/lib/utils";
 import {
@@ -23,6 +24,8 @@ import {
   Timer,
   MoreVertical,
   Trash2,
+  Volume2,
+  VolumeX,
 } from "lucide-react";
 
 interface VideoCardProps {
@@ -46,6 +49,8 @@ export function VideoCard({ clip, isActive }: VideoCardProps) {
   const isExpired = deadline ? deadline < new Date() : false;
   const userId = currentUserId ?? profile?.id ?? null;
   const isOwner = Boolean(userId && String(clip.creator_user_id) === String(userId));
+  const isMuted = useFeedStore((s) => s.isMuted);
+  const toggleMute = useFeedStore((s) => s.toggleMute);
 
   useEffect(() => {
     getUserQueued().then(({ data: { user } }) => {
@@ -85,41 +90,6 @@ export function VideoCard({ clip, isActive }: VideoCardProps) {
         isActive={isActive}
         onLoopEnd={handleLoopEnd}
       />
-
-      {/* Delete (own posts only) — top right */}
-      {isOwner && (
-        <div className="absolute right-3 top-3 z-30">
-          {showDeleteMenu ? (
-            <div className="rounded-lg bg-black/80 backdrop-blur-sm border border-border overflow-hidden shadow-lg">
-              <button
-                type="button"
-                onClick={handleDelete}
-                disabled={deleting}
-                className="flex w-full items-center gap-2 px-3 py-2 text-sm text-destructive hover:bg-destructive/10 touch-manipulation disabled:opacity-50"
-              >
-                <Trash2 className="h-4 w-4" />
-                {deleting ? "Deleting..." : "Delete post"}
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowDeleteMenu(false)}
-                className="flex w-full items-center gap-2 px-3 py-2 text-sm text-muted-foreground hover:bg-muted touch-manipulation"
-              >
-                Cancel
-              </button>
-            </div>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setShowDeleteMenu(true)}
-              className="flex h-9 w-9 items-center justify-center rounded-full bg-black/50 backdrop-blur-sm text-white/90 hover:bg-black/70 hover:text-white touch-manipulation"
-              aria-label="Options"
-            >
-              <MoreVertical className="h-5 w-5" />
-            </button>
-          )}
-        </div>
-      )}
 
       {/* After first loop: semi-transparent overlay with predictions + one-tap bet; video keeps playing */}
       {showLoopOverlay && isBettingOpen && !isExpired && (
@@ -170,8 +140,22 @@ export function VideoCard({ clip, isActive }: VideoCardProps) {
         </div>
       </div>
 
-      {/* Right side actions — tap to open predictions / bet */}
+      {/* Right side actions — mute, view count, predictions / bet; options (own posts) */}
       <div className="absolute bottom-24 right-3 flex flex-col items-center gap-5 z-10">
+        <button
+          type="button"
+          onClick={toggleMute}
+          className="flex flex-col items-center gap-1 touch-manipulation"
+          aria-label={isMuted ? "Unmute" : "Mute"}
+        >
+          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white/10 backdrop-blur-sm">
+            {isMuted ? (
+              <VolumeX className="h-5 w-5 text-white" />
+            ) : (
+              <Volume2 className="h-5 w-5 text-white" />
+            )}
+          </div>
+        </button>
         <button
           type="button"
           className="flex flex-col items-center gap-1 touch-manipulation"
@@ -209,6 +193,41 @@ export function VideoCard({ clip, isActive }: VideoCardProps) {
             <MessageSquare className="h-5 w-5 text-white" />
           </div>
         </button>
+
+        {isOwner && (
+          <div className="relative flex flex-col items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setShowDeleteMenu((v) => !v)}
+              className="flex flex-col items-center gap-1 touch-manipulation"
+              aria-label="Options"
+            >
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white/10 backdrop-blur-sm">
+                <MoreVertical className="h-5 w-5 text-white" />
+              </div>
+            </button>
+            {showDeleteMenu && (
+              <div className="absolute right-0 top-full mt-1 min-w-[140px] rounded-lg border border-border bg-black/90 backdrop-blur-sm shadow-lg overflow-hidden">
+                <button
+                  type="button"
+                  onClick={handleDelete}
+                  disabled={deleting}
+                  className="flex w-full items-center gap-2 px-3 py-2 text-sm text-destructive hover:bg-destructive/10 touch-manipulation disabled:opacity-50"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  {deleting ? "Deleting..." : "Delete post"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowDeleteMenu(false)}
+                  className="flex w-full items-center gap-2 px-3 py-2 text-sm text-white/80 hover:bg-white/10 touch-manipulation"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Betting CTA */}

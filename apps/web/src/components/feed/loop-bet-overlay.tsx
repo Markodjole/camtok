@@ -10,7 +10,6 @@ import { formatCurrency } from "@/lib/utils";
 import { ChevronDown } from "lucide-react";
 
 const MAX_VISIBLE_COMPACT = 2;
-const STAKE_OPTIONS = [1, 2, 5, 10, 20, 50] as const;
 
 interface LoopBetOverlayProps {
   clipId: string;
@@ -21,12 +20,10 @@ export function LoopBetOverlay({ clipId }: LoopBetOverlayProps) {
   const refetchMarkets = useClipMarketsStore((s) => s.refetchMarkets);
   const [bettingId, setBettingId] = useState<string | null>(null);
   const lastStakeAmount = useFeedStore((s) => s.lastStakeAmount);
-  const setLastStakeAmount = useFeedStore((s) => s.setLastStakeAmount);
   const wallet = useUserStore((s) => s.wallet);
   const setWallet = useUserStore((s) => s.setWallet);
   const { toast } = useToast();
   const [pendingBet, setPendingBet] = useState<{ marketId: string; side: "yes" | "no" } | null>(null);
-  const [showAmountPicker, setShowAmountPicker] = useState(false);
 
   useEffect(() => {
     refetchMarkets(clipId);
@@ -115,37 +112,7 @@ export function LoopBetOverlay({ clipId }: LoopBetOverlayProps) {
   }
 
   const compactContent = (
-    <div className="pointer-events-auto absolute left-3 right-3 bottom-[28%] flex flex-col gap-2">
-      <div className="flex flex-col items-center gap-1.5">
-        <button
-          type="button"
-          onClick={() => setShowAmountPicker((v) => !v)}
-          className="text-center text-[11px] font-medium text-white/90 rounded bg-black/40 px-2 py-0.5 hover:bg-black/55 touch-manipulation"
-        >
-          One-tap · {formatCurrency(lastStakeAmount)}
-        </button>
-        {showAmountPicker && (
-          <div className="flex flex-wrap justify-center gap-1.5 rounded-lg bg-black/50 px-2 py-2">
-            {STAKE_OPTIONS.map((amount) => (
-              <button
-                key={amount}
-                type="button"
-                onClick={() => {
-                  setLastStakeAmount(amount);
-                  setShowAmountPicker(false);
-                }}
-                className={`rounded-md px-2.5 py-1 text-[11px] font-semibold touch-manipulation ${
-                  amount === lastStakeAmount
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-white/20 text-white hover:bg-white/30"
-                }`}
-              >
-                ${amount}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
+    <div className="pointer-events-auto absolute left-3 right-3 top-3 flex flex-col gap-2">
       <div className="space-y-2">
         {visibleMarkets.map((market) => (
           <PredictionBlock key={market.id} market={market} />
@@ -175,40 +142,9 @@ export function LoopBetOverlay({ clipId }: LoopBetOverlayProps) {
       aria-label="Close full list"
     >
       <div
-        className="flex-1 overflow-y-auto px-3 py-4 mt-8"
+        className="flex-1 overflow-y-auto px-3 py-4 pt-3"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex flex-col items-center gap-1.5 mb-2">
-          <button
-            type="button"
-            onClick={(e) => { e.stopPropagation(); setShowAmountPicker((v) => !v); }}
-            className="text-center text-xs font-medium text-white/90 rounded bg-black/40 px-2 py-1 hover:bg-black/55 touch-manipulation"
-          >
-            One-tap · {formatCurrency(lastStakeAmount)}
-          </button>
-          {showAmountPicker && (
-            <div className="flex flex-wrap justify-center gap-1.5 rounded-lg bg-black/50 px-2 py-2">
-              {STAKE_OPTIONS.map((amount) => (
-                <button
-                  key={amount}
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setLastStakeAmount(amount);
-                    setShowAmountPicker(false);
-                  }}
-                  className={`rounded-md px-2.5 py-1 text-[11px] font-semibold touch-manipulation ${
-                    amount === lastStakeAmount
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-white/20 text-white hover:bg-white/30"
-                  }`}
-                >
-                  ${amount}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
         <div className="space-y-2">
           {markets.map((market) => (
             <PredictionBlock key={market.id} market={market} />
@@ -232,7 +168,7 @@ export function LoopBetOverlay({ clipId }: LoopBetOverlayProps) {
   return (
     <div className="absolute inset-0 z-20 pointer-events-none">
       {markets.length === 0 ? (
-        <div className="pointer-events-auto absolute left-3 right-3 bottom-[28%]">
+        <div className="pointer-events-auto absolute left-3 right-3 top-3">
           <p className="text-center text-xs text-white/60 rounded-md bg-black/40 px-2 py-1.5">
             No predictions yet
           </p>
