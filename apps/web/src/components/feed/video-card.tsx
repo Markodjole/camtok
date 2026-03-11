@@ -2,12 +2,17 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import type { FeedClip } from "@/actions/clips";
+import { archiveClip } from "@/actions/clips";
 import { VideoPlayer } from "@/components/clip/video-player";
 import { BettingBottomSheet } from "@/components/betting/betting-bottom-sheet";
 import { LoopBetOverlay } from "@/components/feed/loop-bet-overlay";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { useToast } from "@/components/ui/toast";
+import { useUserStore } from "@/stores/user-store";
+import { getUserQueued } from "@/lib/supabase/client";
 import { formatCompactNumber } from "@/lib/utils";
 import {
   ChevronUp,
@@ -16,6 +21,8 @@ import {
   TrendingUp,
   GitBranch,
   Timer,
+  MoreVertical,
+  Trash2,
 } from "lucide-react";
 
 interface VideoCardProps {
@@ -26,15 +33,47 @@ interface VideoCardProps {
 export function VideoCard({ clip, isActive }: VideoCardProps) {
   const [showBetting, setShowBetting] = useState(false);
   const [showLoopOverlay, setShowLoopOverlay] = useState(false);
+  const [showDeleteMenu, setShowDeleteMenu] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const { profile } = useUserStore();
+  const router = useRouter();
+  const { toast } = useToast();
   const isBettingOpen = clip.status === "betting_open";
   const deadline = clip.betting_deadline
     ? new Date(clip.betting_deadline)
     : null;
   const isExpired = deadline ? deadline < new Date() : false;
+  const userId = currentUserId ?? profile?.id ?? null;
+  const isOwner = Boolean(userId && String(clip.creator_user_id) === String(userId));
+
+  useEffect(() => {
+    getUserQueued().then(({ data: { user } }) => {
+      setCurrentUserId(user?.id ?? null);
+    });
+  }, []);
 
   const handleLoopEnd = useCallback(() => {
     if (isBettingOpen && !isExpired) setShowLoopOverlay(true);
   }, [isBettingOpen, isExpired]);
+
+  async function handleDelete() {
+    setShowDeleteMenu(false);
+    if (!window.confirm("Delete this post? It will be removed from the feed.")) return;
+    setDeleting(true);
+    const result = await archiveClip(clip.id);
+    setDeleting(false);
+    if ((result as { error?: string }).error) {
+      toast({
+        title: "Delete failed",
+        description: (result as { error?: string }).error || "Something went wrong",
+        variant: "destructive",
+      });
+    } else {
+      toast({ title: "Post deleted", variant: "success" });
+      router.refresh();
+    }
+  }
 
   return (
     <div className="relative h-full w-full snap-start">
@@ -46,6 +85,41 @@ export function VideoCard({ clip, isActive }: VideoCardProps) {
         isActive={isActive}
         onLoopEnd={handleLoopEnd}
       />
+
+      {/* Delete (own posts only) — top right */}
+      {isOwner && (
+        <div className="absolute right-3 top-3 z-30">
+          {showDeleteMenu ? (
+            <div className="rounded-lg bg-black/80 backdrop-blur-sm border border-border overflow-hidden shadow-lg">
+              <button
+                type="button"
+                onClick={handleDelete}
+                disabled={deleting}
+                className="flex w-full items-center gap-2 px-3 py-2 text-sm text-destructive hover:bg-destructive/10 touch-manipulation disabled:opacity-50"
+              >
+                <Trash2 className="h-4 w-4" />
+                {deleting ? "Deleting..." : "Delete post"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowDeleteMenu(false)}
+                className="flex w-full items-center gap-2 px-3 py-2 text-sm text-muted-foreground hover:bg-muted touch-manipulation"
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setShowDeleteMenu(true)}
+              className="flex h-9 w-9 items-center justify-center rounded-full bg-black/50 backdrop-blur-sm text-white/90 hover:bg-black/70 hover:text-white touch-manipulation"
+              aria-label="Options"
+            >
+              <MoreVertical className="h-5 w-5" />
+            </button>
+          )}
+        </div>
+      )}
 
       {/* After first loop: semi-transparent overlay with predictions + one-tap bet; video keeps playing */}
       {showLoopOverlay && isBettingOpen && !isExpired && (

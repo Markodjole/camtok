@@ -20,6 +20,7 @@ import { GitBranch, Clock, TrendingUp, ChevronLeft, Users } from "lucide-react";
 import Link from "next/link";
 import { useUserStore } from "@/stores/user-store";
 import { useToast } from "@/components/ui/toast";
+import { getUserQueued } from "@/lib/supabase/client";
 
 interface MarketData {
   id: string;
@@ -45,9 +46,16 @@ export default function ClipDetailPage() {
   const [selectedMarket, setSelectedMarket] = useState<MarketData | null>(null);
   const [selectedSide, setSelectedSide] = useState<"yes" | "no" | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const { profile } = useUserStore();
   const router = useRouter();
   const { toast } = useToast();
+
+  useEffect(() => {
+    getUserQueued().then(({ data: { user } }) => {
+      setCurrentUserId(user?.id ?? null);
+    });
+  }, []);
 
   useEffect(() => {
     async function load() {
@@ -97,7 +105,8 @@ export default function ClipDetailPage() {
   const depth = Number(clip.depth || 0);
   const sceneSummary = String(clip.scene_summary || "");
   const parentClipId = clip.parent_clip_node_id ? String(clip.parent_clip_node_id) : null;
-  const isOwner = profile && clip.creator_user_id === profile.id;
+  const userId = currentUserId ?? profile?.id ?? null;
+  const isOwner = Boolean(userId && String(clip.creator_user_id) === String(userId));
 
   async function refreshMarkets() {
     const data = await getClipMarkets(id);
