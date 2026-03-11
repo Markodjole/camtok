@@ -2,6 +2,77 @@
 
 import { createServerClient, createServiceClient } from "@/lib/supabase/server";
 
+/** Create profile and wallet for the current user if missing (e.g. user created before trigger existed). */
+export async function ensureProfileAndWallet(): Promise<
+  { profile: unknown; wallet: unknown } | { error: string }
+> {
+  const supabase = await createServerClient();
+  const serviceClient = await createServiceClient();
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Not authenticated" };
+
+  const shortId = user.id.replace(/-/g, "").slice(0, 12);
+  const meta = (user.user_metadata as Record<string, string> | null) || {};
+  const username =
+    (meta.username && meta.username.length >= 3 && meta.username.length <= 30)
+      ? meta.username.slice(0, 30)
+      : `user_${shortId}`;
+  const displayName =
+    (meta.display_name && meta.display_name.trim().length >= 1)
+      ? meta.display_name.trim().slice(0, 60)
+      : meta.username?.slice(0, 60) || user.email?.split("@")[0]?.slice(0, 60) || "User";
+
+  const { data: existingProfile } = await serviceClient
+    .from("profiles")
+    .select("id")
+    .eq("id", user.id)
+    .maybeSingle();
+
+  if (!existingProfile) {
+    const { error: profileErr } = await serviceClient.from("profiles").insert({
+      id: user.id,
+      username,
+      display_name: displayName,
+    });
+    if (profileErr) return { error: "Failed to create profile: " + profileErr.message };
+  }
+
+  const { data: existingWallet } = await serviceClient
+    .from("wallets")
+    .select("id")
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  if (!existingWallet) {
+    const { data: newWallet, error: walletErr } = await serviceClient
+      .from("wallets")
+      .insert({ user_id: user.id, balance: 1000, total_deposited: 1000 })
+      .select()
+      .single();
+    if (walletErr) return { error: "Failed to create wallet: " + walletErr.message };
+    await serviceClient.from("wallet_transactions").insert({
+      wallet_id: newWallet.id,
+      type: "deposit_demo",
+      amount: 1000,
+      balance_after: 1000,
+      description: "Welcome bonus",
+    });
+  }
+
+  const [
+    { data: profile },
+    { data: wallet },
+  ] = await Promise.all([
+    serviceClient.from("profiles").select("*").eq("id", user.id).maybeSingle(),
+    serviceClient.from("wallets").select("*").eq("user_id", user.id).maybeSingle(),
+  ]);
+
+  return { profile: profile ?? null, wallet: wallet ?? null };
+}
+
 export async function getWallet() {
   const supabase = await createServerClient();
   const {
@@ -13,9 +84,9 @@ export async function getWallet() {
     .from("wallets")
     .select("*")
     .eq("user_id", user.id)
-    .single();
+    .maybeSingle();
 
-  return data;
+  return data ?? null;
 }
 
 export async function getWalletTransactions(limit = 50) {
@@ -29,7 +100,7 @@ export async function getWalletTransactions(limit = 50) {
     .from("wallets")
     .select("id")
     .eq("user_id", user.id)
-    .single();
+    .maybeSingle();
 
   if (!wallet) return [];
 
@@ -60,7 +131,7 @@ export async function depositDemo(amount: number) {
     .from("wallets")
     .select("*")
     .eq("user_id", user.id)
-    .single();
+    .maybeSingle();
 
   if (!wallet) return { error: "Wallet not found" };
 
@@ -100,7 +171,7 @@ export async function getAvailableBalance() {
     .from("wallets")
     .select("*")
     .eq("user_id", user.id)
-    .single();
+    .maybeSingle();
 
   if (!wallet) return 0;
 

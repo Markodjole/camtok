@@ -225,6 +225,9 @@ export async function createClipFromUpload(input: {
   const { storagePath, title, genre = null, tone = null } = input;
   if (!storagePath || !title?.trim()) return { error: "Missing required fields" };
 
+  const { ensureProfileAndWallet } = await import("@/actions/wallet");
+  await ensureProfileAndWallet();
+
   const { data: story, error: storyError } = await serviceClient
     .from("stories")
     .insert({

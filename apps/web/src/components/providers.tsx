@@ -5,6 +5,7 @@ import { useState, useEffect } from "react";
 import { createBrowserClient, getUserQueued } from "@/lib/supabase/client";
 import { useUserStore } from "@/stores/user-store";
 import { ToastProvider } from "@/components/ui/toast";
+import { ensureProfileAndWallet } from "@/actions/wallet";
 
 function AuthSync() {
   const setProfile = useUserStore((s) => s.setProfile);
@@ -25,12 +26,23 @@ function AuthSync() {
       }
 
       const [profileRes, walletRes] = await Promise.all([
-        supabase.from("profiles").select("*").eq("id", user.id).single(),
-        supabase.from("wallets").select("*").eq("user_id", user.id).single(),
+        supabase.from("profiles").select("*").eq("id", user.id).maybeSingle(),
+        supabase.from("wallets").select("*").eq("user_id", user.id).maybeSingle(),
       ]);
 
-      if (profileRes.data) setProfile(profileRes.data as never);
-      if (walletRes.data) setWallet(walletRes.data as never);
+      let profile = profileRes.data;
+      let wallet = walletRes.data;
+
+      if (!profile || !wallet) {
+        const ensured = await ensureProfileAndWallet();
+        if (!("error" in ensured)) {
+          profile = ensured.profile as never;
+          wallet = ensured.wallet as never;
+        }
+      }
+
+      if (profile) setProfile(profile);
+      if (wallet) setWallet(wallet);
       setLoading(false);
     }
 

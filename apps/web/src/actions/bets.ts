@@ -53,7 +53,7 @@ export async function placeBet(input: {
     .from("wallets")
     .select("*")
     .eq("user_id", user.id)
-    .single();
+    .maybeSingle();
 
   if (!wallet) return { error: "Wallet not found" };
 
