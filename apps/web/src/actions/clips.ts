@@ -162,7 +162,15 @@ export async function uploadClip(formData: FormData) {
     .select()
     .single();
 
-  if (storyError) return { error: "Failed to create story" };
+  if (storyError) {
+    // Surface the underlying DB error to help diagnose hosted Supabase issues (e.g. missing migrations/RLS).
+    console.error("createClipFromUpload storyError", storyError);
+    return {
+      error:
+        "Failed to create story: " +
+        (storyError.message || "database error (check Supabase migrations and policies)"),
+    };
+  }
 
   const { data: clipNode, error: clipError } = await serviceClient
     .from("clip_nodes")
@@ -182,7 +190,14 @@ export async function uploadClip(formData: FormData) {
     .select()
     .single();
 
-  if (clipError) return { error: "Failed to create clip" };
+  if (clipError) {
+    console.error("createClipFromUpload clipError", clipError);
+    return {
+      error:
+        "Failed to create clip: " +
+        (clipError.message || "database error (check Supabase migrations and policies)"),
+    };
+  }
 
   await serviceClient
     .from("stories")
