@@ -90,7 +90,7 @@ export default function ClipDetailPage() {
   }
 
   const story = (clip.stories || {}) as Record<string, string>;
-  const profile = (clip.profiles || {}) as Record<string, string>;
+  const creatorProfile = (clip.profiles || {}) as Record<string, string>;
   const status = String(clip.status || "");
   const isBettingOpen = status === "betting_open";
   const isSettled = status === "settled";
@@ -176,7 +176,7 @@ export default function ClipDetailPage() {
 
             <div className="flex items-center gap-3 text-xs text-muted-foreground">
               <span className="flex items-center gap-1">
-                <Users className="h-3 w-3" />@{profile.username}
+                <Users className="h-3 w-3" />@{creatorProfile.username}
               </span>
               {depth > 0 && (
                 <span className="flex items-center gap-1">
