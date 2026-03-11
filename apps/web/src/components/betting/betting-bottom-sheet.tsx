@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Sheet,
   SheetContent,
@@ -16,6 +16,8 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useClipMarketsStore, type ClipMarket } from "@/stores/clip-markets-store";
 import { TrendingUp, ChevronLeft } from "lucide-react";
+
+const DRAG_CLOSE_THRESHOLD_PX = 80;
 
 interface BettingBottomSheetProps {
   clipId: string;
@@ -33,6 +35,7 @@ export function BettingBottomSheet({
   const [loading, setLoading] = useState(true);
   const [selectedMarket, setSelectedMarket] = useState<ClipMarket | null>(null);
   const [selectedSide, setSelectedSide] = useState<"yes" | "no" | null>(null);
+  const dragStartY = useRef<number>(0);
 
   const loadMarkets = useCallback(async () => {
     setLoading(true);
@@ -56,9 +59,38 @@ export function BettingBottomSheet({
     setSelectedSide(null);
   }
 
+  function handleDragStart(e: React.PointerEvent) {
+    dragStartY.current = e.clientY;
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+  }
+
+  function handleDragMove(e: React.PointerEvent) {
+    const dy = e.clientY - dragStartY.current;
+    if (dy > DRAG_CLOSE_THRESHOLD_PX) {
+      onOpenChange(false);
+      (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
+    }
+  }
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="bottom" className="h-[80dvh] rounded-t-2xl px-4 pb-6">
+      <SheetContent side="bottom" className="h-[80dvh] rounded-t-2xl px-4 pb-6" showClose={false}>
+        <div
+          className="flex justify-center pt-2 pb-1 -mt-1 cursor-grab active:cursor-grabbing touch-none"
+          onPointerDown={handleDragStart}
+          onPointerMove={handleDragMove}
+          onPointerCancel={(e) => (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId)}
+          onPointerUp={(e) => {
+            const dy = e.clientY - dragStartY.current;
+            if (dy > 40) onOpenChange(false);
+          }}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => e.key === "Enter" && onOpenChange(false)}
+          aria-label="Drag down to close"
+        >
+          <span className="h-1.5 w-12 rounded-full bg-muted-foreground/30" />
+        </div>
         <SheetHeader className="px-0">
           {selectedMarket ? (
             <div className="flex items-center gap-2">

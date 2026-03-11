@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { AppShell } from "@/components/layout/app-shell";
 import { VideoPlayer } from "@/components/clip/video-player";
 import { PredictionChip } from "@/components/betting/prediction-chip";
@@ -14,10 +14,12 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn, formatRelativeTime } from "@/lib/utils";
-import { getClipById, getClipMarkets } from "@/actions/clips";
+import { archiveClip, getClipById, getClipMarkets } from "@/actions/clips";
 import { getUserBetsForClip } from "@/actions/bets";
 import { GitBranch, Clock, TrendingUp, ChevronLeft, Users } from "lucide-react";
 import Link from "next/link";
+import { useUserStore } from "@/stores/user-store";
+import { useToast } from "@/components/ui/toast";
 
 interface MarketData {
   id: string;
@@ -42,6 +44,10 @@ export default function ClipDetailPage() {
   const [loading, setLoading] = useState(true);
   const [selectedMarket, setSelectedMarket] = useState<MarketData | null>(null);
   const [selectedSide, setSelectedSide] = useState<"yes" | "no" | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const { profile } = useUserStore();
+  const router = useRouter();
+  const { toast } = useToast();
 
   useEffect(() => {
     async function load() {
@@ -91,12 +97,31 @@ export default function ClipDetailPage() {
   const depth = Number(clip.depth || 0);
   const sceneSummary = String(clip.scene_summary || "");
   const parentClipId = clip.parent_clip_node_id ? String(clip.parent_clip_node_id) : null;
+  const isOwner = profile && clip.creator_user_id === profile.id;
 
   async function refreshMarkets() {
     const data = await getClipMarkets(id);
     setMarkets(data as unknown as MarketData[]);
     const bets = await getUserBetsForClip(id);
     setUserBets(bets);
+  }
+
+  async function handleDelete() {
+    if (deleting) return;
+    if (!window.confirm("Delete this post? It will be removed from the feed.")) return;
+    setDeleting(true);
+    const result = await archiveClip(String(id));
+    setDeleting(false);
+    if ((result as { error?: string }).error) {
+      toast({
+        title: "Delete failed",
+        description: (result as { error?: string }).error || "Something went wrong",
+        variant: "destructive",
+      });
+      return;
+    }
+    toast({ title: "Post deleted", description: "Your clip is no longer visible in the feed." });
+    router.push("/feed");
   }
 
   return (
@@ -121,19 +146,32 @@ export default function ClipDetailPage() {
 
           {/* Clip info */}
           <div className="space-y-3 p-4">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-3">
               <h1 className="text-lg font-bold">{story.title || "Untitled"}</h1>
-              <Badge
-                variant={
-                  isBettingOpen
-                    ? "default"
-                    : isSettled
-                      ? "success"
-                      : "secondary"
-                }
-              >
-                {(status as string).replace(/_/g, " ")}
-              </Badge>
+              <div className="flex items-center gap-2">
+                {isOwner && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleDelete}
+                    disabled={deleting}
+                    className="border-destructive text-destructive hover:bg-destructive/10"
+                  >
+                    {deleting ? "Deleting..." : "Delete"}
+                  </Button>
+                )}
+                <Badge
+                  variant={
+                    isBettingOpen
+                      ? "default"
+                      : isSettled
+                        ? "success"
+                        : "secondary"
+                  }
+                >
+                  {(status as string).replace(/_/g, " ")}
+                </Badge>
+              </div>
             </div>
 
             <div className="flex items-center gap-3 text-xs text-muted-foreground">

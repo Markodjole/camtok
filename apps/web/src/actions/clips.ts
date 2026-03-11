@@ -268,3 +268,34 @@ export async function createClipFromUpload(input: {
 
   return { data: clipNode };
 }
+
+export async function archiveClip(clipId: string) {
+  const supabase = await createServerClient();
+  const serviceClient = await createServiceClient();
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Not authenticated" };
+
+  const { data: clip, error } = await serviceClient
+    .from("clip_nodes")
+    .select("id, creator_user_id")
+    .eq("id", clipId)
+    .single();
+
+  if (error || !clip) return { error: "Clip not found" };
+  if (clip.creator_user_id !== user.id) return { error: "Not allowed" };
+
+  const { error: updateError } = await serviceClient
+    .from("clip_nodes")
+    .update({
+      status: "archived",
+      published_at: null,
+    })
+    .eq("id", clipId);
+
+  if (updateError) return { error: "Failed to delete clip" };
+
+  return { success: true };
+}
