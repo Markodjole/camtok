@@ -9,8 +9,9 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
-    "@bettok/types": "workspace:*",
     "@bettok/core": "workspace:*",
+    "@bettok/types": "workspace:*",
+    "openai": "^6.32.0",
     "zod": "^3.23.0"
   },
   "devDependencies": {

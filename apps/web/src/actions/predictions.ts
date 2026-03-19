@@ -1,7 +1,13 @@
 "use server";
 
 import { createServerClient, createServiceClient } from "@/lib/supabase/server";
-import { mockNormalize } from "@bettok/story-engine";
+import {
+  mockNormalize,
+  generateAndValidate,
+  oddsOutputSchema,
+  ODDS_SYSTEM_PROMPT,
+  mockGenerateOdds,
+} from "@bettok/story-engine";
 
 export async function submitPrediction(input: {
   clip_node_id: string;
@@ -63,8 +69,81 @@ export async function submitPrediction(input: {
 
   if (marketError) return { error: "Failed to create market" };
 
-  const yesProbability = 0.5;
-  const noProbability = 0.5;
+  // Gather all clip context for LLM odds calculation
+  const { data: clipFull } = await serviceClient
+    .from("clip_nodes")
+    .select("scene_summary, genre, tone, blueprint_id, llm_generation_json, video_analysis_text")
+    .eq("id", input.clip_node_id)
+    .single();
+
+  let blueprintDescription = "";
+  let suggestedOutcomes: string[] = [];
+  if (clipFull?.blueprint_id) {
+    const { data: bp } = await serviceClient
+      .from("clip_blueprints")
+      .select("description, config_json")
+      .eq("id", clipFull.blueprint_id)
+      .single();
+    if (bp) {
+      blueprintDescription = bp.description || "";
+      suggestedOutcomes = ((bp.config_json as Record<string, unknown>)?.suggested_outcomes as string[]) ?? [];
+    }
+  }
+
+  const llmJson = clipFull?.llm_generation_json as Record<string, unknown> | null;
+  const llmOutcomes = (llmJson?.obvious_outcomes as string[]) ?? [];
+  const allSuggestedOutcomes = [...new Set([...suggestedOutcomes, ...llmOutcomes])];
+
+  const { data: existingMarkets } = await serviceClient
+    .from("prediction_markets")
+    .select("canonical_text")
+    .eq("clip_node_id", input.clip_node_id);
+
+  let yesProbability = 0.5;
+  let noProbability = 0.5;
+
+  const isLlmAvailable = process.env.LLM_PROVIDER === "openai" && !!process.env.LLM_API_KEY;
+
+  if (isLlmAvailable) {
+    try {
+      const clipContext = {
+        scene_summary: clipFull?.scene_summary ?? "Unknown scene",
+        genre: clipFull?.genre ?? "unknown",
+        tone: clipFull?.tone ?? "unknown",
+        blueprint_description: blueprintDescription,
+        suggested_outcomes: allSuggestedOutcomes,
+        video_analysis: (clipFull as Record<string, unknown>)?.video_analysis_text ?? null,
+        video_prompt_used: llmJson?.video_prompt ?? null,
+        first_frame_prompt_used: llmJson?.first_frame_prompt ?? null,
+        existing_predictions: (existingMarkets || []).map((m) => (m as Record<string, unknown>).canonical_text),
+        new_prediction: normalized.canonical_text,
+        market_key: normalized.market_key,
+      };
+
+      const messages = [
+        { role: "system" as const, content: ODDS_SYSTEM_PROMPT + "\n\nReturn a single JSON object (not an array) for this one prediction." },
+        { role: "user" as const, content: JSON.stringify(clipContext) },
+      ];
+
+      const { data: oddsResult } = await generateAndValidate(messages, oddsOutputSchema, "Prediction odds");
+
+      yesProbability = Math.max(0.05, Math.min(0.95, oddsResult.side_yes_probability));
+      noProbability = Math.max(0.05, Math.min(0.95, oddsResult.side_no_probability));
+
+      console.log(
+        `[odds] prediction="${normalized.canonical_text}" yes=${yesProbability} no=${noProbability} reasoning="${oddsResult.reasoning_short}"`,
+      );
+    } catch (err: unknown) {
+      console.error("[odds] LLM failed, using fallback:", (err as Error)?.message);
+      const fallback = mockGenerateOdds(normalized.market_key);
+      yesProbability = fallback.side_yes_probability;
+      noProbability = fallback.side_no_probability;
+    }
+  } else {
+    const fallback = mockGenerateOdds(normalized.market_key);
+    yesProbability = fallback.side_yes_probability;
+    noProbability = fallback.side_no_probability;
+  }
 
   await serviceClient.from("market_sides").insert([
     {

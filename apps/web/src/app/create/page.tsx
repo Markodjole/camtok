@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Upload, Film, Loader2, X } from "lucide-react";
 import { AppShell } from "@/components/layout/app-shell";
@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/select";
 import { useToast } from "@/components/ui/toast";
 import { createClipFromUpload } from "@/actions/clips";
+import { generateAiClipFromBlueprint, getClipBlueprints, getCurrentAiGenerationStatus } from "@/actions/ai-clips";
 import { createBrowserClient, getUserQueued } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 
@@ -45,6 +46,12 @@ const TONES = [
   { value: "chaotic", label: "Chaotic" },
 ];
 
+const REALISM_LEVELS = [
+  { value: "low", label: "Low (stylized)" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High (realistic)" },
+];
+
 export default function CreatePage() {
   const router = useRouter();
   const { toast } = useToast();
@@ -56,6 +63,67 @@ export default function CreatePage() {
   const [tone, setTone] = useState("");
   const [isPending, startTransition] = useTransition();
   const [uploadProgress, setUploadProgress] = useState(0);
+
+  const [blueprints, setBlueprints] = useState<Array<{ id: string; label: string; description: string | null }>>(
+    []
+  );
+  const [aiBlueprintId, setAiBlueprintId] = useState("");
+  const [aiPrompt, setAiPrompt] = useState("");
+  const [aiGenre, setAiGenre] = useState("");
+  const [aiTone, setAiTone] = useState("");
+  const [aiRealism, setAiRealism] = useState("medium");
+  const [aiProgress, setAiProgress] = useState(0);
+  const [aiRunning, setAiRunning] = useState(false);
+  const [aiStatus, setAiStatus] = useState<string | null>(null);
+  const [aiErrorMessage, setAiErrorMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    getClipBlueprints().then((res) => {
+      const list = (res.blueprints || []).map((b) => ({
+        id: b.id,
+        label: b.label,
+        description: b.description ?? null,
+      }));
+      setBlueprints(list);
+      if (!aiBlueprintId && list[0]?.id) setAiBlueprintId(list[0].id);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    let intervalId: ReturnType<typeof setInterval> | null = null;
+
+    const statusToProgress: Record<string, number> = {
+      queued: 10,
+      generating_first_frame: 30,
+      generating_end_frame: 55,
+      generating_video: 80,
+    };
+
+    const syncStatus = async () => {
+      const current = await getCurrentAiGenerationStatus();
+      if (cancelled) return;
+      setAiRunning(current.running);
+      setAiStatus(current.status);
+      setAiErrorMessage(current.status === "failed" ? current.errorMessage || "Generation failed." : null);
+      if (current.running) {
+        setAiProgress(statusToProgress[current.status ?? "queued"] ?? 15);
+      } else if (current.status === "completed") {
+        setAiProgress(100);
+      } else {
+        setAiProgress(0);
+      }
+    };
+
+    syncStatus();
+    intervalId = setInterval(syncStatus, 2500);
+
+    return () => {
+      cancelled = true;
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, []);
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const selected = e.target.files?.[0];
@@ -130,6 +198,46 @@ export default function CreatePage() {
       setTimeout(() => {
         router.push("/feed");
       }, 500);
+    });
+  }
+
+  function handleGenerateAi() {
+    if (!aiBlueprintId || !aiPrompt.trim()) {
+      toast({ title: "Missing fields", description: "Blueprint and prompt are required", variant: "destructive" });
+      return;
+    }
+
+    setAiProgress(10);
+    setAiRunning(true);
+    setAiStatus("queued");
+    setAiErrorMessage(null);
+    startTransition(async () => {
+      setAiProgress(15);
+      const res = await generateAiClipFromBlueprint({
+        blueprintId: aiBlueprintId,
+        userPrompt: aiPrompt.trim(),
+        tone: aiTone || "tense",
+        genre: aiGenre || "realistic",
+        realismLevel: aiRealism,
+        durationSeconds: 6,
+      });
+
+      if ((res as { error?: string }).error) {
+        const message = (res as { error?: string }).error || "Generation failed";
+        toast({ title: "Generation failed", description: message, variant: "destructive" });
+        setAiErrorMessage(message);
+        setAiProgress(0);
+        setAiRunning(false);
+        setAiStatus("failed");
+        return;
+      }
+
+      setAiProgress(100);
+      toast({ title: "AI clip generated!", description: "Your clip is now live", variant: "success" });
+      setTimeout(() => router.push("/feed"), 300);
+      setAiRunning(false);
+      setAiStatus(null);
+      setAiErrorMessage(null);
     });
   }
 
@@ -263,6 +371,133 @@ export default function CreatePage() {
                   <>
                     <Upload className="h-4 w-4" />
                     Upload Clip
+                  </>
+                )}
+              </Button>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Film className="h-5 w-5 text-primary" />
+                Generate AI Clip (fal.ai)
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Blueprint</label>
+                <Select value={aiBlueprintId} onValueChange={setAiBlueprintId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select blueprint" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {blueprints.map((b) => (
+                      <SelectItem key={b.id} value={b.id}>
+                        {b.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {blueprints.find((b) => b.id === aiBlueprintId)?.description && (
+                  <p className="text-xs text-muted-foreground">
+                    {blueprints.find((b) => b.id === aiBlueprintId)?.description}
+                  </p>
+                )}
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-medium" htmlFor="aiPrompt">
+                  Prompt
+                </label>
+                <Input
+                  id="aiPrompt"
+                  placeholder="e.g. cute black dog in a sunny park"
+                  value={aiPrompt}
+                  onChange={(e) => setAiPrompt(e.target.value)}
+                  maxLength={200}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Genre</label>
+                  <Select value={aiGenre} onValueChange={setAiGenre}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Genre" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {GENRES.map((g) => (
+                        <SelectItem key={g.value} value={g.value}>
+                          {g.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Tone</label>
+                  <Select value={aiTone} onValueChange={setAiTone}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Tone" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {TONES.map((t) => (
+                        <SelectItem key={t.value} value={t.value}>
+                          {t.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Realism</label>
+                <Select value={aiRealism} onValueChange={setAiRealism}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Realism" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {REALISM_LEVELS.map((r) => (
+                      <SelectItem key={r.value} value={r.value}>
+                        {r.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {aiRunning && aiProgress > 0 && (
+                <div className="space-y-2">
+                  <Progress value={aiProgress} />
+                  <p className="text-center text-xs text-muted-foreground">
+                    Generating... {aiStatus ? aiStatus.replaceAll("_", " ") : "processing"} (can take 1–2 min)
+                  </p>
+                </div>
+              )}
+
+              {!!aiErrorMessage && (
+                <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+                  Generation failed: {aiErrorMessage}
+                </div>
+              )}
+
+              <Button
+                className="w-full"
+                size="lg"
+                onClick={handleGenerateAi}
+                disabled={aiRunning || isPending || !aiBlueprintId || !aiPrompt.trim()}
+              >
+                {aiRunning ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Generating...
+                  </>
+                ) : (
+                  <>
+                    <Film className="h-4 w-4" />
+                    Generate Clip
                   </>
                 )}
               </Button>

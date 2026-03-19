@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { isFeatureEnabled, LlmValidationError } from "@bettok/core";
+import OpenAI from "openai";
 
 export interface LlmMessage {
   role: "system" | "user" | "assistant";
@@ -31,13 +32,57 @@ class MockLlmAdapter implements LlmAdapter {
   }
 }
 
+class OpenAIAdapter implements LlmAdapter {
+  private client: OpenAI;
+  private model: string;
+
+  constructor(apiKey: string, model?: string) {
+    this.client = new OpenAI({ apiKey });
+    this.model = model || "gpt-4o-mini";
+  }
+
+  async generate(messages: LlmMessage[]): Promise<LlmResponse> {
+    const start = Date.now();
+    const response = await this.client.chat.completions.create({
+      model: this.model,
+      messages: messages.map((m) => ({ role: m.role, content: m.content })),
+      response_format: { type: "json_object" },
+      temperature: 0.3,
+    });
+
+    const choice = response.choices[0];
+    const content = choice?.message?.content || "{}";
+    const latencyMs = Date.now() - start;
+
+    console.log(
+      `[LLM] model=${this.model} input=${response.usage?.prompt_tokens ?? 0} output=${response.usage?.completion_tokens ?? 0} ms=${latencyMs}`,
+    );
+
+    return {
+      content,
+      inputTokens: response.usage?.prompt_tokens ?? 0,
+      outputTokens: response.usage?.completion_tokens ?? 0,
+      latencyMs,
+    };
+  }
+}
+
 let _adapter: LlmAdapter | null = null;
 
 export function getLlmAdapter(): LlmAdapter {
   if (_adapter) return _adapter;
 
-  if (!isFeatureEnabled("ENABLE_REAL_LLM")) {
-    _adapter = new MockLlmAdapter();
+  const apiKey = process.env.LLM_API_KEY;
+  const provider = process.env.LLM_PROVIDER || "mock";
+  const model = process.env.LLM_MODEL;
+
+  if (provider === "openai" && apiKey) {
+    _adapter = new OpenAIAdapter(apiKey, model || "gpt-4o-mini");
+    return _adapter;
+  }
+
+  if (isFeatureEnabled("ENABLE_REAL_LLM") && apiKey) {
+    _adapter = new OpenAIAdapter(apiKey, model || "gpt-4o-mini");
     return _adapter;
   }
 

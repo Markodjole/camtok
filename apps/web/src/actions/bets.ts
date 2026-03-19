@@ -106,6 +106,30 @@ export async function placeBet(input: {
     })
     .eq("id", marketSide.id);
 
+  // Recalculate odds for all sides based on pool distribution
+  const { data: updatedSides } = await serviceClient
+    .from("market_sides")
+    .select("id, side_key, pool_amount")
+    .eq("prediction_market_id", market.id);
+
+  if (updatedSides && updatedSides.length > 0) {
+    const totalPool = updatedSides.reduce((sum, s) => sum + Number(s.pool_amount || 0), 0);
+
+    for (const side of updatedSides) {
+      const sidePool = Number(side.pool_amount || 0);
+      // Minimum probability floor so odds don't go to infinity
+      const probability = totalPool > 0
+        ? Math.max(0.01, Math.min(0.99, sidePool / totalPool))
+        : 0.5;
+      const oddsDecimal = Math.round((1 / probability) * 100) / 100;
+
+      await serviceClient
+        .from("market_sides")
+        .update({ probability, current_odds_decimal: oddsDecimal })
+        .eq("id", side.id);
+    }
+  }
+
   await serviceClient
     .from("clip_nodes")
     .update({ bet_count: (market.bet_count || 0) + 1 })
