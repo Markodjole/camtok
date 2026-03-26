@@ -36,8 +36,8 @@ export function BottomNav() {
                 href={item.href}
                 className="flex flex-1 flex-col items-center justify-center"
               >
-                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary shadow-lg shadow-primary/25">
-                  <Icon className="h-5 w-5 text-primary-foreground" />
+                <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary shadow-[0_10px_24px_-8px_rgba(124,58,237,0.65)] ring-2 ring-primary/30">
+                  <Icon className="h-6 w-6 text-primary-foreground" />
                 </div>
               </Link>
             );

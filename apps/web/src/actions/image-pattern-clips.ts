@@ -130,10 +130,12 @@ NEVER add objects, people, or elements that are NOT described in the BASE IMAGE 
 - Environmental changes are OK (lighting shifts, shadows, weather), but new physical objects are NOT
 
 NO INVENTED MOVEMENT — CRITICAL:
-NEVER add physical movement (steps forward, leaning, reaching, walking, crawling) that the user did NOT describe.
+NEVER add physical movement (steps forward, leaning, reaching, walking, crawling, unfolding, approaching) that the user did NOT describe.
 - If the user says "deciding" or "looking" → that means EYES and EXPRESSION only, NOT body/position changes
 - The subject's POSITION in the frame must stay the same unless the user explicitly says the subject moves
 - "Deciding" = gaze shifts, blinks, ear twitches, subtle expression changes. NOT leaning, stepping, approaching
+- Words like "motion begins to unfold", "action builds", "motion carries forward" are BANNED unless describing a specific user-requested action
+- Scene 3 should NEVER contain new motion. It is a held moment of uncertainty — nothing progresses
 - Only OTHER objects/characters can enter the scene IF the user's plot describes them — the main subject stays put unless told otherwise
 
 NO ACTION TOWARD OPTIONS — ABSOLUTE RULE:
@@ -152,25 +154,24 @@ Match the mood to the actual scenario. NOT everything is dramatic or scary.
 NEVER use fear/tension/anxiety words for lighthearted scenarios.
 
 SCENE CONTINUITY — CRITICAL:
-Kling AI processes each scene prompt semi-independently. To get smooth motion across scenes, follow these rules:
+Kling AI processes each scene prompt semi-independently. To get smooth video across scenes, follow these rules:
 
-1. DESCRIBE MOTION, NOT POSITIONS. Each scene should describe what is MOVING and HOW, not frozen start/end states. Kling generates smooth motion within a scene but can "jump" between scenes if they describe different static poses.
+1. ONLY DESCRIBE MOTION THE USER ASKED FOR. If the user described a conversation, subjects stay still — only faces and expressions change. If the user described a physical action (throwing, swinging), describe that action. NEVER invent movement (walking, stepping, leaning, approaching, reaching) that the user did not mention.
 
-2. OVERLAP AT BOUNDARIES. The END of one scene's motion and the START of the next should describe the SAME ongoing movement. Think of it like crossfade editing — the action at the boundary is shared.
-   BAD: Scene 1 "golfer stands still" → Scene 2 "golfer shifts weight and draws back putter"  (jump: still → new motion)
-   GOOD: Scene 1 "golfer breathes slowly, weight shifting slightly onto front foot" → Scene 2 "continuing the slow weight shift, hands tighten on the putter grip, drawing it back in one fluid motion"  (smooth: same motion continues)
+2. KEEP SUBJECTS STATIONARY unless the user's plot explicitly requires them to move. Subjects hold their positions from the starting image. Camera, lighting, and ambient environment may change.
 
-3. NEVER START A SCENE WITH A NEW DISTINCT ACTION. Each scene must continue the motion already happening. Use "continuing", "still", "the same motion carries" to bridge.
+3. SCENE 3 = FREEZE. Scene 3 should hold the same visual state as scene 2's end. Nothing new happens. Use "same position", "still", "held" language. The video should feel like time has paused right before a decision.
 
-4. DESCRIBE WHAT CHANGES, NOT WHAT EXISTS. Don't say "the ball is on the grass" — say "the ball catches a glint of light as the club shadow passes over it." Motion-first language keeps the video fluid.
+4. USE CAMERA for drama, not body movement. Slow push-in, rack focus, angle change — these create tension without moving subjects around.
 
 RULES:
-- Scene 1 (2s): Subtle living motion — breathing, micro-adjustments, environmental motion (wind, light shifts). The subject is in its calm state but ALIVE, not frozen. Describe gentle continuous movement.
-- Scene 2 (2s): Continue scene 1 smoothly, REVEAL options clearly, build tension via gaze/environment/camera only. No approach toward any option.
-- Scene 3 (2s): Continue scene 2 smoothly, hold uncertainty at peak. Options remain visible and unresolved. Still NO approach/reach/touch toward any option.
-- Each scene: 60 words max. Focus on MOTION VERBS and CAMERA MOVEMENT. Avoid static descriptions.
-- Use camera terms: slow push-in, gentle rack focus, camera drifts, follows, tracks
+- Scene 1 (2s): The subject exactly as shown in the image. Only ambient environmental change (light, shadows). NO body/position movement unless user described it. Camera holds steady.
+- Scene 2 (2s): What the user described happens — and NOTHING MORE. If user described dialogue, show facial expressions only. If user described physical action, show only that action. Camera may slowly push in.
+- Scene 3 (2s): Scene 2 state continues. Subjects stay in the SAME positions. NO new actions, NO forward motion, NO "unfolding". The moment is FROZEN in uncertainty. Only camera or ambient light may change.
+- Each scene: 60 words max. ONLY describe what is visible from the camera angle.
+- Use camera terms: slow push-in, gentle rack focus, camera holds, slight drift
 - Include 3 possible outcomes the viewer could bet on
+- CRITICAL: Scene 3 must NOT add any motion, approach, or progression that scene 2 didn't already show. It should feel like a held breath.
 
 NEGATIVE PROMPT MUST ALWAYS INCLUDE: "outcome revealed, result shown, action completed, decision finished, object reaching destination, sudden jump, jerky motion, reaching toward option, touching option, grabbing option, pressing button, opening item, picking item, hand hovering over option"
 
@@ -220,20 +221,20 @@ function buildFallbackScenes(baseScene: BaseScene, userPlotChange: string): Enha
     scene_summary: `${baseScene.subject} — ${userPlotChange}`,
     scenes: [
       {
-        prompt: `${baseScene.subject} breathing slowly, ${baseScene.subject_state}, gentle ambient motion in ${baseScene.environment}. Camera holds steady, subtle living details — light shifting, textures moving.`,
+        prompt: `${baseScene.subject}, ${baseScene.subject_state}, ${baseScene.environment}. Camera holds steady. No movement, no action.`,
         duration: "2",
       },
       {
-        prompt: `Continuing the gentle motion, ${userPlotChange} begins to unfold slowly. Camera drifts closer, the first signs of change emerge naturally from the calm. Action builds gradually.`,
+        prompt: `Same scene. ${userPlotChange}. Camera slowly pushes in. Subjects stay in their positions.`,
         duration: "2",
       },
       {
-        prompt: `The motion carries forward unbroken — action still in progress, far from any conclusion. Camera follows the movement. Everything still uncertain, nothing resolved.`,
+        prompt: `Same scene continues. Nothing resolved yet. Subjects remain still, same positions, same framing. Uncertainty lingers.`,
         duration: "2",
       },
     ],
     negative_prompt:
-      "outcome revealed, result shown, action completed, decision finished, object reaching destination, sudden jump, jerky motion, reaching toward option, touching option, grabbing option, pressing button, opening item, picking item, hand hovering over option",
+      "outcome revealed, result shown, action completed, decision finished, object reaching destination, sudden jump, jerky motion, reaching toward option, touching option, grabbing option, pressing button, opening item, picking item, hand hovering over option, walking, stepping, moving forward, approaching",
     outcomes: [],
   };
 }
@@ -439,7 +440,12 @@ async function runGeneration(opts: {
       image_model_key: "user_uploaded_pattern",
       video_model_key: "fal-ai/kling-video/v3/pro/image-to-video",
       generation_mode: "image_pattern",
-      llm_generation_json: { ...enhanced, base_scene: baseScene, source: sourceLabel },
+      llm_generation_json: {
+        ...enhanced,
+        base_scene: baseScene,
+        source: sourceLabel,
+        image_storage_path: imageStoragePath,
+      },
     })
     .select()
     .single();
@@ -505,6 +511,15 @@ async function runGeneration(opts: {
         updated_at: new Date().toISOString(),
       })
       .eq("id", (job as any).id);
+
+    await serviceClient.from("notifications").insert({
+      user_id: user.id,
+      type: "video_review_ready",
+      title: "Video ready for review",
+      body: "Your generated video is ready. Tap to review, improve, or post.",
+      link: "/create",
+      read: false,
+    });
 
     logLine(jobId, "ready_for_review", { totalMs: Date.now() - startedAt, videoPath });
     return {
@@ -742,4 +757,38 @@ export async function improveVideo(input: {
       .eq("id", input.jobId);
     return { error: message };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Restore latest draft in review mode (in case user navigated away)
+// ---------------------------------------------------------------------------
+
+export async function getPendingReviewDraft() {
+  const supabase = await createServerClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { data: null };
+
+  const serviceClient = await createServiceClient();
+  const { data, error } = await serviceClient
+    .from("clip_generation_jobs")
+    .select("id, status, video_storage_path, llm_generation_json, updated_at")
+    .eq("user_id", user.id)
+    .eq("generation_mode", "image_pattern")
+    .eq("status", "review")
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .single();
+
+  if (error || !data || !data.video_storage_path) return { data: null };
+
+  const llm = (data.llm_generation_json as Record<string, any> | null) ?? {};
+  return {
+    data: {
+      reviewJobId: String(data.id),
+      reviewVideoPath: data.video_storage_path as string,
+      reviewImagePath: (llm.image_storage_path as string | undefined) ?? null,
+      reviewSummary: (llm.scene_summary as string | undefined) ?? null,
+      reviewLlmGen: data.llm_generation_json,
+    },
+  };
 }

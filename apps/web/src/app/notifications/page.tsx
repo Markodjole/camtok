@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import {
   Bell,
   BellOff,
@@ -42,6 +43,7 @@ const typeIcons: Record<string, React.ElementType> = {
   bet_locked: Lock,
   prediction_accepted: Sparkles,
   continuation_live: Film,
+  video_review_ready: Film,
   bet_settled: CircleDot,
   bet_won: Trophy,
   bet_lost: TrendingDown,
@@ -56,6 +58,7 @@ function NotificationIcon({ type }: { type: string }) {
 }
 
 export default function NotificationsPage() {
+  const router = useRouter();
   const [notifications, setNotifications] = useState<NotificationRow[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -152,6 +155,7 @@ export default function NotificationsPage() {
                   )}
                   onClick={() => {
                     if (!notif.read) handleMarkAsRead(notif.id);
+                    if (notif.link) router.push(notif.link);
                   }}
                 >
                   <CardContent className="flex gap-3 p-4">

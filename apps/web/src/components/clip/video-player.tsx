@@ -161,7 +161,7 @@ export function VideoPlayer({
         loop
         playsInline
         muted={isMuted}
-        preload="metadata"
+        preload={isActive ? "auto" : "metadata"}
         onTimeUpdate={handleTimeUpdate}
         onLoadedMetadata={handleLoadedMetadata}
         className={cn(

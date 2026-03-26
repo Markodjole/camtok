@@ -16,12 +16,14 @@ import {
   analyzeCustomImage,
   publishDraft,
   improveVideo,
+  getPendingReviewDraft,
 } from "@/actions/image-pattern-clips";
 import { createBrowserClient, getUserQueued } from "@/lib/supabase/client";
 import { cn, getMediaUrl } from "@/lib/utils";
 
 const PATTERNS_CACHE_KEY = "create:image_patterns:v1";
 const PATTERNS_CACHE_TTL_MS = 10 * 60 * 1000;
+const CREATE_REVIEW_CACHE_KEY = "create:pending_review:v1";
 
 export default function CreatePage() {
   const router = useRouter();
@@ -114,18 +116,64 @@ export default function CreatePage() {
     };
   }, []);
 
+  useEffect(() => {
+    // Source of truth recovery from server in case user navigated away during generation.
+    getPendingReviewDraft().then((res) => {
+      const d = res.data;
+      if (!d || !d.reviewVideoPath || !d.reviewJobId) return;
+      setReviewMode(true);
+      setReviewVideoPath(d.reviewVideoPath);
+      setReviewJobId(d.reviewJobId);
+      setReviewImagePath(d.reviewImagePath ?? null);
+      setReviewSummary(d.reviewSummary ?? null);
+      setReviewLlmGen(d.reviewLlmGen ?? null);
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(
+          CREATE_REVIEW_CACHE_KEY,
+          JSON.stringify({
+            reviewVideoPath: d.reviewVideoPath,
+            reviewJobId: d.reviewJobId,
+            reviewImagePath: d.reviewImagePath,
+            reviewSummary: d.reviewSummary,
+            reviewLlmGen: d.reviewLlmGen,
+          }),
+        );
+      }
+    });
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = window.localStorage.getItem(CREATE_REVIEW_CACHE_KEY);
+      if (!raw) return;
+      const cached = JSON.parse(raw) as {
+        reviewVideoPath?: string;
+        reviewJobId?: string;
+        reviewImagePath?: string;
+        reviewSummary?: string;
+        reviewLlmGen?: any;
+      };
+      if (cached.reviewVideoPath && cached.reviewJobId) {
+        setReviewMode(true);
+        setReviewVideoPath(cached.reviewVideoPath);
+        setReviewJobId(cached.reviewJobId);
+        setReviewImagePath(cached.reviewImagePath ?? null);
+        setReviewSummary(cached.reviewSummary ?? null);
+        setReviewLlmGen(cached.reviewLlmGen ?? null);
+      }
+    } catch {
+      // ignore bad cache
+    }
+  }, []);
+
   function CinemaLoader({ label }: { label: string }) {
     return (
-      <div className="rounded-xl border border-border bg-muted/30 p-4">
-        <div className="flex items-center justify-center gap-4">
-          <div className="relative h-10 w-10">
-            <div className="absolute inset-0 rounded-full border-4 border-primary/30 border-t-primary animate-spin" />
-            <Film className="absolute inset-0 m-auto h-4 w-4 text-primary" />
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="h-2 w-2 animate-bounce rounded-full bg-primary [animation-delay:0ms]" />
-            <span className="h-2 w-2 animate-bounce rounded-full bg-primary [animation-delay:120ms]" />
-            <span className="h-2 w-2 animate-bounce rounded-full bg-primary [animation-delay:240ms]" />
+      <div className="rounded-xl border border-border bg-muted/85 p-5 shadow-xl backdrop-blur-sm">
+        <div className="flex items-center justify-center">
+          <div className="relative h-14 w-14">
+            <div className="absolute inset-0 rounded-full border-[6px] border-primary/25 border-t-primary animate-spin" />
+            <Film className="absolute inset-0 m-auto h-6 w-6 text-primary" />
           </div>
         </div>
         <p className="mt-3 text-center text-sm font-medium text-foreground">{label}</p>
@@ -267,7 +315,33 @@ export default function CreatePage() {
       setReviewImagePath(d.imageStoragePath);
       setReviewSummary(d.sceneSummary);
       setReviewLlmGen(d.llmGeneration);
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(
+          CREATE_REVIEW_CACHE_KEY,
+          JSON.stringify({
+            reviewVideoPath: d.videoStoragePath,
+            reviewJobId: d.jobId,
+            reviewImagePath: d.imageStoragePath,
+            reviewSummary: d.sceneSummary,
+            reviewLlmGen: d.llmGeneration,
+          }),
+        );
+      }
       toast({ title: "Video ready!", description: "Review your clip before posting" });
+      if (typeof window !== "undefined" && "Notification" in window) {
+        if (Notification.permission === "default") {
+          Notification.requestPermission().catch(() => {});
+        }
+        if (Notification.permission === "granted") {
+          const n = new Notification("Video is ready for review", {
+            body: "Tap to open /create and review before posting.",
+          });
+          n.onclick = () => {
+            window.focus();
+            window.location.href = "/create";
+          };
+        }
+      }
     });
   }
 
@@ -287,6 +361,9 @@ export default function CreatePage() {
       if (res.error) {
         toast({ title: "Publish failed", description: res.error, variant: "destructive" });
         return;
+      }
+      if (typeof window !== "undefined") {
+        window.localStorage.removeItem(CREATE_REVIEW_CACHE_KEY);
       }
       toast({ title: "Clip posted!", description: "Your clip is now live", variant: "success" });
       setTimeout(() => router.push("/feed"), 300);
@@ -359,6 +436,7 @@ export default function CreatePage() {
                       autoPlay
                       loop
                       playsInline
+                      preload="auto"
                       className="w-full aspect-[9/16] object-contain"
                     />
                   </div>
@@ -436,6 +514,9 @@ export default function CreatePage() {
                     setReviewVideoPath(null);
                     setReviewJobId(null);
                     setImproveFeedback("");
+                    if (typeof window !== "undefined") {
+                      window.localStorage.removeItem(CREATE_REVIEW_CACHE_KEY);
+                    }
                   }}
                   disabled={improving || publishing}
                 >
@@ -454,21 +535,25 @@ export default function CreatePage() {
       <div className="flex h-full flex-col overflow-y-auto no-scrollbar">
         <div className="space-y-4 p-4">
           <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <ImageIcon className="h-5 w-5 text-primary" />
-                Create Clip
-              </CardTitle>
-            </CardHeader>
+            {!previewImageUrl && (
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <ImageIcon className="h-5 w-5 text-primary" />
+                  Create Clip
+                </CardTitle>
+              </CardHeader>
+            )}
             <CardContent className="space-y-5">
-              <p className="text-sm text-muted-foreground">
-                Choose a starting image or upload your own, then describe what happens next.
-              </p>
+              {!previewImageUrl && (
+                <p className="text-sm text-muted-foreground">
+                  Choose a starting image or upload your own, then describe what happens next.
+                </p>
+              )}
 
               {/* --- Pattern picker / focused selected image --- */}
               <div className="relative">
                 {previewImageUrl ? (
-                  <div className="space-y-3">
+                  <div className="space-y-0">
                     <button
                       type="button"
                       onClick={() => {
@@ -498,22 +583,6 @@ export default function CreatePage() {
                         </div>
                       )}
                     </button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="w-full"
-                      onClick={() => {
-                        if (isCustomMode) {
-                          clearCustomImage();
-                        } else {
-                          setSelectedPatternId(null);
-                          setPreviewImageUrl(null);
-                          setPreviewTitle(null);
-                        }
-                      }}
-                    >
-                      Change image
-                    </Button>
                   </div>
                 ) : patternsLoading ? (
                   <CinemaLoader label="Loading image patterns" />
@@ -609,14 +678,11 @@ export default function CreatePage() {
 
               {/* Progress */}
               {running && progress > 0 && (
-                <div className="space-y-3">
-                  <CinemaLoader label="Generating your cinematic clip" />
-                  <div className="space-y-2">
-                    <Progress value={progress} />
-                    <p className="text-center text-xs text-muted-foreground">
-                      Generating video... (can take 1–2 min)
-                    </p>
-                  </div>
+                <div className="space-y-2">
+                  <Progress value={progress} />
+                  <p className="text-center text-xs text-muted-foreground">
+                    Generating in background... you can keep using the app.
+                  </p>
                 </div>
               )}
 
@@ -650,6 +716,14 @@ export default function CreatePage() {
           </Card>
         </div>
       </div>
+
+      {running && (
+        <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center px-6">
+          <div className="w-full max-w-sm">
+            <CinemaLoader label="Generating your cinematic clip" />
+          </div>
+        </div>
+      )}
 
     </AppShell>
   );

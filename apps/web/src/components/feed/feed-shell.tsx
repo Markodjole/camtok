@@ -5,6 +5,7 @@ import { useFeedStore } from "@/stores/feed-store";
 import { VideoCard } from "./video-card";
 import type { FeedClip } from "@/actions/clips";
 import { Skeleton } from "@/components/ui/skeleton";
+import { getMediaUrl } from "@/lib/utils";
 
 interface FeedShellProps {
   initialClips: FeedClip[];
@@ -35,6 +36,19 @@ export function FeedShell({ initialClips }: FeedShellProps) {
     container.addEventListener("scroll", handleScroll, { passive: true });
     return () => container.removeEventListener("scroll", handleScroll);
   }, [handleScroll]);
+
+  useEffect(() => {
+    // Warm browser cache for nearby clips to reduce route/refresh wait.
+    const nearby = [currentIndex - 1, currentIndex, currentIndex + 1]
+      .map((i) => initialClips[i])
+      .filter(Boolean) as FeedClip[];
+
+    nearby.forEach((clip) => {
+      const url = getMediaUrl(clip.video_storage_path);
+      if (!url) return;
+      fetch(url, { cache: "force-cache", mode: "no-cors" }).catch(() => {});
+    });
+  }, [currentIndex, initialClips]);
 
   if (initialClips.length === 0) {
     return <EmptyFeed />;
