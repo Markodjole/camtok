@@ -25,7 +25,7 @@ interface FeedState {
 
 export const useFeedStore = create<FeedState>((set) => ({
   currentIndex: 0,
-  isMuted: true,
+  isMuted: false,
   lastStakeAmount: 10,
   setCurrentIndex: (currentIndex) => set({ currentIndex }),
   toggleMute: () => set((s) => ({ isMuted: !s.isMuted })),
