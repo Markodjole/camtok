@@ -29,7 +29,7 @@ export default function CreatePage() {
   const router = useRouter();
   const { toast } = useToast();
   const customFileRef = useRef<HTMLInputElement>(null);
-  const [isPending, startTransition] = useTransition();
+  const [, startTransition] = useTransition();
 
   // Patterns from DB
   const [patterns, setPatterns] = useState<any[]>([]);
@@ -269,17 +269,21 @@ export default function CreatePage() {
     }
   }
 
-  function handleGenerate() {
+  async function handleGenerate() {
     if (!hasSource || !plotChange.trim()) {
       toast({ title: "Missing fields", description: "Select or upload an image, and describe what happens", variant: "destructive" });
       return;
+    }
+
+    if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission().catch(() => {});
     }
 
     setProgress(15);
     setRunning(true);
     setErrorMsg(null);
 
-    startTransition(async () => {
+    try {
       let res: { error?: string; data?: any };
 
       if (isCustomMode && customImagePath) {
@@ -328,21 +332,21 @@ export default function CreatePage() {
         );
       }
       toast({ title: "Video ready!", description: "Review your clip before posting" });
-      if (typeof window !== "undefined" && "Notification" in window) {
-        if (Notification.permission === "default") {
-          Notification.requestPermission().catch(() => {});
-        }
-        if (Notification.permission === "granted") {
-          const n = new Notification("Video is ready for review", {
-            body: "Tap to open /create and review before posting.",
-          });
-          n.onclick = () => {
-            window.focus();
-            window.location.href = "/create";
-          };
-        }
+      if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+        const n = new Notification("Video is ready for review", {
+          body: "Tap to open /create and review before posting.",
+        });
+        n.onclick = () => {
+          window.focus();
+          window.location.href = "/create";
+        };
       }
-    });
+    } catch (err: any) {
+      toast({ title: "Generation failed", description: err?.message || "Unknown error", variant: "destructive" });
+      setErrorMsg(err?.message || "Unknown error");
+      setProgress(0);
+      setRunning(false);
+    }
   }
 
   function handlePublish() {
@@ -698,7 +702,7 @@ export default function CreatePage() {
                 className="w-full"
                 size="lg"
                 onClick={handleGenerate}
-                disabled={running || isPending || !hasSource || !plotChange.trim()}
+                disabled={running || !hasSource || !plotChange.trim()}
               >
                 {running ? (
                   <>
