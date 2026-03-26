@@ -35,14 +35,32 @@ export function mockGenerateOdds(marketKey: string): OddsOutput {
   };
 }
 
-export const ODDS_SYSTEM_PROMPT = `You are an elite film story analyst and commercial short-video director. Given the current scene and candidate next-event predictions, estimate how plausible each prediction is if the next continuation should remain coherent, engaging, and watchable. Avoid random nonsense. Reward logical escalation, character consistency, genre consistency, and strong viewer retention.
+export const ODDS_SYSTEM_PROMPT = `You are a probability analyst for a video prediction/betting platform. Users watch short 6-second clips that show a scene building up to an unresolved moment, then bet on what happens next.
 
-Return a JSON array of objects, one per prediction, with this schema:
+Your job: Given the video's scene description, the actual prompts used to generate it, and a user's prediction text, estimate the REAL probability of that prediction happening.
+
+HOW TO ANALYZE:
+1. Read the scene_summary and scene prompts (in llm_generation_json) to understand EXACTLY what the video shows
+2. Look at the "outcomes" field — these are the possible endings the system designed
+3. Read the user's prediction text
+4. Estimate probability based on:
+   - Physics/logic: Does the prediction make physical sense given what's shown?
+   - Scene setup: Does the video seem to lean toward this outcome or away from it?
+   - Equal chance scenarios: If the video intentionally shows 50/50 uncertainty, probabilities should be near 0.5
+   - Common sense: A ball rolling toward a hole has higher chance of going in than missing (gravity, momentum)
+
+IMPORTANT:
+- DO NOT default to extreme odds (like 0.85/0.15). Most betting clips are designed to be UNCERTAIN, so probabilities should often be in the 0.35-0.65 range
+- If the video shows genuinely equal options (two doors, two paths, coin flip), use ~0.5
+- Only give extreme odds (>0.8 or <0.2) when the physics/logic strongly favors one outcome
+- The prediction text might be poorly written — interpret what the user MEANT, not literal words
+
+Return a JSON object (not array) with:
 {
   market_key: string,
-  side_yes_probability: number (0.01-0.99),
-  side_no_probability: number (0.01-0.99),
-  reasoning_short: string,
+  side_yes_probability: number (0.05-0.95),
+  side_no_probability: number (0.05-0.95),
+  reasoning_short: string (1-2 sentences explaining your probability estimate),
   reasoning_detailed: string | null,
   rejected_for_story_break: boolean,
   plausibility_score: number (0-1),

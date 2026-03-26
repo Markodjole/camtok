@@ -1,20 +1,11 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { z } from "zod";
 
-import { generateAndValidate } from "@bettok/story-engine";
 import { getFalClient } from "@/lib/fal/server";
 import { createServerClient, createServiceClient } from "@/lib/supabase/server";
-
-type BlueprintRow = {
-  id: string;
-  slug: string;
-  label: string;
-  category: string;
-  description: string | null;
-  config_json: Record<string, unknown>;
-};
+import { planScene, scoreGeneratedFrame } from "./scene-planner";
+import type { SceneState } from "./scene-planner";
 
 function logLine(jobId: string, phase: string, extra?: Record<string, unknown>) {
   const ts = new Date().toISOString();
@@ -127,220 +118,30 @@ function getStyleFusion(input: { genre: string; tone: string; realismLevel: stri
   return `${genre}, ${tone}, ${realism}`;
 }
 
-function buildBlueprintFraming(blueprintSlug: string) {
-  if (blueprintSlug === "left_right_choice") {
-    return "two choices visible (left and right) with clear tension; subject moves toward one side but no final selection";
+function strengthenPrompt(_prompt: string, scene: SceneState, phase: "setup" | "options_reveal"): string {
+  const c = (s: string) => (s || "").trim().replace(/\.\s*$/, "");
+  if (phase === "options_reveal") {
+    return `edit only the specific object: ${c(scene.key_element_changed)}, ${c(scene.reaction_change)}, keep all people, background, lighting, camera exactly the same.`;
   }
-  if (blueprintSlug === "object_approaching_target") {
-    return "object approaches a target but stops short; tension grows before contact";
-  }
-  if (blueprintSlug === "reach_without_resolution") {
-    return "subject reaches toward an object but does not touch; stop before contact";
-  }
-  if (blueprintSlug === "balance_before_fall") {
-    return "object wobbles near an edge; hesitation builds; cut before fall";
-  }
-  if (blueprintSlug === "suspense_reveal_setup") {
-    return "door/container about to open; stop before reveal; tension holds";
-  }
-  return "simple scene with a single main action and an unresolved tension point";
+  return [
+    c(scene.characters),
+    c(scene.scene),
+    c(scene.key_element_normal),
+    c(scene.camera),
+    "ultra-realistic, cinematic lighting, sharp focus, natural colors, 9:16 vertical",
+  ].join(", ") + ".";
 }
 
-function buildSceneImagePrompts(input: {
-  baseStyle: string;
-  subject: string;
-  blueprintSlug: string;
-}) {
-  const { baseStyle, subject } = input;
-  const common = `vertical 9:16 ${baseStyle}, shallow depth of field, cinematic lighting, no text, no captions`;
-
-  if (input.blueprintSlug === "left_right_choice") {
-    return {
-      firstFrame: `${common}. ${subject}. Two clear options visible: one on the LEFT side and one on the RIGHT side. Subject is centered, looking at both options, body language shows indecision. Tension building, no choice made yet. Wide enough framing to show both options clearly.`,
-      endFrame: `${common}. ${subject}. Same scene, same two options on left and right. Subject is now leaning or reaching toward one option but has NOT made contact or committed. Hand/body frozen in the moment right before choosing. Maximum suspense, decision imminent but not made.`,
-    };
-  }
-
-  if (input.blueprintSlug === "object_approaching_target") {
-    return {
-      firstFrame: `${common}. ${subject}. Object is visible at a distance from the target. Clear trajectory implied. Tension starting to build, outcome uncertain.`,
-      endFrame: `${common}. ${subject}. Object is very close to the target but has NOT made contact. Frozen at the moment right before impact/contact. Maximum suspense.`,
-    };
-  }
-
-  if (input.blueprintSlug === "reach_without_resolution") {
-    return {
-      firstFrame: `${common}. ${subject}. Subject visible with hand/arm at rest, target object in view but out of reach. Anticipation building.`,
-      endFrame: `${common}. ${subject}. Subject reaching toward the object, fingertips almost touching but NOT making contact. Frozen at maximum tension before touch.`,
-    };
-  }
-
-  if (input.blueprintSlug === "balance_before_fall") {
-    return {
-      firstFrame: `${common}. ${subject}. Object sitting near an edge, slightly tilted. Precarious position, could go either way.`,
-      endFrame: `${common}. ${subject}. Object tilting further, almost falling off the edge but NOT fallen yet. Maximum wobble, frozen right before the tipping point.`,
-    };
-  }
-
-  if (input.blueprintSlug === "suspense_reveal_setup") {
-    return {
-      firstFrame: `${common}. ${subject}. A door/container/box is closed. Subject approaching it. What's inside is unknown. Curiosity and suspense building.`,
-      endFrame: `${common}. ${subject}. Hand on the handle/lid, about to open but NOT opened yet. Frozen at the moment right before the reveal.`,
-    };
-  }
-
-  return {
-    firstFrame: `${common}. ${subject}. Scene establishing shot with clear tension point. Action is about to begin, outcome uncertain.`,
-    endFrame: `${common}. ${subject}. Tension at maximum, action frozen right before the decisive moment. Outcome still unknown.`,
-  };
-}
-
-function expandPromptFallback(input: {
-  blueprint: BlueprintRow;
-  userPrompt: string;
-  tone: string;
-  genre: string;
-  realismLevel: string;
-}) {
-  const subject = input.userPrompt?.trim() || "simple scene";
-  const baseStyle = getStyleFusion({
-    genre: input.genre,
-    tone: input.tone,
-    realismLevel: input.realismLevel,
-  });
-  const framing = buildBlueprintFraming(input.blueprint.slug);
-
-  const suggested =
-    (input.blueprint.config_json?.["suggested_outcomes"] as unknown as string[]) ?? [];
-  const obviousOutcomes =
-    suggested.length > 0
-      ? suggested.map((s) => (input.blueprint.slug === "left_right_choice" ? `Subject ${s}` : s))
-      : ["Outcome A", "Outcome B", "Outcome C"];
-
-  const forbiddenOutcomes = [
-    "outcome already resolved",
-    "character disappears",
-    "multiple unrelated actions",
-    "text overlays or subtitles",
-    "blurred anatomy",
-  ];
-
-  const negativePrompt = [
-    "outcome resolved",
-    "decision made",
-    "result shown",
-    "text overlays",
-    "subtitles",
-    "blurry",
-    "distort",
-    "low quality",
-    "extra limbs",
-    "watermark",
-    "logo",
-  ].join(", ");
-
-  const { firstFrame, endFrame } = buildSceneImagePrompts({
-    baseStyle,
-    subject,
-    blueprintSlug: input.blueprint.slug,
-  });
-
-  return {
-    scene_summary: `${subject}. Blueprint: ${input.blueprint.label}.`,
-    first_frame_prompt: firstFrame,
-    end_frame_prompt: endFrame,
-    video_prompt: `vertical 9:16 ${baseStyle}. ${subject}. ${framing}. One continuous shot, build tension and motion, then cut right before the decisive moment. Do not show the outcome.`,
-    negative_prompt: negativePrompt,
-    obvious_outcomes: obviousOutcomes.slice(0, 5),
-    forbidden_outcomes: forbiddenOutcomes,
-    explanation_for_odds_engine: `The clip implies: ${obviousOutcomes.slice(0, 3).join(" vs ")} based on visible tension and choices.`,
-  };
-}
-
-const expandedPromptSchema = z.object({
-  scene_summary: z.string(),
-  first_frame_prompt: z.string(),
-  end_frame_prompt: z.string(),
-  video_prompt: z.string(),
-  negative_prompt: z.string(),
-  obvious_outcomes: z.array(z.string()).min(2).max(6),
-  forbidden_outcomes: z.array(z.string()).min(1).max(12),
-  explanation_for_odds_engine: z.string(),
-});
-
-type ExpandedPrompt = z.infer<typeof expandedPromptSchema>;
-
-async function expandPromptWithLlm(input: {
-  blueprint: BlueprintRow;
-  userPrompt: string;
-  tone: string;
-  genre: string;
-  realismLevel: string;
-}) {
-  const suggested =
-    (input.blueprint.config_json?.["suggested_outcomes"] as unknown as string[]) ?? [];
-  const suggestedList =
-    suggested.length > 0 ? suggested.slice(0, 5).join(", ") : "Outcome A, Outcome B, Outcome C";
-
-  const messages = [
-    {
-      role: "system",
-      content:
-        "You are a careful director and prompt engineer. Return JSON only using the requested schema. Keep scene simple and unresolved.",
-    },
-    {
-      role: "user",
-      content: JSON.stringify({
-        blueprint: {
-          slug: input.blueprint.slug,
-          label: input.blueprint.label,
-          description: input.blueprint.description,
-          suggested_outcomes: suggestedList,
-        },
-        user_prompt: input.userPrompt,
-        tone: input.tone,
-        genre: input.genre,
-        realism_level: input.realismLevel,
-        style_fusion: getStyleFusion({
-          genre: input.genre,
-          tone: input.tone,
-          realismLevel: input.realismLevel,
-        }),
-        required: [
-          "scene_summary",
-          "first_frame_prompt",
-          "end_frame_prompt",
-          "video_prompt",
-          "negative_prompt",
-          "obvious_outcomes",
-          "forbidden_outcomes",
-          "explanation_for_odds_engine",
-        ],
-      }),
-    },
-  ] as const;
-
-  const { data } = await generateAndValidate(messages as any, expandedPromptSchema, "Prompt expansion");
-  return data;
-}
-
-export async function getClipBlueprints(): Promise<{ blueprints: BlueprintRow[] }> {
-  const supabase = await createServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { blueprints: [] };
-
-  const serviceClient = await createServiceClient();
-  const { data, error } = await serviceClient
-    .from("clip_blueprints")
-    .select("id, slug, label, category, description, config_json")
-    .eq("active", true)
-    .order("created_at", { ascending: true });
-
-  if (error) return { blueprints: [] };
-  return { blueprints: (data || []) as BlueprintRow[] };
-}
+type ExpandedPrompt = {
+  scene_summary: string;
+  first_frame_prompt: string;
+  end_frame_prompt: string;
+  video_prompt: string;
+  negative_prompt: string;
+  obvious_outcomes: string[];
+  forbidden_outcomes: string[];
+  explanation_for_odds_engine: string;
+};
 
 export async function getCurrentAiGenerationStatus(): Promise<{
   running: boolean;
@@ -375,8 +176,10 @@ export async function getCurrentAiGenerationStatus(): Promise<{
 }
 
 export async function generateAiClipFromBlueprint(input: {
-  blueprintId: string;
+  blueprintId?: string;
   userPrompt: string;
+  sceneSetupPrompt?: string;
+  plotPrompt?: string;
   tone: string;
   genre: string;
   realismLevel: string;
@@ -416,55 +219,63 @@ export async function generateAiClipFromBlueprint(input: {
     return { error: "A generation job is already running for your account. Please wait a bit." };
   }
 
-  const { data: blueprint, error: bpError } = await serviceClient
-    .from("clip_blueprints")
-    .select("id, slug, label, category, description, config_json")
-    .eq("id", input.blueprintId)
-    .single();
-  if (bpError || !blueprint) return { error: "Blueprint not found" };
-  const blueprintRow = blueprint as BlueprintRow;
+  const style = getStyleFusion({
+    genre: input.genre,
+    tone: input.tone,
+    realismLevel: input.realismLevel,
+  });
+  const sceneSetupPrompt = (input.sceneSetupPrompt ?? input.userPrompt ?? "").trim();
+  const plotPrompt = (input.plotPrompt ?? "").trim();
+  if (!sceneSetupPrompt) return { error: "Missing scene setup prompt" };
+  if (!plotPrompt) return { error: "Missing plot change prompt" };
 
-  let expanded: ExpandedPrompt;
-  const useLlm = process.env.LLM_PROVIDER === "openai" && !!process.env.LLM_API_KEY;
-  if (useLlm) {
-    try {
-      expanded = await expandPromptWithLlm({
-        blueprint: blueprintRow,
-        userPrompt: input.userPrompt,
-        tone: input.tone,
-        genre: input.genre,
-        realismLevel: input.realismLevel,
-      });
-    } catch {
-      expanded = expandPromptFallback({
-        blueprint: blueprintRow,
-        userPrompt: input.userPrompt,
-        tone: input.tone,
-        genre: input.genre,
-        realismLevel: input.realismLevel,
-      });
-    }
-  } else {
-    expanded = expandPromptFallback({
-      blueprint: blueprintRow,
-      userPrompt: input.userPrompt,
-      tone: input.tone,
-      genre: input.genre,
-      realismLevel: input.realismLevel,
-    });
-  }
+  const plan = await planScene({
+    sceneSetupPrompt,
+    plotPrompt,
+    style,
+    durationSeconds: Math.max(5, Math.min(8, input.durationSeconds || 6)),
+  });
+
+  const expanded: ExpandedPrompt = {
+    scene_summary: `${plan.sceneState.characters} — ${plan.sceneState.scene}`.slice(0, 120),
+    first_frame_prompt: plan.firstFramePrompt,
+    end_frame_prompt: plan.endFramePrompt,
+    video_prompt: plan.videoPrompt,
+    negative_prompt: plan.negativePrompt,
+    obvious_outcomes: plan.sceneState.outcomes,
+    forbidden_outcomes: plan.sceneState.forbidden.slice(0, 12),
+    explanation_for_odds_engine: `Unresolved question: ${plan.sceneState.unresolved_question}. The clip implies: ${plan.sceneState.outcomes.slice(0, 3).join(" vs ")}.`,
+  };
+
+  logLine("pre-job", "scene_plan", {
+    sceneSetupPrompt,
+    plotPrompt,
+    scene: plan.sceneState.scene,
+    characters: plan.sceneState.characters,
+    camera: plan.sceneState.camera,
+    key_normal: plan.sceneState.key_element_normal,
+    key_changed: plan.sceneState.key_element_changed,
+    optionA: plan.sceneState.option_a,
+    optionB: plan.sceneState.option_b,
+  });
 
   const now = new Date().toISOString();
+  const useKlingImages = true;
+  const klingTextToImageModelKey = "fal-ai/kling-image/v3/text-to-image";
+  const klingImageToImageModelKey = "fal-ai/kling-image/v3/image-to-image";
+  const fluxTextToImageModelKey = "fal-ai/flux/dev";
+  const fluxImageToImageModelKey = "fal-ai/flux/dev/image-to-image";
+  const imageModelKey = useKlingImages ? klingTextToImageModelKey : fluxTextToImageModelKey;
   const { data: job, error: jobErr } = await serviceClient
     .from("clip_generation_jobs")
     .insert({
       user_id: user.id,
-      blueprint_id: input.blueprintId,
+      blueprint_id: input.blueprintId || null,
       status: "generating_first_frame",
       provider: "fal",
-      image_model_key: "fal-ai/flux/dev",
+      image_model_key: imageModelKey,
       video_model_key: "fal-ai/kling-video/v3/pro/image-to-video",
-      llm_generation_json: expanded,
+      llm_generation_json: { ...expanded, scene_state: plan.sceneState, action_timeline: plan.timeline },
     })
     .select()
     .single();
@@ -477,8 +288,7 @@ export async function generateAiClipFromBlueprint(input: {
 
     logLine(jobId, "start", {
       userId: user.id,
-      blueprintId: input.blueprintId,
-      imageModel: "fal-ai/flux/dev",
+      imageModel: imageModelKey,
       videoModel: "fal-ai/kling-video/v3/pro/image-to-video",
     });
     logLine(jobId, "fal.prompts", {
@@ -488,32 +298,145 @@ export async function generateAiClipFromBlueprint(input: {
       negative_prompt: expanded.negative_prompt,
     });
 
-    const first = await fal.subscribe("fal-ai/flux/dev", {
-      input: { prompt: expanded.first_frame_prompt, image_size: "portrait_16_9" },
-      logs: true,
-      onQueueUpdate: (u) => logLine(jobId, "first_frame.queue", { status: (u as any)?.status ?? "unknown" }),
-    });
-    const firstUrl = (first as any)?.data?.images?.[0]?.url as string | undefined;
-    if (!firstUrl) throw new Error("Fal first frame missing url");
-    logLine(jobId, "first_frame.done", { requestId: (first as any)?.requestId ?? null, ms: Date.now() - startedAt });
+    const MAX_FRAME_ATTEMPTS = 2;
+
+    // --- Generate first frame ---
+    let firstUrl: string | undefined;
+    let currentFirstPrompt = expanded.first_frame_prompt;
+    for (let attempt = 0; attempt < MAX_FRAME_ATTEMPTS; attempt++) {
+      logLine(jobId, `first_frame.attempt_${attempt}`, {
+        prompt_len: currentFirstPrompt.length,
+        model: useKlingImages ? klingTextToImageModelKey : fluxTextToImageModelKey,
+      });
+
+      try {
+        if (useKlingImages) {
+          const first = await fal.subscribe(klingTextToImageModelKey, {
+            input: {
+              prompt: currentFirstPrompt,
+              aspect_ratio: "9:16",
+              resolution: "1K",
+              output_format: "png",
+              num_images: 1,
+            },
+            logs: true,
+            onQueueUpdate: (u) => logLine(jobId, "first_frame.queue", { status: (u as any)?.status ?? "unknown" }),
+          });
+          const url = (first as any)?.data?.images?.[0]?.url as string | undefined;
+          if (!url) throw new Error("Kling first frame missing url");
+          logLine(jobId, "first_frame.done", { requestId: (first as any)?.requestId ?? null, ms: Date.now() - startedAt, attempt });
+
+          if (attempt < MAX_FRAME_ATTEMPTS - 1) {
+            const qa = await scoreGeneratedFrame(url, plan.sceneState, "setup");
+            logLine(jobId, "first_frame.qa", { pass: qa.overall_pass, desc: qa.description?.slice(0, 80) });
+            if (qa.overall_pass) { firstUrl = url; break; }
+            currentFirstPrompt = strengthenPrompt(currentFirstPrompt, plan.sceneState, "setup");
+            logLine(jobId, "first_frame.retry", { reason: "QA failed" });
+          } else {
+            firstUrl = url;
+          }
+        } else {
+          // Flux fallback
+          const first = await fal.subscribe(fluxTextToImageModelKey, {
+            input: { prompt: currentFirstPrompt, image_size: "portrait_16_9" },
+            logs: true,
+            onQueueUpdate: (u) => logLine(jobId, "first_frame.queue", { status: (u as any)?.status ?? "unknown" }),
+          });
+          const url = (first as any)?.data?.images?.[0]?.url as string | undefined;
+          if (!url) throw new Error("Fal first frame missing url");
+          logLine(jobId, "first_frame.done", { requestId: (first as any)?.requestId ?? null, ms: Date.now() - startedAt, attempt });
+          if (attempt < MAX_FRAME_ATTEMPTS - 1) {
+            const qa = await scoreGeneratedFrame(url, plan.sceneState, "setup");
+            logLine(jobId, "first_frame.qa", { pass: qa.overall_pass, desc: qa.description?.slice(0, 80) });
+            if (qa.overall_pass) { firstUrl = url; break; }
+            currentFirstPrompt = strengthenPrompt(currentFirstPrompt, plan.sceneState, "setup");
+            logLine(jobId, "first_frame.retry", { reason: "QA failed" });
+          } else {
+            firstUrl = url;
+          }
+        }
+      } catch (e: any) {
+        const message = e?.message ? String(e.message) : "Unknown error";
+        logLine(jobId, "first_frame.fail", { attempt, message });
+        if (attempt === MAX_FRAME_ATTEMPTS - 1) throw e;
+        // Try next attempt
+      }
+    }
+    if (!firstUrl) throw new Error("First frame generation failed after retries");
 
     await serviceClient
       .from("clip_generation_jobs")
-      .update({ status: "generating_end_frame", first_frame_request_id: (first as any)?.requestId ?? null })
+      .update({ status: "generating_end_frame" })
       .eq("id", (job as any).id);
 
-    const end = await fal.subscribe("fal-ai/flux/dev", {
-      input: { prompt: expanded.end_frame_prompt, image_size: "portrait_16_9" },
-      logs: true,
-      onQueueUpdate: (u) => logLine(jobId, "end_frame.queue", { status: (u as any)?.status ?? "unknown" }),
-    });
-    const endUrl = (end as any)?.data?.images?.[0]?.url as string | undefined;
-    if (!endUrl) throw new Error("Fal end frame missing url");
-    logLine(jobId, "end_frame.done", { requestId: (end as any)?.requestId ?? null, ms: Date.now() - startedAt });
+    // --- Generate end frame ---
+    // Kling image-to-image: reference image + short edit prompt.
+    let endUrl: string | undefined;
+    let currentEndPrompt = expanded.end_frame_prompt;
+    for (let attempt = 0; attempt < MAX_FRAME_ATTEMPTS; attempt++) {
+      logLine(jobId, `end_frame.attempt_${attempt}`, {
+        prompt_len: currentEndPrompt.length,
+        model: useKlingImages ? klingImageToImageModelKey : fluxImageToImageModelKey,
+      });
+
+      if (useKlingImages) {
+        const end = await fal.subscribe(klingImageToImageModelKey, {
+          input: {
+            prompt: currentEndPrompt,
+            image_url: firstUrl,
+            aspect_ratio: "9:16",
+            resolution: "1K",
+            output_format: "png",
+            num_images: 1,
+          },
+          logs: true,
+          onQueueUpdate: (u) => logLine(jobId, "end_frame.queue", { status: (u as any)?.status ?? "unknown" }),
+        });
+        const url = (end as any)?.data?.images?.[0]?.url as string | undefined;
+        if (!url) throw new Error("Kling end frame missing url");
+        logLine(jobId, "end_frame.done", { requestId: (end as any)?.requestId ?? null, ms: Date.now() - startedAt, attempt });
+
+        if (attempt < MAX_FRAME_ATTEMPTS - 1) {
+          const qa = await scoreGeneratedFrame(url, plan.sceneState, "options_reveal");
+          logLine(jobId, "end_frame.qa", { pass: qa.overall_pass, has_two_options: qa.has_two_options, desc: qa.description?.slice(0, 80) });
+          if (qa.overall_pass) { endUrl = url; break; }
+          currentEndPrompt = strengthenPrompt(currentEndPrompt, plan.sceneState, "options_reveal");
+          logLine(jobId, "end_frame.retry", { reason: `QA failed: options=${qa.has_two_options}` });
+        } else {
+          endUrl = url;
+        }
+      } else {
+        // Flux fallback
+        const END_FRAME_STRENGTH = 0.6;
+        const strength = attempt === 0 ? END_FRAME_STRENGTH : END_FRAME_STRENGTH + 0.15;
+        const end = await fal.subscribe(fluxImageToImageModelKey, {
+          input: {
+            prompt: currentEndPrompt,
+            image_url: firstUrl,
+            strength,
+            num_inference_steps: 40,
+          } as any,
+          logs: true,
+          onQueueUpdate: (u) => logLine(jobId, "end_frame.queue", { status: (u as any)?.status ?? "unknown" }),
+        });
+        const url = (end as any)?.data?.images?.[0]?.url as string | undefined;
+        if (!url) throw new Error("Fal end frame missing url");
+        if (attempt < MAX_FRAME_ATTEMPTS - 1) {
+          const qa = await scoreGeneratedFrame(url, plan.sceneState, "options_reveal");
+          logLine(jobId, "end_frame.qa", { pass: qa.overall_pass, has_two_options: qa.has_two_options, desc: qa.description?.slice(0, 80) });
+          if (qa.overall_pass) { endUrl = url; break; }
+          currentEndPrompt = strengthenPrompt(currentEndPrompt, plan.sceneState, "options_reveal");
+          logLine(jobId, "end_frame.retry", { reason: `QA failed: options=${qa.has_two_options}` });
+        } else {
+          endUrl = url;
+        }
+      }
+    }
+    if (!endUrl) throw new Error("End frame generation failed after retries");
 
     await serviceClient
       .from("clip_generation_jobs")
-      .update({ status: "generating_video", end_frame_request_id: (end as any)?.requestId ?? null })
+      .update({ status: "generating_video" })
       .eq("id", (job as any).id);
 
     // Primary: start + end + single prompt (keeps the "cut right before tension" behavior).
@@ -526,7 +449,7 @@ export async function generateAiClipFromBlueprint(input: {
           prompt: expanded.video_prompt,
           negative_prompt: expanded.negative_prompt,
           duration: String(Math.max(5, Math.min(8, input.durationSeconds || 6))),
-          generate_audio: false,
+          generate_audio: true,
         },
         logs: true,
         onQueueUpdate: (u) => logLine(jobId, "video.queue", { status: (u as any)?.status ?? "unknown", mode: "single_prompt_with_end" }),
@@ -541,7 +464,7 @@ export async function generateAiClipFromBlueprint(input: {
           prompt: expanded.video_prompt,
           negative_prompt: expanded.negative_prompt,
           duration: "5",
-          generate_audio: false,
+          generate_audio: true,
         },
         logs: true,
         onQueueUpdate: (u) => logLine(jobId, "video.queue", { status: (u as any)?.status ?? "unknown", mode: "single_prompt_start_only" }),
@@ -587,7 +510,7 @@ export async function generateAiClipFromBlueprint(input: {
         first_frame_storage_path: firstPath,
         end_frame_storage_path: endPath,
         blueprint_id: input.blueprintId,
-        llm_generation_json: expanded,
+        llm_generation_json: { ...expanded, scene_state: plan.sceneState, action_timeline: plan.timeline },
         scene_summary: expanded.scene_summary,
         genre: input.genre || null,
         tone: input.tone || null,

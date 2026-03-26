@@ -106,15 +106,20 @@ export async function submitPrediction(input: {
 
   if (isLlmAvailable) {
     try {
+      const scenePrompts = llmJson?.scenes
+        ? (llmJson.scenes as any[]).map((s: any) => s?.prompt).filter(Boolean)
+        : [];
+      const outcomes = (llmJson?.outcomes as string[]) ?? allSuggestedOutcomes;
+
       const clipContext = {
         scene_summary: clipFull?.scene_summary ?? "Unknown scene",
         genre: clipFull?.genre ?? "unknown",
         tone: clipFull?.tone ?? "unknown",
-        blueprint_description: blueprintDescription,
-        suggested_outcomes: allSuggestedOutcomes,
+        scene_prompts_used: scenePrompts,
+        designed_outcomes: outcomes,
         video_analysis: (clipFull as Record<string, unknown>)?.video_analysis_text ?? null,
-        video_prompt_used: llmJson?.video_prompt ?? null,
-        first_frame_prompt_used: llmJson?.first_frame_prompt ?? null,
+        enhanced_plot: llmJson?.enhanced_plot ?? null,
+        negative_prompt: llmJson?.negative_prompt ?? null,
         existing_predictions: (existingMarkets || []).map((m) => (m as Record<string, unknown>).canonical_text),
         new_prediction: normalized.canonical_text,
         market_key: normalized.market_key,

@@ -2,243 +2,451 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Upload, Film, Loader2, X } from "lucide-react";
+import { Upload, Loader2, ImageIcon, Film } from "lucide-react";
 import { AppShell } from "@/components/layout/app-shell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { useToast } from "@/components/ui/toast";
-import { createClipFromUpload } from "@/actions/clips";
-import { generateAiClipFromBlueprint, getClipBlueprints, getCurrentAiGenerationStatus } from "@/actions/ai-clips";
+import {
+  getImagePatterns,
+  generateFromImagePattern,
+  generateFromCustomImage,
+  analyzeCustomImage,
+  publishDraft,
+  improveVideo,
+} from "@/actions/image-pattern-clips";
 import { createBrowserClient, getUserQueued } from "@/lib/supabase/client";
-import { cn } from "@/lib/utils";
+import { cn, getMediaUrl } from "@/lib/utils";
 
-const GENRES = [
-  { value: "action", label: "Action" },
-  { value: "comedy", label: "Comedy" },
-  { value: "drama", label: "Drama" },
-  { value: "horror", label: "Horror" },
-  { value: "romance", label: "Romance" },
-  { value: "sci_fi", label: "Sci-Fi" },
-  { value: "thriller", label: "Thriller" },
-  { value: "fantasy", label: "Fantasy" },
-  { value: "mystery", label: "Mystery" },
-  { value: "slice_of_life", label: "Slice of Life" },
-  { value: "nature", label: "Nature" },
-  { value: "sports", label: "Sports" },
-];
-
-const TONES = [
-  { value: "serious", label: "Serious" },
-  { value: "humorous", label: "Humorous" },
-  { value: "dark", label: "Dark" },
-  { value: "lighthearted", label: "Lighthearted" },
-  { value: "tense", label: "Tense" },
-  { value: "wholesome", label: "Wholesome" },
-  { value: "chaotic", label: "Chaotic" },
-];
-
-const REALISM_LEVELS = [
-  { value: "low", label: "Low (stylized)" },
-  { value: "medium", label: "Medium" },
-  { value: "high", label: "High (realistic)" },
-];
+const PATTERNS_CACHE_KEY = "create:image_patterns:v1";
+const PATTERNS_CACHE_TTL_MS = 10 * 60 * 1000;
 
 export default function CreatePage() {
   const router = useRouter();
   const { toast } = useToast();
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const [file, setFile] = useState<File | null>(null);
-  const [title, setTitle] = useState("");
-  const [genre, setGenre] = useState("");
-  const [tone, setTone] = useState("");
+  const customFileRef = useRef<HTMLInputElement>(null);
   const [isPending, startTransition] = useTransition();
-  const [uploadProgress, setUploadProgress] = useState(0);
 
-  const [blueprints, setBlueprints] = useState<Array<{ id: string; label: string; description: string | null }>>(
-    []
-  );
-  const [aiBlueprintId, setAiBlueprintId] = useState("");
-  const [aiPrompt, setAiPrompt] = useState("");
-  const [aiGenre, setAiGenre] = useState("");
-  const [aiTone, setAiTone] = useState("");
-  const [aiRealism, setAiRealism] = useState("medium");
-  const [aiProgress, setAiProgress] = useState(0);
-  const [aiRunning, setAiRunning] = useState(false);
-  const [aiStatus, setAiStatus] = useState<string | null>(null);
-  const [aiErrorMessage, setAiErrorMessage] = useState<string | null>(null);
+  // Patterns from DB
+  const [patterns, setPatterns] = useState<any[]>([]);
+  const [patternsLoading, setPatternsLoading] = useState(true);
+  const [selectedPatternId, setSelectedPatternId] = useState<string | null>(null);
+
+  // Custom image upload
+  const [customFile, setCustomFile] = useState<File | null>(null);
+  const [customImagePath, setCustomImagePath] = useState<string | null>(null);
+  const [customUploading, setCustomUploading] = useState(false);
+  const [customAnalyzed, setCustomAnalyzed] = useState(false);
+  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
+  const [previewTitle, setPreviewTitle] = useState<string | null>(null);
+
+  // Shared state
+  const [plotChange, setPlotChange] = useState("");
+  const [running, setRunning] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // Review state
+  const [reviewMode, setReviewMode] = useState(false);
+  const [reviewVideoPath, setReviewVideoPath] = useState<string | null>(null);
+  const [reviewJobId, setReviewJobId] = useState<string | null>(null);
+  const [reviewImagePath, setReviewImagePath] = useState<string | null>(null);
+  const [reviewSummary, setReviewSummary] = useState<string | null>(null);
+  const [reviewLlmGen, setReviewLlmGen] = useState<any>(null);
+  const [improveFeedback, setImproveFeedback] = useState("");
+  const [improving, setImproving] = useState(false);
+  const [publishing, setPublishing] = useState(false);
 
   useEffect(() => {
-    getClipBlueprints().then((res) => {
-      const list = (res.blueprints || []).map((b) => ({
-        id: b.id,
-        label: b.label,
-        description: b.description ?? null,
-      }));
-      setBlueprints(list);
-      if (!aiBlueprintId && list[0]?.id) setAiBlueprintId(list[0].id);
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    let mounted = true;
 
-  useEffect(() => {
-    let cancelled = false;
-    let intervalId: ReturnType<typeof setInterval> | null = null;
-
-    const statusToProgress: Record<string, number> = {
-      queued: 10,
-      generating_first_frame: 30,
-      generating_end_frame: 55,
-      generating_video: 80,
-    };
-
-    const syncStatus = async () => {
-      const current = await getCurrentAiGenerationStatus();
-      if (cancelled) return;
-      setAiRunning(current.running);
-      setAiStatus(current.status);
-      setAiErrorMessage(current.status === "failed" ? current.errorMessage || "Generation failed." : null);
-      if (current.running) {
-        setAiProgress(statusToProgress[current.status ?? "queued"] ?? 15);
-      } else if (current.status === "completed") {
-        setAiProgress(100);
-      } else {
-        setAiProgress(0);
+    const readCache = () => {
+      if (typeof window === "undefined") return null;
+      try {
+        const raw = window.localStorage.getItem(PATTERNS_CACHE_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw) as { ts: number; patterns: any[] };
+        if (!parsed?.patterns || !Array.isArray(parsed.patterns)) return null;
+        return parsed;
+      } catch {
+        return null;
       }
     };
 
-    syncStatus();
-    intervalId = setInterval(syncStatus, 2500);
+    const writeCache = (nextPatterns: any[]) => {
+      if (typeof window === "undefined") return;
+      try {
+        window.localStorage.setItem(
+          PATTERNS_CACHE_KEY,
+          JSON.stringify({ ts: Date.now(), patterns: nextPatterns }),
+        );
+      } catch {
+        // ignore cache write failures
+      }
+    };
+
+    const cached = readCache();
+    const cacheFresh = !!cached && Date.now() - cached.ts < PATTERNS_CACHE_TTL_MS;
+
+    if (cached?.patterns?.length) {
+      setPatterns(cached.patterns);
+      setPatternsLoading(false);
+    } else {
+      setPatternsLoading(true);
+    }
+
+    // Always refresh in background to keep it up to date.
+    // If cache is fresh, this runs silently with no loader flicker.
+    getImagePatterns().then((res: { patterns: any[]; error?: string }) => {
+      if (!mounted) return;
+      if (res.patterns && Array.isArray(res.patterns)) {
+        setPatterns(res.patterns);
+        writeCache(res.patterns);
+      }
+      // Show loader only when we had no usable cache.
+      if (!cacheFresh) setPatternsLoading(false);
+    });
 
     return () => {
-      cancelled = true;
-      if (intervalId) clearInterval(intervalId);
+      mounted = false;
     };
   }, []);
 
-  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const selected = e.target.files?.[0];
-    if (selected) {
-      if (!selected.type.startsWith("video/")) {
-        toast({ title: "Invalid file", description: "Please select a video file", variant: "destructive" });
-        return;
+  function CinemaLoader({ label }: { label: string }) {
+    return (
+      <div className="rounded-xl border border-border bg-muted/30 p-4">
+        <div className="flex items-center justify-center gap-4">
+          <div className="relative h-10 w-10">
+            <div className="absolute inset-0 rounded-full border-4 border-primary/30 border-t-primary animate-spin" />
+            <Film className="absolute inset-0 m-auto h-4 w-4 text-primary" />
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="h-2 w-2 animate-bounce rounded-full bg-primary [animation-delay:0ms]" />
+            <span className="h-2 w-2 animate-bounce rounded-full bg-primary [animation-delay:120ms]" />
+            <span className="h-2 w-2 animate-bounce rounded-full bg-primary [animation-delay:240ms]" />
+          </div>
+        </div>
+        <p className="mt-3 text-center text-sm font-medium text-foreground">{label}</p>
+        <p className="mt-1 text-center text-xs text-muted-foreground">Rolling cameras... please wait</p>
+      </div>
+    );
+  }
+
+  const selectedPattern = patterns.find((p) => p.id === selectedPatternId);
+  const isCustomMode = !!customImagePath && customAnalyzed;
+  const hasSource = !!selectedPatternId || isCustomMode;
+
+  function selectPattern(id: string) {
+    if (selectedPatternId === id) {
+      setSelectedPatternId(null);
+      setPreviewImageUrl(null);
+      setPreviewTitle(null);
+    } else {
+      setSelectedPatternId(id);
+      clearCustomImage(false);
+      const picked = patterns.find((p) => p.id === id);
+      if (picked) {
+        setPreviewImageUrl(getMediaUrl(picked.image_storage_path) ?? null);
+        setPreviewTitle(picked.title || "Selected image");
       }
-      setFile(selected);
     }
   }
 
-  function handleRemoveFile() {
-    setFile(null);
-    if (fileInputRef.current) fileInputRef.current.value = "";
+  function clearCustomImage(resetPreview = true) {
+    setCustomFile(null);
+    setCustomImagePath(null);
+    setCustomAnalyzed(false);
+    if (resetPreview) {
+      setPreviewImageUrl(null);
+      setPreviewTitle(null);
+    }
+    if (customFileRef.current) customFileRef.current.value = "";
   }
 
-  function handleUpload() {
-    if (!file || !title.trim()) {
-      toast({ title: "Missing fields", description: "Title and video are required", variant: "destructive" });
+  function toggleCustomSelection() {
+    if (isCustomMode) {
+      clearCustomImage();
+      return;
+    }
+    if (customFile) {
+      setPreviewImageUrl(URL.createObjectURL(customFile));
+      setPreviewTitle("Your Image");
+    }
+  }
+
+  async function handleCustomFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith("image/")) {
+      toast({ title: "Invalid file", description: "Please select an image (JPG, PNG)", variant: "destructive" });
       return;
     }
 
-    setUploadProgress(10);
+    setSelectedPatternId(null);
+    setCustomFile(file);
+    setCustomUploading(true);
+    setCustomAnalyzed(false);
+    setErrorMsg(null);
 
-    startTransition(async () => {
-      const {
-        data: { user },
-      } = await getUserQueued();
-      if (!user) {
-        toast({ title: "Not signed in", description: "Please sign in to upload", variant: "destructive" });
-        setUploadProgress(0);
-        return;
-      }
+    try {
+      const { data: { user } } = await getUserQueued();
+      if (!user) throw new Error("Not signed in");
 
-      setUploadProgress(20);
-
-      const ext = file.name.split(".").pop() || "mp4";
-      const storagePath = `clips/${user.id}/${Date.now()}.${ext}`;
+      const ext = file.name.split(".").pop() || "jpg";
+      const storagePath = `patterns/custom/${user.id}/${Date.now()}.${ext}`;
       const supabase = createBrowserClient();
 
       const { error: uploadError } = await supabase.storage
         .from("media")
-        .upload(storagePath, file, { upsert: false });
+        .upload(storagePath, file, { upsert: true });
+      if (uploadError) throw new Error(uploadError.message);
 
-      setUploadProgress(70);
+      setCustomImagePath(storagePath);
 
-      if (uploadError) {
-        toast({ title: "Upload failed", description: uploadError.message, variant: "destructive" });
-        setUploadProgress(0);
-        return;
-      }
+      const analysis = await analyzeCustomImage(storagePath);
+      if (analysis.error) throw new Error(analysis.error);
 
-      const result = await createClipFromUpload({
-        storagePath,
-        title: title.trim(),
-        genre: genre || null,
-        tone: tone || null,
-      });
-
-      setUploadProgress(90);
-
-      if (result.error) {
-        toast({ title: "Upload failed", description: result.error, variant: "destructive" });
-        setUploadProgress(0);
-        return;
-      }
-
-      setUploadProgress(100);
-      toast({ title: "Clip uploaded!", description: "Your clip is now live", variant: "success" });
-
-      setTimeout(() => {
-        router.push("/feed");
-      }, 500);
-    });
+      setCustomAnalyzed(true);
+      setPreviewImageUrl(URL.createObjectURL(file));
+      setPreviewTitle("Your Image");
+      toast({ title: "Image analyzed", description: "Now describe what happens next", variant: "success" });
+    } catch (err: any) {
+      toast({ title: "Upload failed", description: err?.message || "Unknown error", variant: "destructive" });
+      clearCustomImage();
+    } finally {
+      setCustomUploading(false);
+    }
   }
 
-  function handleGenerateAi() {
-    if (!aiBlueprintId || !aiPrompt.trim()) {
-      toast({ title: "Missing fields", description: "Blueprint and prompt are required", variant: "destructive" });
+  function handleGenerate() {
+    if (!hasSource || !plotChange.trim()) {
+      toast({ title: "Missing fields", description: "Select or upload an image, and describe what happens", variant: "destructive" });
       return;
     }
 
-    setAiProgress(10);
-    setAiRunning(true);
-    setAiStatus("queued");
-    setAiErrorMessage(null);
-    startTransition(async () => {
-      setAiProgress(15);
-      const res = await generateAiClipFromBlueprint({
-        blueprintId: aiBlueprintId,
-        userPrompt: aiPrompt.trim(),
-        tone: aiTone || "tense",
-        genre: aiGenre || "realistic",
-        realismLevel: aiRealism,
-        durationSeconds: 6,
-      });
+    setProgress(15);
+    setRunning(true);
+    setErrorMsg(null);
 
-      if ((res as { error?: string }).error) {
-        const message = (res as { error?: string }).error || "Generation failed";
-        toast({ title: "Generation failed", description: message, variant: "destructive" });
-        setAiErrorMessage(message);
-        setAiProgress(0);
-        setAiRunning(false);
-        setAiStatus("failed");
+    startTransition(async () => {
+      let res: { error?: string; data?: any };
+
+      if (isCustomMode && customImagePath) {
+        res = await generateFromCustomImage({
+          imageStoragePath: customImagePath,
+          plotChange: plotChange.trim(),
+        });
+      } else if (selectedPatternId) {
+        res = await generateFromImagePattern({
+          patternId: selectedPatternId,
+          plotChange: plotChange.trim(),
+        });
+      } else {
+        res = { error: "No image selected" };
+      }
+
+      if (res.error) {
+        toast({ title: "Generation failed", description: res.error, variant: "destructive" });
+        setErrorMsg(res.error);
+        setProgress(0);
+        setRunning(false);
         return;
       }
 
-      setAiProgress(100);
-      toast({ title: "AI clip generated!", description: "Your clip is now live", variant: "success" });
-      setTimeout(() => router.push("/feed"), 300);
-      setAiRunning(false);
-      setAiStatus(null);
-      setAiErrorMessage(null);
+      const d = res.data;
+      setProgress(100);
+      setRunning(false);
+      setErrorMsg(null);
+
+      setReviewMode(true);
+      setReviewVideoPath(d.videoStoragePath);
+      setReviewJobId(d.jobId);
+      setReviewImagePath(d.imageStoragePath);
+      setReviewSummary(d.sceneSummary);
+      setReviewLlmGen(d.llmGeneration);
+      toast({ title: "Video ready!", description: "Review your clip before posting" });
     });
+  }
+
+  function handlePublish() {
+    if (!reviewJobId || !reviewVideoPath) return;
+    setPublishing(true);
+    startTransition(async () => {
+      const res = await publishDraft({
+        jobId: reviewJobId!,
+        videoStoragePath: reviewVideoPath!,
+        imageStoragePath: reviewImagePath || "",
+        sceneSummary: reviewSummary || "",
+        llmGeneration: reviewLlmGen,
+      });
+
+      setPublishing(false);
+      if (res.error) {
+        toast({ title: "Publish failed", description: res.error, variant: "destructive" });
+        return;
+      }
+      toast({ title: "Clip posted!", description: "Your clip is now live", variant: "success" });
+      setTimeout(() => router.push("/feed"), 300);
+    });
+  }
+
+  function handleImprove() {
+    if (!reviewJobId || !reviewVideoPath || !improveFeedback.trim()) {
+      toast({ title: "Missing feedback", description: "Describe what should be changed", variant: "destructive" });
+      return;
+    }
+    setImproving(true);
+    setErrorMsg(null);
+    startTransition(async () => {
+      const res = await improveVideo({
+        jobId: reviewJobId!,
+        videoStoragePath: reviewVideoPath!,
+        feedback: improveFeedback.trim(),
+      });
+
+      setImproving(false);
+      if (res.error) {
+        toast({ title: "Improvement failed", description: res.error, variant: "destructive" });
+        setErrorMsg(res.error);
+        return;
+      }
+      setReviewVideoPath(res.data!.videoStoragePath);
+      setImproveFeedback("");
+      toast({ title: "Video improved!", description: "Review the new version" });
+    });
+  }
+
+  const placeholderExamples: Record<string, string> = {
+    lion_grass: "e.g. spots a gazelle, eyes go wide, muscles tense",
+    vending_machine: "e.g. kid inserts coin, hand hovers over buttons",
+    beetle_red_light: "e.g. light turns green but car won't start, smoke rises",
+    woman_two_outfits: "e.g. phone rings, she looks at one dress then the other",
+    solo_shopper_aisle: "e.g. reaches for a jar but notices something on the top shelf",
+    couple_grocery: "e.g. she reads the label and frowns, he points at another option",
+    golf_putt: "e.g. wind picks up, ball starts rolling before the swing",
+    roller_skater: "e.g. a crack in the road appears ahead, she notices too late",
+  };
+
+  const plotPlaceholder = selectedPattern
+    ? placeholderExamples[selectedPattern.slug] || "Describe what happens next..."
+    : isCustomMode
+      ? "Describe what happens next in this scene..."
+      : "Select or upload an image first";
+
+  if (reviewMode && reviewVideoPath) {
+    const videoUrl = getMediaUrl(reviewVideoPath);
+    return (
+      <AppShell>
+        <div className="flex h-full flex-col overflow-y-auto no-scrollbar">
+          <div className="space-y-4 p-4">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Film className="h-5 w-5 text-primary" />
+                  Review Your Clip
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {videoUrl && (
+                  <div className="overflow-hidden rounded-xl border border-border bg-black">
+                    <video
+                      key={reviewVideoPath}
+                      src={videoUrl}
+                      controls
+                      autoPlay
+                      loop
+                      playsInline
+                      className="w-full aspect-[9/16] object-contain"
+                    />
+                  </div>
+                )}
+
+                {reviewSummary && (
+                  <p className="text-sm text-muted-foreground text-center">{reviewSummary}</p>
+                )}
+
+                <Button
+                  className="w-full"
+                  size="lg"
+                  onClick={handlePublish}
+                  disabled={publishing || improving}
+                >
+                  {publishing ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Publishing...
+                    </>
+                  ) : (
+                    "Post to Feed"
+                  )}
+                </Button>
+
+                <div className="relative">
+                  <div className="absolute inset-0 flex items-center">
+                    <span className="w-full border-t border-border" />
+                  </div>
+                  <div className="relative flex justify-center text-xs">
+                    <span className="bg-card px-2 text-muted-foreground">or improve</span>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Input
+                    placeholder="Describe what should be changed..."
+                    value={improveFeedback}
+                    onChange={(e) => setImproveFeedback(e.target.value)}
+                    maxLength={300}
+                    disabled={improving}
+                  />
+                  <Button
+                    className="w-full"
+                    variant="outline"
+                    size="lg"
+                    onClick={handleImprove}
+                    disabled={improving || publishing || !improveFeedback.trim()}
+                  >
+                    {improving ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Improving...
+                      </>
+                    ) : (
+                      "Improve Video"
+                    )}
+                  </Button>
+                </div>
+
+                {improving && <CinemaLoader label="Improving your clip" />}
+
+                {!!errorMsg && (
+                  <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+                    {errorMsg}
+                  </div>
+                )}
+
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="w-full text-muted-foreground"
+                  onClick={() => {
+                    setReviewMode(false);
+                    setReviewVideoPath(null);
+                    setReviewJobId(null);
+                    setImproveFeedback("");
+                  }}
+                  disabled={improving || publishing}
+                >
+                  Start Over
+                </Button>
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      </AppShell>
+    );
   }
 
   return (
@@ -248,255 +456,205 @@ export default function CreatePage() {
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <Film className="h-5 w-5 text-primary" />
-                Upload Clip
+                <ImageIcon className="h-5 w-5 text-primary" />
+                Create Clip
               </CardTitle>
             </CardHeader>
-            <CardContent className="space-y-4">
-              {/* File Input */}
-              <div>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="video/*"
-                  className="hidden"
-                  onChange={handleFileChange}
-                />
-                {file ? (
-                  <div className="flex items-center justify-between rounded-lg border border-border bg-muted/50 px-4 py-3">
-                    <div className="flex items-center gap-3 min-w-0">
-                      <Film className="h-5 w-5 shrink-0 text-primary" />
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-medium">{file.name}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {(file.size / (1024 * 1024)).toFixed(1)} MB
-                        </p>
-                      </div>
-                    </div>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="shrink-0"
-                      onClick={handleRemoveFile}
+            <CardContent className="space-y-5">
+              <p className="text-sm text-muted-foreground">
+                Choose a starting image or upload your own, then describe what happens next.
+              </p>
+
+              {/* --- Pattern grid + custom upload button --- */}
+              <div className="relative">
+                {patternsLoading ? (
+                  <CinemaLoader label="Loading image patterns" />
+                ) : (
+                <div className="grid grid-cols-3 gap-2.5">
+                {patterns.map((p: any) => {
+                  const imgUrl = getMediaUrl(p.image_storage_path);
+                  const isSelected = selectedPatternId === p.id;
+                  return (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => selectPattern(p.id)}
+                      className={cn(
+                        "relative overflow-hidden rounded-lg border-2 transition-all aspect-[9/16]",
+                        isSelected
+                          ? "border-primary ring-2 ring-primary/30"
+                          : "border-border hover:border-primary/50",
+                      )}
                     >
-                      <X className="h-4 w-4" />
-                    </Button>
-                  </div>
+                      {imgUrl && (
+                        <img src={imgUrl} alt={p.title} className="h-full w-full object-cover" />
+                      )}
+                      <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent px-1.5 py-1.5">
+                        <p className="text-[10px] font-medium text-white truncate">{p.title}</p>
+                      </div>
+                      {isSelected && (
+                        <div className="absolute inset-0 bg-primary/10 flex items-center justify-center">
+                          <div className="rounded-full bg-primary p-1">
+                            <svg className="h-4 w-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                            </svg>
+                          </div>
+                        </div>
+                      )}
+                    </button>
+                  );
+                })}
+
+                {/* Custom upload tile */}
+                <input
+                  ref={customFileRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={handleCustomFileChange}
+                />
+                {customFile && customImagePath ? (
+                  <button
+                    type="button"
+                    onClick={toggleCustomSelection}
+                    className={cn(
+                      "relative overflow-hidden rounded-lg border-2 transition-all aspect-[9/16]",
+                      isCustomMode
+                        ? "border-primary ring-2 ring-primary/30"
+                        : "border-border",
+                    )}
+                  >
+                    <img
+                      src={URL.createObjectURL(customFile)}
+                      alt="Your image"
+                      className="h-full w-full object-cover"
+                    />
+                    {customUploading && (
+                      <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+                        <Loader2 className="h-6 w-6 text-white animate-spin" />
+                      </div>
+                    )}
+                    {isCustomMode && (
+                      <div className="absolute inset-0 bg-primary/10 flex items-center justify-center">
+                        <div className="rounded-full bg-primary p-1">
+                          <svg className="h-4 w-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                          </svg>
+                        </div>
+                      </div>
+                    )}
+                    <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent px-1.5 py-1.5">
+                      <p className="text-[10px] font-medium text-white truncate">Your Image</p>
+                    </div>
+                  </button>
                 ) : (
                   <button
                     type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    className="flex w-full flex-col items-center gap-3 rounded-lg border-2 border-dashed border-muted-foreground/25 bg-muted/30 px-4 py-10 transition-colors hover:border-primary/50 hover:bg-muted/50"
+                    onClick={() => customFileRef.current?.click()}
+                    disabled={customUploading}
+                    className="flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed border-muted-foreground/25 bg-muted/30 transition-colors hover:border-primary/50 hover:bg-muted/50 aspect-[9/16]"
                   >
-                    <Upload className="h-8 w-8 text-muted-foreground" />
-                    <div className="text-center">
-                      <p className="text-sm font-medium">Tap to select video</p>
-                      <p className="text-xs text-muted-foreground">MP4, MOV, WebM</p>
-                    </div>
+                    <Upload className="h-6 w-6 text-muted-foreground" />
+                    <span className="text-[10px] font-medium text-muted-foreground px-1 text-center">
+                      Upload your image
+                    </span>
                   </button>
+                )}
+                </div>
+                )}
+
+                {previewImageUrl && (
+                  <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-xl bg-black/25">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (isCustomMode) {
+                          clearCustomImage();
+                        } else {
+                          setSelectedPatternId(null);
+                          setPreviewImageUrl(null);
+                          setPreviewTitle(null);
+                        }
+                      }}
+                      className="pointer-events-auto relative w-[84%] max-w-[460px] overflow-hidden rounded-xl border-2 border-primary ring-2 ring-primary/30 shadow-2xl"
+                    >
+                      <img
+                        src={previewImageUrl}
+                        alt={previewTitle || "Selected image"}
+                        className="h-[56vh] w-full object-cover bg-black/30"
+                      />
+                      <div className="absolute right-3 top-3 rounded-full bg-primary p-1.5">
+                        <svg className="h-4 w-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                        </svg>
+                      </div>
+                      {previewTitle && (
+                        <div className="absolute bottom-2 left-2 rounded-md bg-black/60 px-3 py-1 text-sm text-white">
+                          {previewTitle}
+                        </div>
+                      )}
+                    </button>
+                  </div>
                 )}
               </div>
 
-              {/* Title */}
+              {/* Description of selected pattern */}
+              {selectedPattern && (
+                <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                  {selectedPattern.description}
+                </div>
+              )}
+
+              {/* Plot change input */}
               <div className="space-y-2">
-                <label className="text-sm font-medium" htmlFor="title">
-                  Title
+                <label className="text-sm font-medium" htmlFor="plotChange">
+                  What happens next?
                 </label>
                 <Input
-                  id="title"
-                  placeholder="Give your clip a title"
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
+                  id="plotChange"
+                  placeholder={plotPlaceholder}
+                  value={plotChange}
+                  onChange={(e) => setPlotChange(e.target.value)}
                   maxLength={200}
+                  disabled={!hasSource}
                 />
-              </div>
-
-              {/* Genre */}
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Genre</label>
-                <Select value={genre} onValueChange={setGenre}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select genre" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {GENRES.map((g) => (
-                      <SelectItem key={g.value} value={g.value}>
-                        {g.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {/* Tone */}
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Tone</label>
-                <Select value={tone} onValueChange={setTone}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select tone" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {TONES.map((t) => (
-                      <SelectItem key={t.value} value={t.value}>
-                        {t.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
               </div>
 
               {/* Progress */}
-              {isPending && uploadProgress > 0 && (
-                <div className="space-y-2">
-                  <Progress value={uploadProgress} />
-                  <p className="text-center text-xs text-muted-foreground">
-                    Uploading... {uploadProgress}%
-                  </p>
+              {running && progress > 0 && (
+                <div className="space-y-3">
+                  <CinemaLoader label="Generating your cinematic clip" />
+                  <div className="space-y-2">
+                    <Progress value={progress} />
+                    <p className="text-center text-xs text-muted-foreground">
+                      Generating video... (can take 1–2 min)
+                    </p>
+                  </div>
                 </div>
               )}
 
-              {/* Upload Button */}
-              <Button
-                className="w-full"
-                size="lg"
-                onClick={handleUpload}
-                disabled={isPending || !file || !title.trim()}
-              >
-                {isPending ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Uploading...
-                  </>
-                ) : (
-                  <>
-                    <Upload className="h-4 w-4" />
-                    Upload Clip
-                  </>
-                )}
-              </Button>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Film className="h-5 w-5 text-primary" />
-                Generate AI Clip (fal.ai)
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Blueprint</label>
-                <Select value={aiBlueprintId} onValueChange={setAiBlueprintId}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select blueprint" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {blueprints.map((b) => (
-                      <SelectItem key={b.id} value={b.id}>
-                        {b.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {blueprints.find((b) => b.id === aiBlueprintId)?.description && (
-                  <p className="text-xs text-muted-foreground">
-                    {blueprints.find((b) => b.id === aiBlueprintId)?.description}
-                  </p>
-                )}
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-sm font-medium" htmlFor="aiPrompt">
-                  Prompt
-                </label>
-                <Input
-                  id="aiPrompt"
-                  placeholder="e.g. cute black dog in a sunny park"
-                  value={aiPrompt}
-                  onChange={(e) => setAiPrompt(e.target.value)}
-                  maxLength={200}
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">Genre</label>
-                  <Select value={aiGenre} onValueChange={setAiGenre}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Genre" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {GENRES.map((g) => (
-                        <SelectItem key={g.value} value={g.value}>
-                          {g.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">Tone</label>
-                  <Select value={aiTone} onValueChange={setAiTone}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Tone" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {TONES.map((t) => (
-                        <SelectItem key={t.value} value={t.value}>
-                          {t.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Realism</label>
-                <Select value={aiRealism} onValueChange={setAiRealism}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Realism" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {REALISM_LEVELS.map((r) => (
-                      <SelectItem key={r.value} value={r.value}>
-                        {r.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {aiRunning && aiProgress > 0 && (
-                <div className="space-y-2">
-                  <Progress value={aiProgress} />
-                  <p className="text-center text-xs text-muted-foreground">
-                    Generating... {aiStatus ? aiStatus.replaceAll("_", " ") : "processing"} (can take 1–2 min)
-                  </p>
-                </div>
-              )}
-
-              {!!aiErrorMessage && (
+              {/* Error */}
+              {!!errorMsg && (
                 <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-                  Generation failed: {aiErrorMessage}
+                  Generation failed: {errorMsg}
                 </div>
               )}
 
+              {/* Generate button */}
               <Button
                 className="w-full"
                 size="lg"
-                onClick={handleGenerateAi}
-                disabled={aiRunning || isPending || !aiBlueprintId || !aiPrompt.trim()}
+                onClick={handleGenerate}
+                disabled={running || isPending || !hasSource || !plotChange.trim()}
               >
-                {aiRunning ? (
+                {running ? (
                   <>
                     <Loader2 className="h-4 w-4 animate-spin" />
                     Generating...
                   </>
                 ) : (
                   <>
-                    <Film className="h-4 w-4" />
+                    <ImageIcon className="h-4 w-4" />
                     Generate Clip
                   </>
                 )}
@@ -505,6 +663,7 @@ export default function CreatePage() {
           </Card>
         </div>
       </div>
+
     </AppShell>
   );
 }
