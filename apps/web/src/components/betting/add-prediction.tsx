@@ -10,11 +10,13 @@ import { Sparkles, Loader2 } from "lucide-react";
 interface AddPredictionProps {
   clipNodeId: string;
   onPredictionAdded: () => void;
+  existingPredictions?: string[];
 }
 
 export function AddPrediction({
   clipNodeId,
   onPredictionAdded,
+  existingPredictions = [],
 }: AddPredictionProps) {
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(false);
@@ -58,6 +60,11 @@ export function AddPrediction({
       .replace(/\s+/g, " ")
       .trim();
   }
+
+  const existingPredictionKeys = useMemo(
+    () => new Set(existingPredictions.map((p) => canonicalSuggestionKey(p)).filter(Boolean)),
+    [existingPredictions],
+  );
 
   useEffect(() => {
     let mounted = true;
@@ -132,7 +139,8 @@ export function AddPrediction({
           noProbability: s.noProbability,
           yesOdds: probToOdds(s.yesProbability),
           noOdds: probToOdds(s.noProbability),
-        }));
+        }))
+          .filter((s) => !existingPredictionKeys.has(canonicalSuggestionKey(s.rawText)));
 
         setSuggestedPredictions(built);
         setSuggestionsLoading(false);
@@ -146,7 +154,7 @@ export function AddPrediction({
     return () => {
       mounted = false;
     };
-  }, [clipNodeId]);
+  }, [clipNodeId, existingPredictionKeys]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();

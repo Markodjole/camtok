@@ -98,7 +98,7 @@ export function LoopBetOverlay({ clipId, onExpandedChange, openAllSignal = 0 }: 
 
   const balance = wallet?.balance ?? 0;
   const canBet = balance >= lastStakeAmount;
-  const hasMore = markets.length > MAX_VISIBLE;
+  const hasMore = false;
 
   const [scrollOffset, setScrollOffset] = useState(0);
   const scrollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -147,15 +147,7 @@ export function LoopBetOverlay({ clipId, onExpandedChange, openAllSignal = 0 }: 
     };
   }, [hasMore, expanded, detailMarketId, markets.length, pauseByCompose]);
 
-  const displayMarkets = hasMore
-    ? (() => {
-        const items: typeof markets = [];
-        for (let i = 0; i < MAX_VISIBLE; i++) {
-          items.push(markets[(scrollOffset + i) % markets.length]);
-        }
-        return items;
-      })()
-    : markets;
+  const displayMarkets = markets;
 
   const detailMarket = detailMarketId ? markets.find((m) => m.id === detailMarketId) : null;
 

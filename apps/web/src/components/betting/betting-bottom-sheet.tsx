@@ -179,7 +179,11 @@ export function BettingBottomSheet({
           <>
             <Separator className="my-4" />
             <div className="px-1">
-              <AddPrediction clipNodeId={clipId} onPredictionAdded={loadMarkets} />
+              <AddPrediction
+                clipNodeId={clipId}
+                onPredictionAdded={loadMarkets}
+                existingPredictions={markets.map((m) => m.canonical_text)}
+              />
             </div>
           </>
         )}
