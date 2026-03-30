@@ -476,8 +476,9 @@ async function generateContinuationVideo(
       if (videoBlob) {
         const { extractLastFrame } = await import("@/video-intelligence/last-frame");
         const lastFrameBuffer = await extractLastFrame(new Uint8Array(await videoBlob.arrayBuffer()));
+        const lastFrameBytes = new Uint8Array(lastFrameBuffer);
 
-        const lastFrameBlob = new Blob([lastFrameBuffer], { type: "image/jpeg" });
+        const lastFrameBlob = new Blob([lastFrameBytes], { type: "image/jpeg" });
         startImageUrl = await fal.storage.upload(lastFrameBlob);
         console.log("[continuation] Last frame uploaded to Fal:", startImageUrl);
       }
