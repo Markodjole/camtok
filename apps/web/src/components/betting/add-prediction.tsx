@@ -32,6 +32,7 @@ export function AddPrediction({
       noOdds: number;
     }>
   >([]);
+  const [availableOptionVariables, setAvailableOptionVariables] = useState<string[]>([]);
   const { toast } = useToast();
 
   function clamp01(n: number) {
@@ -54,8 +55,11 @@ export function AddPrediction({
     return rawText
       .toLowerCase()
       .replace(/\bboy\b|\bgirl\b|\bman\b|\bwoman\b|\bcharacter\b/g, "")
-      .replace(/\bpicks up\b|\bpick up\b|\bgrabs\b|\bgrab\b|\bchooses\b|\bchoose\b/g, "")
+      .replace(/\bpicks?\s*up\b|\bpickup\b|\bpickups\b|\bpicksup\b/g, "")
+      .replace(/\bgrabs?\b|\bchooses?\b|\bselects?\b|\btakes?\b/g, "")
+      .replace(/\bpress(?:es|ed)?\b|\bclick(?:s|ed)?\b|\bhit(?:s)?\b/g, "")
       .replace(/\binserts\b|\binsert\b|\binto\b/g, "")
+      .replace(/\bthe\b|\ba\b|\ban\b/g, "")
       .replace(/[^a-z0-9\s]/g, " ")
       .replace(/\s+/g, " ")
       .trim();
@@ -71,6 +75,7 @@ export function AddPrediction({
     setSuggestionsError(null);
     setSuggestionsLoading(true);
     setSuggestedPredictions([]);
+    setAvailableOptionVariables([]);
 
     getClipContinuationContext(clipNodeId)
       .then(({ context, error }) => {
@@ -87,30 +92,13 @@ export function AddPrediction({
           return;
         }
 
-        // Build suggestion list from video analysis:
-        // - prioritize nextStepCandidates (they already have probabilityScore)
-        // - then add availableOptions (use confidence as probability proxy)
-        const byCanonical = new Map<
+        // Build suggestion list ONLY from nextStepCandidates.
+        const nextStepByCanonical = new Map<
           string,
           { rawText: string; yesProbability: number; noProbability: number }
         >();
 
-        // 1) Add ALL available options first (user requested full list)
-        for (const o of context.availableOptions ?? []) {
-          const rawText = (o.label ?? "").trim();
-          if (!rawText) continue;
-          const key = canonicalSuggestionKey(rawText);
-          if (!key) continue;
-
-          const yesProbability = calibrateProbability(typeof o.confidence === "number" ? o.confidence : 0.5);
-          const noProbability = clamp01(1 - yesProbability);
-
-          if (!byCanonical.has(key)) {
-            byCanonical.set(key, { rawText, yesProbability, noProbability });
-          }
-        }
-
-        // 2) Add ALL next-step candidates (possible outcomes)
+        // Add ALL next-step candidates (possible outcomes)
         for (const n of context.nextStepCandidates ?? []) {
           const rawText = (n.label ?? "").trim();
           if (!rawText) continue;
@@ -122,18 +110,18 @@ export function AddPrediction({
           );
           const noProbability = clamp01(1 - yesProbability);
 
-          if (!byCanonical.has(key)) {
-            byCanonical.set(key, { rawText, yesProbability, noProbability });
+          if (!nextStepByCanonical.has(key)) {
+            nextStepByCanonical.set(key, { rawText, yesProbability, noProbability });
           } else {
             // If duplicate concept exists, keep stronger probability signal.
-            const prev = byCanonical.get(key)!;
+            const prev = nextStepByCanonical.get(key)!;
             if (yesProbability > prev.yesProbability) {
-              byCanonical.set(key, { rawText, yesProbability, noProbability });
+              nextStepByCanonical.set(key, { rawText, yesProbability, noProbability });
             }
           }
         }
 
-        const built = Array.from(byCanonical.values()).map((s) => ({
+        const built = Array.from(nextStepByCanonical.values()).map((s) => ({
           rawText: s.rawText,
           yesProbability: s.yesProbability,
           noProbability: s.noProbability,
@@ -143,6 +131,17 @@ export function AddPrediction({
           .filter((s) => !existingPredictionKeys.has(canonicalSuggestionKey(s.rawText)));
 
         setSuggestedPredictions(built);
+        const variableKeys = new Set<string>();
+        const variables: string[] = [];
+        for (const o of context.availableOptions ?? []) {
+          const rawText = (o.label ?? "").trim();
+          if (!rawText) continue;
+          const key = canonicalSuggestionKey(rawText);
+          if (!key || existingPredictionKeys.has(key) || variableKeys.has(key)) continue;
+          variableKeys.add(key);
+          variables.push(rawText);
+        }
+        setAvailableOptionVariables(variables);
         setSuggestionsLoading(false);
       })
       .catch((err) => {
@@ -220,10 +219,27 @@ export function AddPrediction({
   }
 
   const suggestions = useMemo(() => suggestedPredictions, [suggestedPredictions]);
+  const typedCanonical = useMemo(() => canonicalSuggestionKey(text), [text]);
+  const matchingSuggestions = useMemo(() => {
+    if (!typedCanonical) return suggestions;
+    return suggestions.filter((s) => {
+      const key = canonicalSuggestionKey(s.rawText);
+      return key.includes(typedCanonical) || typedCanonical.includes(key);
+    });
+  }, [typedCanonical, suggestions]);
+  const hasCandidateMatch = matchingSuggestions.length > 0;
+
+  function appendVariable(label: string) {
+    setText((prev) => {
+      const trimmed = prev.trimEnd();
+      const sep = trimmed ? " " : "";
+      return `${trimmed}${sep}${label}`;
+    });
+  }
 
   return (
     <div className="space-y-3">
-      <form onSubmit={handleSubmit} className="flex gap-2">
+      <form onSubmit={handleSubmit} className="relative flex gap-2">
         <div className="relative flex-1">
           <Sparkles className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-primary pointer-events-none" />
           <Input
@@ -237,17 +253,23 @@ export function AddPrediction({
             disabled={loading}
           />
 
-          {inputFocused && !text.trim() ? (
-            <div className="absolute bottom-full left-0 right-0 mb-2 max-h-56 overflow-y-auto rounded-xl border border-border bg-card/95 backdrop-blur-sm shadow-xl z-20 p-2">
-              {suggestionsLoading ? (
-                <div className="px-2 py-2 text-xs text-muted-foreground">Loading options...</div>
-              ) : suggestionsError ? (
-                <div className="px-2 py-2 text-xs text-destructive">Options unavailable</div>
-              ) : suggestions.length === 0 ? (
-                <div className="px-2 py-2 text-xs text-muted-foreground">No predefined options yet</div>
+        </div>
+        <Button type="submit" size="default" disabled={loading || !text.trim()}>
+          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Submit"}
+        </Button>
+
+        {inputFocused ? (
+          <div className="absolute bottom-full left-0 right-0 mb-2 max-h-64 overflow-y-auto rounded-xl border border-border bg-card/95 backdrop-blur-sm shadow-xl z-20 p-2">
+            {suggestionsLoading ? (
+              <div className="px-2 py-2 text-xs text-muted-foreground">Loading options...</div>
+            ) : suggestionsError ? (
+              <div className="px-2 py-2 text-xs text-destructive">Options unavailable</div>
+            ) : !text.trim() ? (
+              matchingSuggestions.length === 0 ? (
+                <div className="px-2 py-2 text-xs text-muted-foreground">No next-step candidates yet</div>
               ) : (
                 <div className="space-y-1">
-                  {suggestions.map((s) => (
+                  {matchingSuggestions.map((s) => (
                     <button
                       key={s.rawText}
                       type="button"
@@ -267,13 +289,59 @@ export function AddPrediction({
                     </button>
                   ))}
                 </div>
-              )}
-            </div>
-          ) : null}
-        </div>
-        <Button type="submit" size="default" disabled={loading || !text.trim()}>
-          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Submit"}
-        </Button>
+              )
+            ) : hasCandidateMatch ? (
+              <div className="space-y-1">
+                <div className="px-2 py-1 text-[11px] text-muted-foreground">Matching next-step candidates</div>
+                {matchingSuggestions.map((s) => (
+                  <button
+                    key={s.rawText}
+                    type="button"
+                    disabled={loading}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      setText(s.rawText);
+                    }}
+                    className="w-full rounded-lg px-2.5 py-2 text-left hover:bg-secondary/70"
+                    title={s.rawText}
+                  >
+                    <div className="line-clamp-1 text-sm text-foreground">{s.rawText}</div>
+                    <div className="text-[11px] text-muted-foreground">
+                      Suggested YES odds: {s.yesOdds.toFixed(2)}x
+                    </div>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <div className="px-2 py-1 text-[11px] text-muted-foreground">
+                  No candidate match. Insert available option variable:
+                </div>
+                <div className="flex flex-wrap gap-1.5 px-1">
+                  {availableOptionVariables.length === 0 ? (
+                    <div className="px-2 py-2 text-xs text-muted-foreground">No available option variables</div>
+                  ) : (
+                    availableOptionVariables.map((v) => (
+                      <button
+                        key={v}
+                        type="button"
+                        disabled={loading}
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          appendVariable(v);
+                        }}
+                        className="rounded-full border border-border bg-secondary/40 px-2.5 py-1 text-xs text-foreground hover:bg-secondary/70"
+                        title={`Insert variable: ${v}`}
+                      >
+                        {v}
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        ) : null}
       </form>
     </div>
   );

@@ -100,10 +100,44 @@ export async function startContinuation(clipNodeId: string) {
       .from("clip_nodes")
       .update({ status: "betting_open" })
       .eq("id", clipNodeId);
+    await supabase
+      .from("prediction_markets")
+      .update({ status: "open" })
+      .eq("clip_node_id", clipNodeId)
+      .in("status", ["locked"]);
+    await supabase
+      .from("bets")
+      .update({ status: "active", locked_at: null })
+      .eq("clip_node_id", clipNodeId)
+      .eq("status", "locked");
     return { error: result.error };
   }
 
   const { continuation, selectionData } = result;
+
+  if (!result.videoStoragePath) {
+    console.error("[continuation] Pipeline succeeded but no video was generated — rolling back");
+    await supabase
+      .from("continuation_jobs")
+      .update({ status: "failed", error_message: "Video generation produced no file", completed_at: new Date().toISOString() })
+      .eq("id", job.id);
+    await supabase
+      .from("clip_nodes")
+      .update({ status: "betting_open" })
+      .eq("id", clipNodeId);
+    await supabase
+      .from("prediction_markets")
+      .update({ status: "open" })
+      .eq("clip_node_id", clipNodeId)
+      .in("status", ["locked"]);
+    await supabase
+      .from("bets")
+      .update({ status: "active", locked_at: null })
+      .eq("clip_node_id", clipNodeId)
+      .eq("status", "locked");
+    return { error: "Video generation failed — clip restored to betting" };
+  }
+
   const selectedLabels = (selectionData?.selected as Array<Record<string, unknown>> | undefined)
     ?.map((s) => String(s.label ?? ""))
     .filter(Boolean) ?? [];
@@ -666,7 +700,13 @@ async function generateContinuationNarrative(
     characters: ctx.characters.map((c) => ({
       id: c.characterId,
       label: c.label,
-      clothing: [c.clothingTop, c.clothingBottom].filter(Boolean).join(", "),
+      age_group: c.ageGroup,
+      gender_presentation: c.genderPresentation,
+      body_build: c.bodyBuild,
+      hair: c.hairDescription,
+      clothing_top: c.clothingTop,
+      clothing_bottom: c.clothingBottom,
+      accessories: c.accessories,
       emotion: c.dominantEmotion,
       posture: c.posture,
     })),
@@ -736,11 +776,21 @@ Priority order:
 4. What the character has shown preference for (from evidence, not guessing)
 5. User predictions that are compatible with the selected actions
 
-CONTINUITY IS CRITICAL:
-- Characters must keep the same appearance, clothing, and position
-- Objects must maintain their state
-- Environment must not change
-- Economic consistency: a person in a $1000 car does not suddenly have luxury items
+CONTINUITY IS CRITICAL — CHARACTER IDENTITY:
+- The continuation is an image-to-video that starts from the LAST FRAME of the original clip.
+- Characters MUST be described with their EXACT appearance from the video analysis: hair color/style, clothing (top AND bottom), body build, age group, accessories.
+- The video_prompt MUST begin with a full character description that matches the analysis data EXACTLY. Do NOT use vague terms like "a person" or "a man" — be specific: "a young adult male with [hair], wearing [top] and [bottom], [build] build".
+- If hair description is "unknown", describe what IS known (age, build, clothing).
+- NEVER change clothing, hair, or physical features between Part 1 and Part 2.
+- Objects must maintain their state.
+- Environment must not change.
+- Economic consistency: a person in a $1000 car does not suddenly have luxury items.
+
+EXAMPLE of correct video_prompt opening:
+"A young adult male with short brown curly hair, wearing a dark hoodie and jeans, average build, stands in a grocery store aisle. He extends his right hand toward..."
+
+EXAMPLE of WRONG video_prompt opening:
+"A person picks up a bottle..." (too vague, will generate different-looking character)
 
 VIDEO PROMPT — CRITICAL RULES FOR KLING AI:
 You MUST return "video_prompt" and "negative_prompt" fields.
@@ -835,18 +885,39 @@ async function generateContinuationVideo(
     throw new Error("Cannot generate continuation video without a start image (last frame extraction failed)");
   }
 
-  // Prepend character appearance anchors only (skip environment — it contains brand
-  // names that confuse the model when the action targets a specific product).
+  // Build a detailed character identity string from analysis data to enforce
+  // visual consistency between Part 1 and Part 2.
   let prompt = videoPrompt;
-  if (ctx?.continuityAnchors) {
-    const anchors = ctx.continuityAnchors;
-    const anchorPrefix = [
-      ...anchors.characterAppearance.slice(0, 2),
-      ...anchors.wardrobe.slice(0, 2),
-      ...anchors.cameraStyle.slice(0, 1),
-    ].filter(Boolean).join(". ");
+  if (ctx) {
+    const charParts: string[] = [];
+
+    for (const c of ctx.characters) {
+      const desc: string[] = [];
+      if (c.ageGroup && c.ageGroup !== "unknown") desc.push(c.ageGroup.replace(/_/g, " "));
+      if (c.genderPresentation && c.genderPresentation !== "unknown") {
+        desc.push(c.genderPresentation === "male_presenting" ? "male" : c.genderPresentation === "female_presenting" ? "female" : c.genderPresentation);
+      }
+      if (c.bodyBuild && c.bodyBuild !== "unknown") desc.push(`${c.bodyBuild} build`);
+      if (c.hairDescription && c.hairDescription !== "unknown") desc.push(`${c.hairDescription} hair`);
+      const clothing: string[] = [];
+      if (c.clothingTop && c.clothingTop !== "unknown") clothing.push(c.clothingTop);
+      if (c.clothingBottom && c.clothingBottom !== "unknown") clothing.push(c.clothingBottom);
+      if (clothing.length > 0) desc.push(`wearing ${clothing.join(" and ")}`);
+      if (c.accessories && c.accessories.length > 0) desc.push(`with ${c.accessories.join(", ")}`);
+      if (desc.length > 0) {
+        charParts.push(desc.join(", "));
+      }
+    }
+
+    const charIdentity = charParts.length > 0
+      ? `SAME CHARACTER: ${charParts.join("; ")}.`
+      : "";
+
+    const cameraAnchor = ctx.continuityAnchors?.cameraStyle?.slice(0, 1).join(", ") ?? "";
+
+    const anchorPrefix = [charIdentity, cameraAnchor].filter(Boolean).join(" ");
     if (anchorPrefix) {
-      prompt = `${anchorPrefix}. ${prompt}`;
+      prompt = `${anchorPrefix} ${prompt}`;
     }
   }
 
@@ -858,7 +929,7 @@ async function generateContinuationVideo(
     input: {
       start_image_url: startImageUrl,
       prompt,
-      negative_prompt: negativePrompt || "blurry, low quality, text overlay, watermark, distorted face",
+      negative_prompt: `${negativePrompt || "blurry, low quality, text overlay, watermark"}, different person, different clothes, costume change, different hair, different outfit, wardrobe change, distorted face`,
       duration: "5",
       generate_audio: true,
     },
@@ -869,11 +940,17 @@ async function generateContinuationVideo(
     },
   });
 
-  const videoUrl = (video as Record<string, unknown>).video
-    ? ((video as Record<string, unknown>).video as Record<string, unknown>).url
-    : null;
+  const falResult = video as Record<string, unknown>;
+  const videoUrlCandidates = [
+    (falResult.video as Record<string, unknown> | undefined)?.url,
+    ((falResult.data as Record<string, unknown> | undefined)?.video as Record<string, unknown> | undefined)?.url,
+    ((falResult.output as Record<string, unknown> | undefined)?.video as Record<string, unknown> | undefined)?.url,
+    ((falResult.result as Record<string, unknown> | undefined)?.video as Record<string, unknown> | undefined)?.url,
+  ];
+  const videoUrl = videoUrlCandidates.find((u): u is string => typeof u === "string" && u.length > 0) ?? null;
 
-  if (!videoUrl || typeof videoUrl !== "string") {
+  if (!videoUrl) {
+    console.error("[continuation] Fal response keys:", Object.keys(falResult));
     throw new Error("Fal returned no video URL");
   }
 

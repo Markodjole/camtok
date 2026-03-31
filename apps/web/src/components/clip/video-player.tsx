@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useEffect, useState, useCallback } from "react";
+import { useRef, useEffect, useState, useCallback, type MouseEvent } from "react";
 import { useFeedStore } from "@/stores/feed-store";
 import { cn } from "@/lib/utils";
 import { Play, Pause } from "lucide-react";
@@ -39,6 +39,7 @@ export function VideoPlayer({
   const [showControls, setShowControls] = useState(false);
   const [isExtremeLandscape, setIsExtremeLandscape] = useState(false);
   const [isZoomed, setIsZoomed] = useState(false);
+  const [zoomOrigin, setZoomOrigin] = useState("50% 50%");
   const isMuted = useFeedStore((s) => s.isMuted);
   const toggleMute = useFeedStore((s) => s.toggleMute);
 
@@ -154,20 +155,20 @@ export function VideoPlayer({
     const video = videoRef.current;
     if (!video) return;
 
-    // First tap after browser forced mute: just unmute, don't toggle play/pause.
-    if (browserForcedMuteRef.current) {
-      browserForcedMuteRef.current = false;
-      video.muted = false;
+    // If currently playing, always pause immediately (never intercept with unmute logic).
+    if (!video.paused) {
+      video.pause();
+      setIsPlaying(false);
       return;
     }
 
-    if (video.paused) {
-      video.play();
-      setIsPlaying(true);
-    } else {
-      video.pause();
-      setIsPlaying(false);
+    // If browser forced muted autoplay, first resume tap should unmute + play.
+    if (browserForcedMuteRef.current) {
+      browserForcedMuteRef.current = false;
+      video.muted = false;
     }
+    video.play();
+    setIsPlaying(true);
   }, []);
 
   const showControlsBriefly = useCallback(() => {
@@ -179,12 +180,15 @@ export function VideoPlayer({
     }, 1000);
   }, []);
 
-  const handleContainerTap = useCallback(() => {
+  const handleContainerTap = useCallback((e: MouseEvent<HTMLDivElement>) => {
     const video = videoRef.current;
     if (!video) return;
 
     // While paused, delay single-tap action briefly so a second quick tap can toggle zoom.
     if (video.paused) {
+      const rect = e.currentTarget.getBoundingClientRect();
+      const x = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
+      const y = Math.max(0, Math.min(100, ((e.clientY - rect.top) / rect.height) * 100));
       const now = Date.now();
       const withinDoubleTapWindow = now - lastPausedTapAtRef.current < 280;
       lastPausedTapAtRef.current = now;
@@ -194,6 +198,7 @@ export function VideoPlayer({
           clearTimeout(pausedTapTimeoutRef.current);
           pausedTapTimeoutRef.current = null;
         }
+        setZoomOrigin(`${x}% ${y}%`);
         setIsZoomed((z) => !z);
         showControlsBriefly();
         return;
@@ -257,9 +262,10 @@ export function VideoPlayer({
         className={cn(
           "h-full w-full object-contain transition-transform duration-200 ease-out",
           isZoomed
-            ? (isExtremeLandscape ? "scale-[2.1] origin-center" : "scale-[1.8] origin-center")
-            : (isExtremeLandscape ? "scale-[1.25] origin-center" : null)
+            ? (isExtremeLandscape ? "scale-[2.1]" : "scale-[1.8]")
+            : (isExtremeLandscape ? "scale-[1.25]" : null)
         )}
+        style={{ transformOrigin: isZoomed ? zoomOrigin : "50% 50%" }}
       />
 
       <div className="absolute bottom-0 left-0 right-0 z-20 h-[4px] bg-white/15">

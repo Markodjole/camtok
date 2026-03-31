@@ -31,6 +31,7 @@ import {
   VolumeX,
   CheckCircle2,
   Wand2,
+  Loader2,
 } from "lucide-react";
 
 interface VideoCardProps {
@@ -55,6 +56,8 @@ export function VideoCard({ clip, isActive }: VideoCardProps) {
   const isSettled = clip.status === "settled";
   const isResolvedWithPart2 = isSettled && !!clip.part2_video_storage_path;
   const isBettingOpen = clip.status === "betting_open";
+  const isContinuationInProgress =
+    aiResolving || clip.status === "continuation_generating" || clip.status === "betting_locked";
   const deadline = clip.betting_deadline
     ? new Date(clip.betting_deadline)
     : null;
@@ -81,6 +84,13 @@ export function VideoCard({ clip, isActive }: VideoCardProps) {
       setOverlayExpanded(false);
     }
   }, [showFeedBets]);
+
+  useEffect(() => {
+    if (isContinuationInProgress) {
+      setShowBetting(false);
+      setShowFeedBets(false);
+    }
+  }, [isContinuationInProgress, setShowFeedBets]);
 
   const openAllPredictionsOverlay = useCallback(() => {
     // Show in-video prediction overlay (all cards + comments) instead of bottom drawer.
@@ -156,6 +166,8 @@ export function VideoCard({ clip, isActive }: VideoCardProps) {
   async function handleAiResolve() {
     setShowDeleteMenu(false);
     setAiResolving(true);
+    setShowBetting(false);
+    setShowFeedBets(false);
     try {
       const result = await startContinuation(clip.id);
       if ("error" in result) {
@@ -197,7 +209,7 @@ export function VideoCard({ clip, isActive }: VideoCardProps) {
           {isActive && loopCount === 0 && (
             <CommentsFirstLoop clipId={clip.id} />
           )}
-          {isActive && showFeedBets && loopCount >= 1 && isBettingOpen && !isExpired && (
+          {isActive && showFeedBets && loopCount >= 1 && isBettingOpen && !isExpired && !isContinuationInProgress && (
             <LoopBetOverlay
               clipId={clip.id}
               onExpandedChange={setOverlayExpanded}
@@ -280,8 +292,18 @@ export function VideoCard({ clip, isActive }: VideoCardProps) {
           </span>
         </button>
 
-        {!isSettled && (
+        {!isSettled && !isContinuationInProgress && (
           <>
+            <button
+              type="button"
+              onClick={openAllPredictionsOverlay}
+              className="flex flex-col items-center gap-1 touch-manipulation"
+              aria-label="Predictions"
+            >
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white/10 backdrop-blur-sm">
+                <MessageSquare className="h-5 w-5 text-white" />
+              </div>
+            </button>
             <button
               type="button"
               onClick={() => setShowBetting(true)}
@@ -294,16 +316,6 @@ export function VideoCard({ clip, isActive }: VideoCardProps) {
               <span className="text-[10px] text-white/80">
                 {formatCompactNumber(clip.bet_count)}
               </span>
-            </button>
-            <button
-              type="button"
-              onClick={openAllPredictionsOverlay}
-              className="flex flex-col items-center gap-1 touch-manipulation"
-              aria-label="Predictions"
-            >
-              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white/10 backdrop-blur-sm">
-                <MessageSquare className="h-5 w-5 text-white" />
-              </div>
             </button>
           </>
         )}
@@ -373,8 +385,17 @@ export function VideoCard({ clip, isActive }: VideoCardProps) {
         )}
       </div>
 
+      {isContinuationInProgress && (
+        <div className="absolute inset-x-0 bottom-24 z-20 flex justify-center pointer-events-none">
+          <div className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-black/55 px-3 py-1.5 text-xs text-white/90 backdrop-blur-sm">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            Continuation in progress...
+          </div>
+        </div>
+      )}
+
       {/* Betting CTA (only when not settled) */}
-      {isBettingOpen && !isExpired && (
+      {isBettingOpen && !isExpired && !isContinuationInProgress && (
         <div className="absolute bottom-2 left-4 right-4 z-10">
           <Button
             onClick={() => setShowBetting(true)}

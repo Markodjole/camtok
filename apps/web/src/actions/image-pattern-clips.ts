@@ -105,7 +105,8 @@ async function buildMultiScenePrompt(
 - Textures: ${baseScene.textures}
 
 ===== YOUR #1 GOAL =====
-Translate the USER'S plot into the best possible video prompts. The user's creative intent is paramount. Your job is to REALIZE their vision, not restrict it.
+Translate the USER'S plot into video prompts with STRICT intent fidelity.
+Do exactly what user asked, no extra behavior.
 
 ===== WHAT KLING AI CAN DO =====
 Kling v3 Pro image-to-video is powerful. It CAN:
@@ -122,31 +123,45 @@ It CANNOT:
 ❌ Show readable on-screen text or speech bubbles
 ❌ Reliably create objects that are wildly inconsistent with the environment
 
-===== HOW TO HANDLE USER REQUESTS =====
+===== HOW TO HANDLE USER REQUESTS (STRICT) =====
 
 1. RESPECT THE USER'S PLOT. If the user says "finds snacks" and the image is a supermarket aisle — snacks ARE in a supermarket. Don't strip them out. The environment IMPLIES their presence even if individual snack packages aren't pixel-visible in the start frame.
 
 2. CAMERA DIRECTION: If the user specifies a camera angle ("from his view", "POV", "over the shoulder", "close-up on hands"), USE IT. Override the base image camera. Kling can change camera angle.
 
-3. DIALOGUE: If the user writes speech ("says X", quotes, etc.), capture it in "spoken_dialogue". The video won't show text, but the subtitle system will display it.
+3. DIALOGUE / VOICE IS ABSOLUTELY FORBIDDEN unless user explicitly asks:
+- ONLY include spoken_dialogue if the user explicitly includes speech (quoted words, "says", "asks", "whispers", etc.).
+- If user did not explicitly request speech, spoken_dialogue MUST be empty string.
+- NEVER write murmurs, "hmm", grunts, sighs, whispers, or ANY vocal sound into scene prompts.
+- NEVER use verbs like "murmurs", "says", "whispers", "mutters" in scene prompts unless user requested speech.
+- If you catch yourself writing dialogue/sound — DELETE IT.
 
 4. OBJECTS IN CONTEXT: A supermarket has products, shelves, prices. A bar has drinks. A road has cars. Don't add things that are impossible for the setting, but DO include things the setting naturally contains. The start image is a STARTING POINT, not a prison.
 
-5. MOVEMENT: If the user says the character moves, turns, walks — include that movement. Don't freeze them in place.
+5. MOVEMENT IS EXACT, NOT DECORATIVE:
+- Include ONLY movement verbs that the user explicitly stated or directly implied.
+- Do NOT invent body movements: no hand hovering, no reaching, no pointing, no waving, no head turns, no gestures, no fidgeting — unless the user explicitly described that action.
+- "deciding" or "contemplating" does NOT mean hands move. It means the character LOOKS, maybe shifts gaze. Nothing more.
+- If user says "looks at X" → eyes/gaze move. Hands stay still. Body stays still.
+- If user says "reaches for X" → hand extends. But ONLY if user said "reaches".
+- When in doubt: LESS movement, not more.
 
 ===== SCENE STRUCTURE =====
 - Scene 1 (2s): Establish the moment. Can include the user's described action beginning. Camera sets up.
 - Scene 2 (2s): The main beat of the user's plot. The action, the discovery, the choice being presented. This is the heart of what the user described.
-- Scene 3 (2s): Hold on the unresolved moment. Tension, decision pending. The viewer should want to bet on what happens next. Slow down, don't resolve.
+- Scene 3 (2s): FREEZE FRAME ENERGY. The character is STILL — no hand movement, no reaching, no gesturing, no speaking, no sound. Only the CAMERA may move (slow push-in, hold, subtle drift). Describe ONLY what the camera sees, NOT what the character does. The viewer should feel tension from stillness.
 - Each scene: 60 words max. Be specific and cinematic.
 
 ===== WHAT TO AVOID =====
 - Don't RESOLVE the outcome (if choosing between items, don't show the choice being made)
 - Don't add jerky/sudden unnatural motion
 - Don't contradict the physical environment (outdoor elements in indoor scene)
+- Don't add extra actions not requested by user (no hand hover, no reaching, no pointing, no gesturing)
+- Don't add dialogue, murmurs, "hmm", grunts, or ANY vocal sounds unless user explicitly requested speech
+- Don't describe the character's hands moving in Scene 3 — EVER
 
 ===== NEGATIVE PROMPT =====
-Include: "outcome revealed, result shown, action completed, decision finished, sudden jump, jerky motion, grabbing option, picking item"
+Include: "outcome revealed, result shown, action completed, decision finished, sudden jump, jerky motion, grabbing option, picking item, talking, speaking, murmuring, whispering, hand reaching, hand grabbing"
 Do NOT put items from the user's plot in the negative prompt. If the user asks for snacks, do NOT add "snacks" to negative prompt.
 
 ===== OUTPUT FORMAT =====
@@ -180,7 +195,7 @@ Return JSON:
       logLine("llm", "feasibility", { notes: parsed.feasibility_notes, enhanced_plot: parsed.enhanced_plot });
     }
     const hardNegative =
-      "outcome revealed, result shown, action completed, decision finished, sudden jump, jerky motion";
+      "outcome revealed, result shown, action completed, decision finished, sudden jump, jerky motion, talking, speaking, murmuring, whispering, hand reaching, hand grabbing";
     const spoken =
       typeof parsed.spoken_dialogue === "string" ? parsed.spoken_dialogue.trim().slice(0, 120) : "";
     return {
