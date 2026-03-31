@@ -15,6 +15,7 @@ import {
 import type { SelectionCandidate, MultiSelectionResult } from "@bettok/fair-selection";
 import { getContinuationContext } from "@/video-intelligence/pipeline";
 import type { ContinuationContext } from "@/video-intelligence/types";
+import { settleClipNode } from "@/actions/settlement";
 
 export async function startContinuation(clipNodeId: string) {
   const supabase = await createServiceClient();
@@ -103,6 +104,32 @@ export async function startContinuation(clipNodeId: string) {
   }
 
   const { continuation, selectionData } = result;
+  const selectedLabels = (selectionData?.selected as Array<Record<string, unknown>> | undefined)
+    ?.map((s) => String(s.label ?? ""))
+    .filter(Boolean) ?? [];
+  let availableOptionsCount: number | null = null;
+  let nextStepCandidatesCount: number | null = null;
+  try {
+    const contextForReason = await getContinuationContext(clipNodeId);
+    if (contextForReason) {
+      availableOptionsCount = contextForReason.availableOptions.length;
+      nextStepCandidatesCount = contextForReason.nextStepCandidates.length;
+    }
+  } catch {
+    // Ignore context fetch failures for reason text enrichment.
+  }
+  const decisionReasonText = [
+    availableOptionsCount !== null
+      ? `Video analysis found ${availableOptionsCount} visible options`
+      : null,
+    nextStepCandidatesCount !== null
+      ? `${nextStepCandidatesCount} likely next-step candidates`
+      : null,
+    selectedLabels.length > 0
+      ? `Fair selection chose: ${selectedLabels.join(" and ")}`
+      : null,
+    continuation.scene_explanation,
+  ].filter(Boolean).join(". ");
 
   const { data: continuationClip } = await supabase
     .from("clip_nodes")
@@ -118,7 +145,9 @@ export async function startContinuation(clipNodeId: string) {
       genre: clipNode.genre,
       tone: clipNode.tone,
       realism_level: clipNode.realism_level,
-      published_at: new Date().toISOString(),
+      // Keep continuation node as internal branch state; feed renders continuation
+      // through original clip's part2_video_storage_path instead of a new post card.
+      published_at: null,
       betting_deadline: new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString(),
     })
     .select()
@@ -145,10 +174,33 @@ export async function startContinuation(clipNodeId: string) {
     })
     .eq("id", job.id);
 
+  // Move parent clip into continuation_ready then settle it with the
+  // normal settlement pipeline (markets, bets, wallet payouts, notifications).
   await supabase
     .from("clip_nodes")
-    .update({ status: "continuation_ready" })
+    .update({
+      status: "continuation_ready",
+      part2_video_storage_path: result.videoStoragePath ?? null,
+      winning_outcome_text: continuation.accepted_predictions?.[0] ?? continuation.continuation_summary,
+      resolution_reason_text: decisionReasonText,
+      resolved_at: new Date().toISOString(),
+    })
     .eq("id", clipNodeId);
+
+  const settlementResult = await settleClipNode(clipNodeId);
+  if ("error" in settlementResult) {
+    console.error("[continuation] settleClipNode failed:", settlementResult.error);
+    // Fallback: don't leave it in continuation_ready forever
+    await supabase
+      .from("clip_nodes")
+      .update({
+        status: "settled",
+        winning_outcome_text: continuation.accepted_predictions?.[0] ?? continuation.continuation_summary,
+        resolution_reason_text: decisionReasonText,
+        resolved_at: new Date().toISOString(),
+      })
+      .eq("id", clipNodeId);
+  }
 
   await supabase
     .from("stories")
@@ -226,29 +278,119 @@ async function runContinuationPipeline(
     console.error("[continuation] Failed to get video analysis:", (err as Error)?.message);
   }
 
-  // Step 2: Fair selection of next-step candidates
+  // Step 2: Real-world plausibility scoring + wildcard generation
+  let plausibilityScores: Record<string, { score: number; reasoning: string }> = {};
+  let wildcards: Array<{ label: string; weight: number; reasoning: string }> = [];
+
+  if (ctx && isLlmAvailable) {
+    const allCandidateLabels = [
+      ...ctx.nextStepCandidates.map((c) => c.label),
+      ...ctx.availableOptions.map((o) => o.label),
+    ];
+    const uniqueLabels = [...new Set(allCandidateLabels)];
+
+    if (uniqueLabels.length > 0) {
+      try {
+        const plausResult = await scoreRealWorldPlausibility(
+          uniqueLabels,
+          ctx.mainStory,
+          ctx.characters,
+          ctx.environment,
+        );
+        plausibilityScores = plausResult.scores;
+        wildcards = plausResult.wildcards;
+
+        console.log("[continuation][plausibility] Real-world scores:");
+        for (const [label, data] of Object.entries(plausibilityScores)) {
+          console.log(`  ${label}: ${data.score.toFixed(2)} — ${data.reasoning}`);
+        }
+        if (wildcards.length > 0) {
+          console.log("[continuation][wildcards] Long-shot scenarios generated:");
+          for (const w of wildcards) {
+            console.log(`  ${w.label}: weight=${w.weight.toFixed(3)} — ${w.reasoning}`);
+          }
+        }
+      } catch (err) {
+        console.error("[continuation] Plausibility scoring failed, using video-only weights:", (err as Error)?.message);
+      }
+    }
+  }
+
+  // Step 3: Fair selection with blended weights (video confidence + real-world plausibility + wildcards)
+  const VIDEO_WEIGHT_FACTOR = 0.6;
+  const PLAUSIBILITY_WEIGHT_FACTOR = 0.4;
+
   let selection: MultiSelectionResult | null = null;
   let seed = "";
 
   if (ctx && ctx.nextStepCandidates.length > 0) {
     seed = `${clipNodeId}:job:${jobId}:ts:${Date.now()}`;
 
-    const candidates: SelectionCandidate[] = ctx.nextStepCandidates.map((c) => ({
-      id: c.candidateId,
-      label: c.label,
-      weight: c.probabilityScore,
-      metadata: { rationale: c.rationale, basedOn: c.basedOn },
-    }));
+    const candidates: SelectionCandidate[] = ctx.nextStepCandidates.map((c) => {
+      const videoW = c.probabilityScore;
+      const plausW = plausibilityScores[c.label]?.score ?? 0.5;
+      const blended = (videoW * VIDEO_WEIGHT_FACTOR) + (plausW * PLAUSIBILITY_WEIGHT_FACTOR);
+      return {
+        id: c.candidateId,
+        label: c.label,
+        weight: blended,
+        metadata: {
+          source: "video_candidate",
+          rationale: c.rationale,
+          basedOn: c.basedOn,
+          videoWeight: videoW,
+          plausibilityWeight: plausW,
+          plausibilityReasoning: plausibilityScores[c.label]?.reasoning ?? "no data",
+        },
+      };
+    });
 
-    // Also add available options as lower-weight action candidates
     for (const opt of ctx.availableOptions) {
       if (!candidates.some((c) => c.label.toLowerCase().includes(opt.label.toLowerCase()))) {
+        const videoW = (opt.confidence ?? 0.3) * 0.5;
+        const plausW = plausibilityScores[opt.label]?.score ?? 0.5;
+        const blended = (videoW * VIDEO_WEIGHT_FACTOR) + (plausW * PLAUSIBILITY_WEIGHT_FACTOR);
         candidates.push({
           id: opt.optionId,
           label: opt.label,
-          weight: (opt.confidence ?? 0.3) * 0.5,
+          weight: blended,
           conflictTags: opt.category === "path_choice" ? ["path_direction"] : undefined,
+          metadata: {
+            source: "available_option",
+            videoWeight: videoW,
+            plausibilityWeight: plausW,
+            plausibilityReasoning: plausibilityScores[opt.label]?.reasoning ?? "no data",
+          },
         });
+      }
+    }
+
+    // Inject wildcard long-shot scenarios
+    for (let i = 0; i < wildcards.length; i++) {
+      const w = wildcards[i];
+      if (!candidates.some((c) => c.label.toLowerCase() === w.label.toLowerCase())) {
+        candidates.push({
+          id: `wildcard_${i}`,
+          label: w.label,
+          weight: w.weight,
+          metadata: {
+            source: "wildcard",
+            videoWeight: 0,
+            plausibilityWeight: w.weight,
+            plausibilityReasoning: w.reasoning,
+          },
+        });
+      }
+    }
+
+    console.log("[continuation][blended-weights] All candidates (video + options + wildcards):");
+    for (const c of candidates) {
+      const meta = c.metadata as Record<string, unknown>;
+      const src = meta.source as string;
+      if (src === "wildcard") {
+        console.log(`  🎲 ${c.label}: final=${c.weight.toFixed(3)} [WILDCARD] — ${meta.plausibilityReasoning}`);
+      } else {
+        console.log(`  ${c.label}: final=${c.weight.toFixed(3)} (video=${Number(meta.videoWeight ?? 0).toFixed(2)} × ${VIDEO_WEIGHT_FACTOR} + plausibility=${Number(meta.plausibilityWeight ?? 0).toFixed(2)} × ${PLAUSIBILITY_WEIGHT_FACTOR}) [${src}]`);
       }
     }
 
@@ -257,7 +399,7 @@ async function runContinuationPipeline(
         seed,
         maxSelections: 2,
         respectConflicts: true,
-        minWeight: 0.05,
+        minWeight: 0.02,
       });
 
       console.log("[continuation] Fair selection completed:");
@@ -265,7 +407,10 @@ async function runContinuationPipeline(
         const singleResult = selectOne(candidates, { seed: `${seed}:verify:${s.id}` });
         console.log(buildVerificationSummary(singleResult, candidates));
       }
-      console.log("[continuation] Selected:", selection.selected.map((s) => s.label));
+      console.log("[continuation] Selected:", selection.selected.map((s) => {
+        const meta = s.metadata as Record<string, unknown> | undefined;
+        return `${s.label} [${meta?.source ?? "?"}]`;
+      }));
       if (selection.excludedByConflict.length > 0) {
         console.log("[continuation] Excluded by conflict:", selection.excludedByConflict.map((e) => e.label));
       }
@@ -274,6 +419,42 @@ async function runContinuationPipeline(
     }
   }
 
+  // Log full resolution data
+  console.log(
+    `[continuation][resolve-dump] ${JSON.stringify({
+      clipNodeId,
+      jobId,
+      hasVideoAnalysis: !!ctx,
+      mainStory: ctx?.mainStory ?? null,
+      currentState: ctx?.currentStateSummary ?? null,
+      availableOptions: ctx?.availableOptions?.map((o) => ({ label: o.label, category: o.category, confidence: o.confidence })) ?? [],
+      nextStepCandidates: ctx?.nextStepCandidates?.map((n) => ({ label: n.label, probability: n.probabilityScore, rationale: n.rationale })) ?? [],
+      plausibilityScores: Object.fromEntries(
+        Object.entries(plausibilityScores).map(([k, v]) => [k, { score: v.score, reasoning: v.reasoning }]),
+      ),
+      weightFormula: `final = video × ${VIDEO_WEIGHT_FACTOR} + plausibility × ${PLAUSIBILITY_WEIGHT_FACTOR}`,
+      fairSelection: {
+        seed,
+        selectedActions: selection?.selected.map((s) => {
+          const meta = s.metadata as Record<string, unknown> | undefined;
+          return {
+            id: s.id,
+            label: s.label,
+            finalWeight: s.weight,
+            videoWeight: meta?.videoWeight,
+            plausibilityWeight: meta?.plausibilityWeight,
+            plausibilityReasoning: meta?.plausibilityReasoning,
+          };
+        }) ?? [],
+        excludedByConflict: selection?.excludedByConflict.map((e) => ({ id: e.id, label: e.label })) ?? [],
+        proofCount: selection?.proofs.length ?? 0,
+      },
+      wildcards: wildcards.map((w) => ({ label: w.label, weight: w.weight, reasoning: w.reasoning })),
+      totalCandidates: (ctx?.nextStepCandidates.length ?? 0) + (ctx?.availableOptions.length ?? 0) + wildcards.length,
+      predictions,
+    }, null, 2)}`,
+  );
+
   // Step 3: LLM generates the continuation narrative + video prompt
   const continuation = await generateContinuationNarrative(
     ctx,
@@ -281,6 +462,18 @@ async function runContinuationPipeline(
     String(clipNode.scene_summary ?? ""),
     predictions,
     isLlmAvailable,
+  );
+
+  console.log(
+    `[continuation][narrative-result] ${JSON.stringify({
+      continuation_summary: continuation.continuation_summary,
+      accepted_predictions: continuation.accepted_predictions,
+      rejected_predictions: continuation.rejected_predictions,
+      partially_matched: continuation.partially_matched,
+      scene_explanation: continuation.scene_explanation,
+      video_prompt: continuation.video_prompt?.slice(0, 300),
+      negative_prompt: continuation.negative_prompt,
+    }, null, 2)}`,
   );
 
   // Step 4: Generate the continuation video
@@ -312,6 +505,125 @@ async function runContinuationPipeline(
   };
 }
 
+// ─── Real-world plausibility scoring ─────────────────────────────────────────
+
+interface PlausibilityResult {
+  scores: Record<string, { score: number; reasoning: string }>;
+  wildcards: Array<{ label: string; weight: number; reasoning: string }>;
+}
+
+async function scoreRealWorldPlausibility(
+  candidateLabels: string[],
+  mainStory: string,
+  characters: ContinuationContext["characters"],
+  environment: ContinuationContext["environment"],
+): Promise<PlausibilityResult> {
+  const characterDesc = characters.map((c) => {
+    const parts = [c.label];
+    if (c.ageGroup && c.ageGroup !== "unknown") parts.push(`age group: ${c.ageGroup}`);
+    if (c.dominantEmotion) parts.push(c.dominantEmotion);
+    if (c.clothingTop) parts.push(c.clothingTop);
+    return parts.join(", ");
+  }).join("; ");
+
+  const envDesc = [
+    environment.locationType,
+    ...(environment.settingTags ?? []),
+    environment.economicContext,
+  ].filter(Boolean).join(", ");
+
+  const systemPrompt = `You are a real-world statistics and behavioral logic analyst. You have two jobs:
+
+JOB 1 — PLAUSIBILITY SCORING:
+Given a scene with specific characters and environment, score how likely each candidate action is IN THE REAL WORLD — not based on what's visible in the video, but based on demographics, behavioral statistics, common sense, and cultural norms.
+
+For each candidate, return:
+- score: 0.0–1.0 (how likely this action is in real life given the people and context)
+- reasoning: one sentence explaining why (cite demographics, statistics, or common sense)
+
+Examples:
+- "Young children rarely choose diet drinks; they prefer sweet/sugary options (pediatric dietary studies)" → score: 0.15
+- "Coca-Cola is the #1 most chosen soda worldwide, especially among children" → score: 0.85
+
+JOB 2 — WILDCARD SCENARIOS:
+Generate 3–5 additional unlikely-but-possible scenarios that are NOT in the candidate list.
+These are long-shot events that COULD realistically happen in this scene but nobody would expect.
+
+Each wildcard must have:
+- label: short action description (same format as existing candidates)
+- weight: 0.02–0.12 (very low — these are unlikely events)
+- reasoning: why this could happen despite being unlikely
+
+Wildcard categories to consider:
+- DISRUPTION: something unexpected interrupts (machine jams, power flickers, someone bumps into character)
+- CHANGE OF MIND: character hesitates, walks away, picks something else entirely
+- SOCIAL: another person enters the scene, speaks to character, takes the item first
+- ENVIRONMENTAL: weather change, noise distraction, something falls
+- EMOTIONAL: character gets distracted, scared, excited by something off-screen
+
+Rules:
+- Wildcards must be physically plausible for the scene
+- No fantasy/supernatural events
+- Each should feel like "that could happen 1 in 50 times"
+- Don't duplicate existing candidates
+
+Return JSON:
+{
+  "scores": [ { "label": string, "score": number, "reasoning": string } ],
+  "wildcards": [ { "label": string, "weight": number, "reasoning": string } ]
+}`;
+
+  const userMessage = `Scene: ${mainStory}
+Characters: ${characterDesc}
+Environment: ${envDesc}
+
+Existing candidates to score for plausibility:
+${candidateLabels.map((l, i) => `${i + 1}. "${l}"`).join("\n")}
+
+Now score each candidate AND generate 3-5 wildcard scenarios.`;
+
+  const { generateAndValidate: gen } = await import("@bettok/story-engine");
+  const { z } = await import("zod");
+
+  const schema = z.object({
+    scores: z.array(z.object({
+      label: z.string(),
+      score: z.number().min(0).max(1),
+      reasoning: z.string(),
+    })),
+    wildcards: z.array(z.object({
+      label: z.string(),
+      weight: z.number().min(0.01).max(0.15),
+      reasoning: z.string(),
+    })),
+  });
+
+  const { data } = await gen(
+    [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userMessage },
+    ],
+    schema,
+    "PlausibilityScoring",
+  );
+
+  const scores: Record<string, { score: number; reasoning: string }> = {};
+  for (const item of data.scores) {
+    const matchedLabel = candidateLabels.find(
+      (l) => l.toLowerCase() === item.label.toLowerCase(),
+    ) ?? item.label;
+    scores[matchedLabel] = { score: item.score, reasoning: item.reasoning };
+  }
+
+  const wildcards = data.wildcards.map((w) => ({
+    label: w.label,
+    weight: Math.min(w.weight, 0.12),
+    reasoning: w.reasoning,
+  }));
+
+  return { scores, wildcards };
+}
+
 // ─── LLM narrative generation ────────────────────────────────────────────────
 
 async function generateContinuationNarrative(
@@ -336,11 +648,17 @@ async function generateContinuationNarrative(
     return mockGenerateContinuation(sceneSummaryFallback, predictions) as ContinuationResult;
   }
 
-  const selectedActions = selection?.selected.map((s) => ({
-    action: s.label,
-    weight: s.weight,
-    rationale: (s.metadata as Record<string, unknown>)?.rationale ?? "",
-  })) ?? [];
+  const selectedActions = selection?.selected.map((s) => {
+    const meta = s.metadata as Record<string, unknown> | undefined;
+    return {
+      action: s.label,
+      finalWeight: s.weight,
+      videoWeight: meta?.videoWeight ?? null,
+      plausibilityWeight: meta?.plausibilityWeight ?? null,
+      plausibilityReasoning: meta?.plausibilityReasoning ?? null,
+      rationale: meta?.rationale ?? "",
+    };
+  }) ?? [];
 
   const contextPayload = ctx ? {
     main_story: ctx.mainStory,
@@ -403,12 +721,16 @@ ADDITIONAL RULES FOR EVIDENCE-BASED CONTINUATION:
 You have structured video analysis data below. USE IT as your primary source of truth.
 
 FAIR SELECTION:
-The "selected_next_actions" were chosen by a provably fair algorithm (SHA-256 weighted selection).
-You MUST incorporate these selected actions into the continuation. They are the foundation of what happens next.
-You may embellish, add detail, and weave in predictions — but the core action must match what was selected.
+The "selected_next_actions" were chosen by a provably fair algorithm (SHA-256 weighted selection) with blended weights from video analysis AND real-world plausibility scoring.
+You MUST incorporate ALL selected actions into the continuation — every single one, not just the first.
+If 2 actions were selected, the scene must show BOTH happening (e.g. character does action 1, then action 2, or simultaneously).
+You may embellish, add detail, and weave in predictions — but every selected action must visibly occur.
+
+The weights include a "plausibilityReasoning" field explaining the real-world logic behind each choice.
+You should reference this in scene_explanation so users understand the decision considered both video evidence and real-world logic.
 
 Priority order:
-1. Selected actions from fair selection (MANDATORY — these define what happens)
+1. ALL selected actions from fair selection (MANDATORY — these define what happens, ALL must appear)
 2. What was visibly happening in the clip (observed facts)
 3. What options are visibly available (from video analysis)
 4. What the character has shown preference for (from evidence, not guessing)
@@ -420,10 +742,32 @@ CONTINUITY IS CRITICAL:
 - Environment must not change
 - Economic consistency: a person in a $1000 car does not suddenly have luxury items
 
-VIDEO PROMPT:
-In addition to the standard fields, you MUST also return:
-- "video_prompt": a detailed Kling AI video generation prompt describing exactly what should happen visually in the next 5-6 second clip. Include character appearance, action, environment, camera angle. Be specific and cinematic.
-- "negative_prompt": what to avoid in the video (e.g. "blurry, low quality, text overlay, watermark")
+VIDEO PROMPT — CRITICAL RULES FOR KLING AI:
+You MUST return "video_prompt" and "negative_prompt" fields.
+
+The video_prompt is sent directly to Kling AI image-to-video model. Follow these rules strictly:
+
+1. ONLY mention the target object/brand that the character interacts with. NEVER mention other brands or products in the prompt — the model gets confused and may show the wrong item.
+   BAD: "boy stands in front of a Coca-Cola vending machine and picks up Diet Coke" (model sees "Coca-Cola" and "Diet Coke" and gets confused)
+   GOOD: "boy reaches toward the vending machine, his hand grabs a Diet Coke can, he pulls it out and smiles"
+
+2. Describe the PHYSICAL ACTION as a sequence of body movements:
+   BAD: "picks up a can"
+   GOOD: "extends his right hand, fingers wrap around the silver Diet Coke can, lifts it from the shelf"
+
+3. Structure the prompt as: [character appearance] + [specific physical action sequence] + [camera angle] + [lighting/mood]
+   Example: "A young boy with curly brown hair in a yellow shirt reaches toward a vending machine shelf. His hand grabs a red Coca-Cola can and pulls it toward his chest. He looks at it with wide excited eyes. Medium close-up shot, warm natural lighting."
+
+4. Put the MOST IMPORTANT action verb at the beginning of a sentence, not buried in a clause.
+
+5. negative_prompt must include all competing brands/products that should NOT appear in the action:
+   If character picks Diet Coke, negative_prompt should include other brands: "Sprite can in hand, Coca-Cola can in hand, wrong product, multiple cans"
+
+6. Enforce causal action consistency in ALL scenes:
+   - If an action has prerequisites, show them first (cause -> effect order).
+   - The selected object/action target must stay consistent through the sequence.
+   - Do not switch target mid-sequence (no "press Sprite button, get Diet Coke" type mismatches).
+   Example (vending): press Diet Coke button -> Diet Coke can dispenses -> pick up Diet Coke can.
 
 Return JSON:
 {
@@ -491,14 +835,14 @@ async function generateContinuationVideo(
     throw new Error("Cannot generate continuation video without a start image (last frame extraction failed)");
   }
 
-  // Build the multi-scene prompt if we have continuity anchors
+  // Prepend character appearance anchors only (skip environment — it contains brand
+  // names that confuse the model when the action targets a specific product).
   let prompt = videoPrompt;
   if (ctx?.continuityAnchors) {
     const anchors = ctx.continuityAnchors;
     const anchorPrefix = [
       ...anchors.characterAppearance.slice(0, 2),
       ...anchors.wardrobe.slice(0, 2),
-      ...anchors.environment.slice(0, 2),
       ...anchors.cameraStyle.slice(0, 1),
     ].filter(Boolean).join(". ");
     if (anchorPrefix) {

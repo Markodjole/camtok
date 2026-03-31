@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { FeedClip } from "@/actions/clips";
 import { archiveClip, setResolveVideoPath } from "@/actions/clips";
+import { startContinuation } from "@/actions/continuation";
 import { VideoPlayer } from "@/components/clip/video-player";
 import { BettingBottomSheet } from "@/components/betting/betting-bottom-sheet";
 import { LoopBetOverlay } from "@/components/feed/loop-bet-overlay";
@@ -29,6 +30,7 @@ import {
   Volume2,
   VolumeX,
   CheckCircle2,
+  Wand2,
 } from "lucide-react";
 
 interface VideoCardProps {
@@ -44,6 +46,7 @@ export function VideoCard({ clip, isActive }: VideoCardProps) {
   const [showDeleteMenu, setShowDeleteMenu] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [resolving, setResolving] = useState(false);
+  const [aiResolving, setAiResolving] = useState(false);
   const resolveInputRef = useRef<HTMLInputElement>(null);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const { profile } = useUserStore();
@@ -147,6 +150,32 @@ export function VideoCard({ clip, isActive }: VideoCardProps) {
     } else {
       toast({ title: "Post deleted", variant: "success" });
       router.refresh();
+    }
+  }
+
+  async function handleAiResolve() {
+    setShowDeleteMenu(false);
+    setAiResolving(true);
+    try {
+      const result = await startContinuation(clip.id);
+      if ("error" in result) {
+        toast({
+          title: "AI Resolve failed",
+          description: String(result.error),
+          variant: "destructive",
+        });
+      } else {
+        toast({ title: "AI Resolve started — check terminal logs", variant: "success" });
+        router.refresh();
+      }
+    } catch (err) {
+      toast({
+        title: "AI Resolve error",
+        description: (err as Error)?.message ?? "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setAiResolving(false);
     }
   }
 
@@ -312,6 +341,15 @@ export function VideoCard({ clip, isActive }: VideoCardProps) {
                 >
                   <CheckCircle2 className="h-4 w-4" />
                   {resolving ? "Uploading..." : "Resolve"}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleAiResolve}
+                  disabled={aiResolving || resolving}
+                  className="flex w-full items-center gap-2 px-3 py-2 text-sm text-emerald-400 hover:bg-emerald-400/10 touch-manipulation disabled:opacity-50"
+                >
+                  <Wand2 className="h-4 w-4" />
+                  {aiResolving ? "Resolving..." : "AI Resolve"}
                 </button>
                 <button
                   type="button"

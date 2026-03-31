@@ -29,6 +29,8 @@ export function VideoPlayer({
 }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const controlsHideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pausedTapTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastPausedTapAtRef = useRef(0);
   const loopEndCalledRef = useRef(false);
   const prevTimeRef = useRef(0);
   const browserForcedMuteRef = useRef(false);
@@ -36,6 +38,7 @@ export function VideoPlayer({
   const [progress, setProgress] = useState(0);
   const [showControls, setShowControls] = useState(false);
   const [isExtremeLandscape, setIsExtremeLandscape] = useState(false);
+  const [isZoomed, setIsZoomed] = useState(false);
   const isMuted = useFeedStore((s) => s.isMuted);
   const toggleMute = useFeedStore((s) => s.toggleMute);
 
@@ -176,9 +179,43 @@ export function VideoPlayer({
     }, 1000);
   }, []);
 
+  const handleContainerTap = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    // While paused, delay single-tap action briefly so a second quick tap can toggle zoom.
+    if (video.paused) {
+      const now = Date.now();
+      const withinDoubleTapWindow = now - lastPausedTapAtRef.current < 280;
+      lastPausedTapAtRef.current = now;
+
+      if (withinDoubleTapWindow) {
+        if (pausedTapTimeoutRef.current) {
+          clearTimeout(pausedTapTimeoutRef.current);
+          pausedTapTimeoutRef.current = null;
+        }
+        setIsZoomed((z) => !z);
+        showControlsBriefly();
+        return;
+      }
+
+      if (pausedTapTimeoutRef.current) clearTimeout(pausedTapTimeoutRef.current);
+      pausedTapTimeoutRef.current = setTimeout(() => {
+        handleTap();
+        showControlsBriefly();
+        pausedTapTimeoutRef.current = null;
+      }, 280);
+      return;
+    }
+
+    handleTap();
+    showControlsBriefly();
+  }, [handleTap, showControlsBriefly]);
+
   useEffect(() => {
     return () => {
       if (controlsHideTimeoutRef.current) clearTimeout(controlsHideTimeoutRef.current);
+      if (pausedTapTimeoutRef.current) clearTimeout(pausedTapTimeoutRef.current);
     };
   }, []);
 
@@ -189,10 +226,11 @@ export function VideoPlayer({
     return `${supabaseUrl}/storage/v1/object/public/media/${path.replace(/^\//, "")}`;
   };
   const fullSrc = toStorageUrl(src);
-  const demoSrc =
-    fullSrc ||
-    "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4";
   const posterUrl = toStorageUrl(poster) ?? undefined;
+
+  if (!fullSrc) {
+    return <div className={cn("relative h-full w-full bg-black", className)} />;
+  }
 
   const handleLoadedMetadata = useCallback(() => {
     const video = videoRef.current;
@@ -204,14 +242,11 @@ export function VideoPlayer({
   return (
     <div
       className={cn("relative h-full w-full bg-black overflow-hidden", className)}
-      onClick={() => {
-        handleTap();
-        showControlsBriefly();
-      }}
+      onClick={handleContainerTap}
     >
       <video
         ref={videoRef}
-        src={demoSrc}
+        src={fullSrc}
         poster={posterUrl}
         loop
         playsInline
@@ -220,8 +255,10 @@ export function VideoPlayer({
         onTimeUpdate={handleTimeUpdate}
         onLoadedMetadata={handleLoadedMetadata}
         className={cn(
-          "h-full w-full object-contain",
-          isExtremeLandscape && "scale-[1.25] origin-center"
+          "h-full w-full object-contain transition-transform duration-200 ease-out",
+          isZoomed
+            ? (isExtremeLandscape ? "scale-[2.1] origin-center" : "scale-[1.8] origin-center")
+            : (isExtremeLandscape ? "scale-[1.25] origin-center" : null)
         )}
       />
 

@@ -52,7 +52,26 @@ export async function settleClipNode(clipNodeId: string) {
   if (srError) return { error: "Failed to create settlement result" };
 
   const outcomeParts: string[] = [];
-  let resolutionReason = continuationJob.continuation_summary || "Settlement complete";
+  const selectedCandidates = Array.isArray(continuationJob.selected_candidates)
+    ? continuationJob.selected_candidates as Array<Record<string, unknown>>
+    : [];
+  const selectedSummary = selectedCandidates
+    .slice(0, 2)
+    .map((c) => {
+      const label = String(c.label ?? "unknown action");
+      const vw = typeof c.videoWeight === "number" ? c.videoWeight.toFixed(2) : null;
+      const pw = typeof c.plausibilityWeight === "number" ? c.plausibilityWeight.toFixed(2) : null;
+      const rationale = typeof c.plausibilityReasoning === "string" ? c.plausibilityReasoning : "";
+      const weightBits = [vw ? `video=${vw}` : "", pw ? `logic=${pw}` : ""].filter(Boolean).join(", ");
+      return `${label}${weightBits ? ` (${weightBits})` : ""}${rationale ? ` — ${rationale}` : ""}`;
+    })
+    .join(" | ");
+  let resolutionReason = continuationJob.scene_explanation ||
+    continuationJob.continuation_summary ||
+    "Settlement complete";
+  if (selectedSummary) {
+    resolutionReason = `Decision basis: ${selectedSummary}. ${resolutionReason}`;
+  }
   /** Per-user net profit (positive) or loss (negative) across all bets on this clip */
   const userNetPayout = new Map<string, number>();
 
@@ -95,7 +114,9 @@ export async function settleClipNode(clipNodeId: string) {
     const canonical = (market as Record<string, string>).canonical_text || "Prediction";
     const winnerLabel = settlement.winnerSide === "yes" ? "YES" : "NO";
     outcomeParts.push(`${canonical}: ${winnerLabel}`);
-    if (outcomeParts.length === 1) resolutionReason = score.explanation_short || resolutionReason;
+    if (outcomeParts.length === 1 && score.explanation_short) {
+      resolutionReason = `${resolutionReason} Market match: ${score.explanation_short}`;
+    }
 
     const { data: bets } = await supabase
       .from("bets")
