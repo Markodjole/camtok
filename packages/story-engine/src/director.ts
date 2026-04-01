@@ -9,6 +9,7 @@ export const continuationOutputSchema = z.object({
   scene_explanation: z.string(),
   video_prompt: z.string().optional(),
   negative_prompt: z.string().optional(),
+  video_duration_seconds: z.number().min(2).max(10).optional(),
 });
 
 export type ContinuationOutput = z.infer<typeof continuationOutputSchema>;

@@ -2,7 +2,7 @@
 
 import { createServiceClient } from "@/lib/supabase/server";
 import { calculateSettlement, calculateBettorPayout } from "@bettok/betting";
-import { mockScoreSettlement } from "@bettok/story-engine";
+import { scoreSettlementWithLlm, mockScoreSettlement } from "@bettok/story-engine";
 import { SETTLEMENT_ALGORITHM_VERSION } from "@bettok/core";
 
 export async function settleClipNode(clipNodeId: string) {
@@ -75,10 +75,18 @@ export async function settleClipNode(clipNodeId: string) {
   /** Per-user net profit (positive) or loss (negative) across all bets on this clip */
   const userNetPayout = new Map<string, number>();
 
+  const selectedCandidatesForScoring = selectedCandidates.map((c) => ({
+    label: String(c.label ?? "unknown"),
+    weight: typeof c.weight === "number" ? c.weight : undefined,
+  }));
+
   for (const market of markets) {
-    const score = mockScoreSettlement(
+    const score = await scoreSettlementWithLlm(
       market.market_key,
-      continuationJob.continuation_summary || ""
+      (market as Record<string, string>).canonical_text || market.market_key,
+      continuationJob.continuation_summary || "",
+      selectedCandidatesForScoring,
+      continuationJob.scene_explanation || null,
     );
 
     const yesSide = market.market_sides.find(
@@ -224,8 +232,13 @@ export async function settleClipNode(clipNodeId: string) {
       .eq("id", market.id);
   }
 
-  const winningOutcomeText = outcomeParts.length > 0 ? outcomeParts.join(" · ") : "Settled";
+  const marketBreakdown = outcomeParts.length > 0 ? outcomeParts.join(" · ") : "";
+  const winningOutcomeText = continuationJob.continuation_summary || marketBreakdown || "Settled";
   const now = new Date().toISOString();
+
+  if (marketBreakdown) {
+    resolutionReason = `${resolutionReason}\n\nMarket results: ${marketBreakdown}`;
+  }
 
   await supabase
     .from("clip_nodes")

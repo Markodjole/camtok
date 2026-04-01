@@ -62,16 +62,20 @@ Analyze the provided video frames and return a single JSON object that merges ob
    - text: what they appear to be saying (inferred from context)
    - confidence: 0-1
 
-7. "availableOptions" — CRITICAL: If the scene presents CHOICES to a character (products on shelves, buttons on a machine, paths to walk, doors to open, items to pick), list EACH as an option:
+7. "availableOptions" — CRITICAL: What can the character(s) realistically DO next, given the CURRENT STATE of the scene:
    - optionId: "opt_1", "opt_2", etc.
    - category: object_choice | action_choice | path_choice | reaction_choice
-   - label: specific name of the option (e.g. "Barilla pasta", "Pepsi can", "left aisle")
+   - label: natural description of the action. MUST reflect the CURRENT STATE of objects.
+     - If an item state is "held" → options are about what to do WITH it: "put baguette in cart", "return baguette to shelf", "hand baguette to companion", "examine baguette label"
+     - If an item state is "on shelf" → options include: "reach for olive oil", "grab the pasta sauce"
+     - If character is at a machine → "press Coca-Cola button", "insert another coin"
+     - NEVER use "pick up X" if X is already being held. That makes no sense.
    - objectId: link to the object if applicable
    - priceIfVisible: price if readable
    - source: visible (physically on screen) | inferred_from_context (the setting implies it)
    - confidence: 0-1
 
-   You MUST generate at least 3 options if the scene shows a store, vending machine, menu, selection screen, or any multi-choice scenario. Use the individual products/items you identified in objects. If exact product names are unreadable, describe them by appearance ("red bag top shelf", "green bottle left side").
+   You MUST generate at least 3 options. Use NATURAL language — describe what a real person would say they're doing, not robotic "pick up" patterns. Consider the full context: what are they holding, what's nearby, who are they with, what's the logical next step?
 
 ═══ RULES ═══
 - Do NOT infer race, ethnicity, religion, health status, sexuality, or politics.
@@ -109,16 +113,18 @@ YOUR #1 JOB: produce useful "availableOptions" and "nextStepCandidates". These a
 3. "availableOptions" — MANDATORY, NEVER empty. What choices exist RIGHT NOW or NEXT for the character(s):
    - optionId: "opt_1", etc.
    - category: object_choice | action_choice | path_choice | reaction_choice
-   - label: specific name (e.g. "pick up Doritos bag", "grab the Pepsi", "walk to checkout", "talk to cashier")
+   - label: natural language description of the action — what would a REAL PERSON say they're doing?
    - source: visible | inferred_from_context
    - confidence: 0-1
 
    HOW TO GENERATE OPTIONS:
-   a) If the observations include "availableOptions" from the frame extraction, CARRY THEM FORWARD and refine them with temporal context (e.g. what the character is walking toward).
-   b) If the observations show a store/shop/vending machine, the objects ARE options. Convert each visible product/item into an option like "pick up [item]" or "choose [item]".
-   c) If the character is in motion, consider: continue_forward, turn_left, turn_right, stop, interact_with_nearest_object.
-   d) ALWAYS include at least one action_choice (what the character could DO next) even if no object_choices are visible.
-   e) ALWAYS include at least 3 options. 5+ is preferred.
+   a) FIRST, check the STATE of each object. If something is "held" by a character, options are what to DO with it (put in cart, put back, hand to someone, examine closer), NOT "pick up" — they already have it.
+   b) If items are "on shelf" / "whole" / "untouched", options can include reaching for them.
+   c) If the character is in motion, consider: continue walking, stop to look, turn toward something, go to checkout, leave the aisle.
+   d) If multiple characters are present, consider SOCIAL options: discuss with each other, show item to companion, ask companion's opinion.
+   e) ALWAYS include at least one action_choice (what the character could DO next) even if no object_choices are visible.
+   f) ALWAYS include at least 3 options. 5+ is preferred.
+   g) Use VARIED, NATURAL verbs — not just "pick up". Real people: "toss it in the cart", "put it back", "compare prices", "ask about", "walk toward", "hand it over", "examine the label", "decide on", "add to basket".
 
 4. "characterIntents" — per character:
    - characterId
@@ -150,18 +156,23 @@ YOUR #1 JOB: produce useful "availableOptions" and "nextStepCandidates". These a
 
 10. "nextStepCandidates" — MANDATORY, NEVER empty. The 3-6 most logical next actions/events:
     - candidateId: "next_1", etc.
-    - label: the action (be specific: "character picks up the red bag of chips", not "character does something")
+    - label: natural description of what happens next. MUST match the current scene state.
+      Good examples: "woman puts the baguette in the cart", "man hands the pineapple to the woman", "they walk toward checkout together", "woman returns the product to the shelf"
+      Bad examples: "character picks up X" when X is already held, "character does something" (too vague)
     - rationale: why it's logical given the observations
     - probabilityScore: 0-1
     - basedOn: array of evidence (character intents, gaze direction, proximity to objects, story beats)
 
     HOW TO GENERATE CANDIDATES:
     a) Look at characterIntents — what is the character trying to do? The next step to achieve that intent is a candidate.
-    b) Look at gaze direction — what the character is looking at is likely what they'll interact with next.
-    c) Look at proximity — the nearest reachable objects/exits/people are candidates.
-    d) Look at story beats — if the last beat is "anticipation" or "choice", the next beat is the resolution.
-    e) Consider economic context: if environment says "budget store" and prices are low, the character can afford items there. If a character drives a cheap car, they won't buy luxury items.
-    f) ALWAYS include at least 3 candidates. Rank by probability.
+    b) Look at the CURRENT STATE of items — if something is held, the next step involves what they DO with it (keep, put down, use, hand over, place in cart, etc.), not acquiring it again.
+    c) Look at gaze direction — what the character is looking at is likely what they'll interact with next.
+    d) Look at proximity — the nearest reachable objects/exits/people are candidates.
+    e) Look at story beats — if the last beat is "anticipation" or "choice", the next beat is the resolution.
+    f) Consider social dynamics: if multiple characters are present, include at least one interaction between them.
+    g) Consider economic context: budget store → affordable choices; luxury setting → premium choices.
+    h) Use NATURAL language — how would a viewer describe what happens next? Not robotic template phrases.
+    i) ALWAYS include at least 3 candidates. Rank by probability.
 
 11. "spokenDialogue" — ONE short subtitle line if characters appear to be speaking. null if no speech implied.
 
@@ -189,9 +200,10 @@ export function buildTemporalUserMessage(observedJson: string): string {
   return `Here are the per-frame observations from a short video clip:\n\n${observedJson}\n\nAnalyze the temporal structure, derive intents, options, and continuation context.
 
 CRITICAL REMINDERS:
-- "availableOptions" MUST NOT be empty. Check the observations for objects, products, paths, or any selectable items. Convert them into options.
-- "nextStepCandidates" MUST NOT be empty. Use character intents + gaze + proximity + story beats to generate at least 3 candidates.
-- If the scene is a store/shop, each visible product = one option.
+- "availableOptions" MUST NOT be empty. Think about what the character can realistically DO given the current state of the scene and objects.
+- "nextStepCandidates" MUST NOT be empty. Use character intents + gaze + proximity + story beats + current object states to generate at least 3 candidates.
+- PAY ATTENTION to object states: if an item is "held", options should be about what to DO with it (put in cart, put back, examine, etc.), NOT about acquiring it again.
+- Use natural, conversational language for labels — imagine how a viewer would describe the action to a friend.
 
 Return JSON only.`;
 }

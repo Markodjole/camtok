@@ -28,6 +28,7 @@ export type { ContinuationOutput } from "./director";
 
 export {
   mockScoreSettlement,
+  scoreSettlementWithLlm,
   settlementScoreSchema,
   SETTLEMENT_SYSTEM_PROMPT,
 } from "./settlement-engine";

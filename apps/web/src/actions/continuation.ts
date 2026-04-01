@@ -360,6 +360,28 @@ async function runContinuationPipeline(
   if (ctx && ctx.nextStepCandidates.length > 0) {
     seed = `${clipNodeId}:job:${jobId}:ts:${Date.now()}`;
 
+    // Build a lookup from availableOptions so we can assign conflict tags to candidates.
+    // object_choice items conflict with each other (can only pick ONE item),
+    // path_choice items conflict with each other (can only go ONE direction).
+    const optionCategoryByLabel = new Map<string, string>();
+    for (const opt of ctx.availableOptions) {
+      optionCategoryByLabel.set(opt.label.toLowerCase(), opt.category);
+    }
+
+    function getConflictTags(label: string, category?: string): string[] | undefined {
+      const cat = category ?? optionCategoryByLabel.get(label.toLowerCase());
+      if (!cat) {
+        const lbl = label.toLowerCase();
+        for (const [optLabel, optCat] of optionCategoryByLabel) {
+          if (lbl.includes(optLabel) || optLabel.includes(lbl)) return getConflictTags(optLabel, optCat);
+        }
+        return undefined;
+      }
+      if (cat === "object_choice") return ["object_pick"];
+      if (cat === "path_choice") return ["path_direction"];
+      return undefined;
+    }
+
     const candidates: SelectionCandidate[] = ctx.nextStepCandidates.map((c) => {
       const videoW = c.probabilityScore;
       const plausW = plausibilityScores[c.label]?.score ?? 0.5;
@@ -368,6 +390,7 @@ async function runContinuationPipeline(
         id: c.candidateId,
         label: c.label,
         weight: blended,
+        conflictTags: getConflictTags(c.label),
         metadata: {
           source: "video_candidate",
           rationale: c.rationale,
@@ -388,7 +411,7 @@ async function runContinuationPipeline(
           id: opt.optionId,
           label: opt.label,
           weight: blended,
-          conflictTags: opt.category === "path_choice" ? ["path_direction"] : undefined,
+          conflictTags: getConflictTags(opt.label, opt.category),
           metadata: {
             source: "available_option",
             videoWeight: videoW,
@@ -396,6 +419,50 @@ async function runContinuationPipeline(
             plausibilityReasoning: plausibilityScores[opt.label]?.reasoning ?? "no data",
           },
         });
+      }
+    }
+
+    // Inject scored user predictions as low-weight candidates.
+    // Users can type any prediction — the LLM rates each one for plausibility
+    // and story interest, then they enter the fair selection pool.
+    if (predictions.length > 0 && isLlmAvailable) {
+      try {
+        const novelPredictions = predictions.filter(
+          (p) => !candidates.some((c) => c.label.toLowerCase() === p.toLowerCase()),
+        );
+        if (novelPredictions.length > 0) {
+          const scored = await scoreUserPredictions(
+            novelPredictions,
+            ctx.mainStory,
+            ctx.characters,
+            ctx.environment,
+            ctx.availableOptions.map((o) => o.label),
+            ctx.nextStepCandidates.map((c) => c.label),
+          );
+          console.log("[continuation][user-predictions] Scored user predictions:");
+          for (const sp of scored) {
+            console.log(`  👤 "${sp.label}": weight=${sp.weight.toFixed(3)} — ${sp.reasoning}`);
+          }
+          for (let i = 0; i < scored.length; i++) {
+            const sp = scored[i];
+            if (sp.weight >= 0.01 && !candidates.some((c) => c.label.toLowerCase() === sp.label.toLowerCase())) {
+              candidates.push({
+                id: `user_pred_${i}`,
+                label: sp.label,
+                weight: sp.weight,
+                conflictTags: getConflictTags(sp.label),
+                metadata: {
+                  source: "user_prediction",
+                  videoWeight: 0,
+                  plausibilityWeight: sp.weight,
+                  plausibilityReasoning: sp.reasoning,
+                },
+              });
+            }
+          }
+        }
+      } catch (err) {
+        console.error("[continuation] User prediction scoring failed:", (err as Error)?.message);
       }
     }
 
@@ -424,7 +491,8 @@ async function runContinuationPipeline(
       if (src === "wildcard") {
         console.log(`  🎲 ${c.label}: final=${c.weight.toFixed(3)} [WILDCARD] — ${meta.plausibilityReasoning}`);
       } else {
-        console.log(`  ${c.label}: final=${c.weight.toFixed(3)} (video=${Number(meta.videoWeight ?? 0).toFixed(2)} × ${VIDEO_WEIGHT_FACTOR} + plausibility=${Number(meta.plausibilityWeight ?? 0).toFixed(2)} × ${PLAUSIBILITY_WEIGHT_FACTOR}) [${src}]`);
+        const conflict = c.conflictTags ? ` conflict=[${c.conflictTags.join(",")}]` : "";
+        console.log(`  ${c.label}: final=${c.weight.toFixed(3)} (video=${Number(meta.videoWeight ?? 0).toFixed(2)} × ${VIDEO_WEIGHT_FACTOR} + plausibility=${Number(meta.plausibilityWeight ?? 0).toFixed(2)} × ${PLAUSIBILITY_WEIGHT_FACTOR}) [${src}]${conflict}`);
       }
     }
 
@@ -521,6 +589,7 @@ async function runContinuationPipeline(
         continuation.video_prompt,
         continuation.negative_prompt,
         ctx,
+        continuation.video_duration_seconds,
       );
     } catch (err) {
       console.error("[continuation] Video generation failed:", (err as Error)?.message);
@@ -658,6 +727,101 @@ Now score each candidate AND generate 3-5 wildcard scenarios.`;
   return { scores, wildcards };
 }
 
+// ─── User prediction scoring ─────────────────────────────────────────────────
+
+async function scoreUserPredictions(
+  userPredictions: string[],
+  mainStory: string,
+  characters: ContinuationContext["characters"],
+  environment: ContinuationContext["environment"],
+  existingOptions: string[],
+  existingCandidates: string[],
+): Promise<Array<{ label: string; weight: number; reasoning: string }>> {
+  const characterDesc = characters.map((c) => {
+    const parts = [c.label];
+    if (c.ageGroup && c.ageGroup !== "unknown") parts.push(`age group: ${c.ageGroup}`);
+    if (c.dominantEmotion) parts.push(c.dominantEmotion);
+    return parts.join(", ");
+  }).join("; ");
+
+  const envDesc = [
+    environment.locationType,
+    ...(environment.settingTags ?? []),
+  ].filter(Boolean).join(", ");
+
+  const systemPrompt = `You score USER-WRITTEN predictions for a video continuation betting platform.
+
+Users write free-text predictions about what will happen next in a video clip. These are NOT from AI analysis — they come from real users watching the video.
+
+Your job: rate each prediction on TWO axes and produce a final weight.
+
+AXIS 1 — PHYSICAL PLAUSIBILITY (0.0–1.0):
+Can this actually happen given the scene, characters, and environment?
+- 1.0 = perfectly natural/expected in this setting
+- 0.5 = possible but requires some coincidence
+- 0.1 = barely possible, very unlikely
+- 0.0 = physically impossible or contradicts the scene
+
+AXIS 2 — STORY INTEREST (0.0–1.0):
+Would this make the continuation video more engaging/surprising/entertaining?
+- 1.0 = would make a great twist, viewers would love it
+- 0.5 = reasonable and watchable
+- 0.1 = boring or redundant with obvious outcomes
+
+FINAL WEIGHT formula: plausibility × 0.6 + interest × 0.4, then cap at 0.15 max.
+If plausibility < 0.1, set weight to 0 regardless of interest (impossible events aren't interesting).
+
+Existing AI-generated options (for reference — don't duplicate):
+${existingOptions.map((o) => `- ${o}`).join("\n")}
+
+Existing AI-generated candidates:
+${existingCandidates.map((c) => `- ${c}`).join("\n")}
+
+If a user prediction is essentially the same as an existing option/candidate (just worded differently), set weight to 0 and explain it's a duplicate.
+
+Return JSON:
+{
+  "scored_predictions": [
+    { "label": string (the user's original text), "plausibility": number, "interest": number, "weight": number, "reasoning": string }
+  ]
+}`;
+
+  const userMessage = `Scene: ${mainStory}
+Characters: ${characterDesc}
+Environment: ${envDesc}
+
+User predictions to score:
+${userPredictions.map((p, i) => `${i + 1}. "${p}"`).join("\n")}`;
+
+  const { generateAndValidate: gen } = await import("@bettok/story-engine");
+  const { z } = await import("zod");
+
+  const schema = z.object({
+    scored_predictions: z.array(z.object({
+      label: z.string(),
+      plausibility: z.number().min(0).max(1),
+      interest: z.number().min(0).max(1),
+      weight: z.number().min(0).max(0.2),
+      reasoning: z.string(),
+    })),
+  });
+
+  const { data } = await gen(
+    [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userMessage },
+    ],
+    schema,
+    "UserPredictionScoring",
+  );
+
+  return data.scored_predictions.map((sp) => ({
+    label: sp.label,
+    weight: Math.min(sp.weight, 0.15),
+    reasoning: sp.reasoning,
+  }));
+}
+
 // ─── LLM narrative generation ────────────────────────────────────────────────
 
 async function generateContinuationNarrative(
@@ -676,6 +840,7 @@ async function generateContinuationNarrative(
     scene_explanation: string;
     video_prompt?: string;
     negative_prompt?: string;
+    video_duration_seconds?: number;
   };
 
   if (!isLlmAvailable) {
@@ -715,6 +880,8 @@ async function generateContinuationNarrative(
       label: o.label,
       category: o.category,
       state: o.state,
+      color: o.color,
+      location_in_frame: o.locationInFrame,
       brand: o.brandOrTextVisible,
       price: o.priceIfVisible,
     })),
@@ -763,7 +930,9 @@ You have structured video analysis data below. USE IT as your primary source of 
 FAIR SELECTION:
 The "selected_next_actions" were chosen by a provably fair algorithm (SHA-256 weighted selection) with blended weights from video analysis AND real-world plausibility scoring.
 You MUST incorporate ALL selected actions into the continuation — every single one, not just the first.
-If 2 actions were selected, the scene must show BOTH happening (e.g. character does action 1, then action 2, or simultaneously).
+If 2 actions were selected, the scene must show BOTH happening in sequence (action 1, then action 2).
+BUT if only 1 object/item pick was selected, the video must CLEARLY and UNAMBIGUOUSLY show that ONE choice being made — not the character vaguely handling multiple items.
+For example: if fair selection chose "picks up black dress", the video must show her clearly choosing the black dress, putting down the other, or walking away with it. The viewer must be able to tell WHICH item won.
 You may embellish, add detail, and weave in predictions — but every selected action must visibly occur.
 
 The weights include a "plausibilityReasoning" field explaining the real-world logic behind each choice.
@@ -782,9 +951,18 @@ CONTINUITY IS CRITICAL — CHARACTER IDENTITY:
 - The video_prompt MUST begin with a full character description that matches the analysis data EXACTLY. Do NOT use vague terms like "a person" or "a man" — be specific: "a young adult male with [hair], wearing [top] and [bottom], [build] build".
 - If hair description is "unknown", describe what IS known (age, build, clothing).
 - NEVER change clothing, hair, or physical features between Part 1 and Part 2.
-- Objects must maintain their state.
+- Objects must maintain their state AND their location. Check each object's "state" and "location_in_frame" fields.
+  - If an object state is "held", do NOT say the character "picks it up" — they already have it.
+  - If pineapple location is "produce section", don't show it near the bread shelf.
 - Environment must not change.
 - Economic consistency: a person in a $1000 car does not suddenly have luxury items.
+
+OBJECT STATE AWARENESS:
+- Read the "objects" data carefully. Each object has a "state" field telling you its current condition.
+- "held" = character is already holding it → actions: put down, examine, hand to someone, put in cart
+- "in shopping cart" = already in the cart → actions: take out, rearrange, keep
+- "on shelf" / "whole" = untouched on display → actions: reach for, pick up, examine
+- NEVER describe a character picking up something they already hold. This is nonsensical.
 
 EXAMPLE of correct video_prompt opening:
 "A young adult male with short brown curly hair, wearing a dark hoodie and jeans, average build, stands in a grocery store aisle. He extends his right hand toward..."
@@ -819,6 +997,15 @@ The video_prompt is sent directly to Kling AI image-to-video model. Follow these
    - Do not switch target mid-sequence (no "press Sprite button, get Diet Coke" type mismatches).
    Example (vending): press Diet Coke button -> Diet Coke can dispenses -> pick up Diet Coke can.
 
+VIDEO DURATION:
+You MUST return "video_duration_seconds" — an integer from 2 to 10.
+Pick the duration based on how many distinct physical actions the scene contains:
+- 1 simple action (e.g. put item in cart): 4
+- 1 action + reaction (e.g. put item in cart, companion nods): 5
+- 2 sequential actions (e.g. examine label, then hand to companion): 6–7
+- 3+ actions or actions with dialogue/discussion: 8–10
+Shorter is better for simple outcomes — a 4-second clip of one clear action looks natural, while stretching it to 10 looks slow-motion.
+
 Return JSON:
 {
   continuation_summary: string,
@@ -828,7 +1015,8 @@ Return JSON:
   media_prompt: string,
   scene_explanation: string,
   video_prompt: string,
-  negative_prompt: string
+  negative_prompt: string,
+  video_duration_seconds: number (2-10)
 }`;
 
   try {
@@ -852,6 +1040,7 @@ async function generateContinuationVideo(
   videoPrompt: string,
   negativePrompt: string | undefined,
   ctx: ContinuationContext | null,
+  durationSeconds?: number,
 ): Promise<string> {
   const supabase = await createServiceClient();
   const { getFalClient, falLongJobOptions } = await import("@/lib/fal/server");
@@ -930,7 +1119,7 @@ async function generateContinuationVideo(
       start_image_url: startImageUrl,
       prompt,
       negative_prompt: `${negativePrompt || "blurry, low quality, text overlay, watermark"}, different person, different clothes, costume change, different hair, different outfit, wardrobe change, distorted face`,
-      duration: "5",
+      duration: String(Math.min(10, Math.max(2, durationSeconds ?? 5))),
       generate_audio: true,
     },
     logs: true,

@@ -54,11 +54,15 @@ export function AddPrediction({
   function canonicalSuggestionKey(rawText: string) {
     return rawText
       .toLowerCase()
-      .replace(/\bboy\b|\bgirl\b|\bman\b|\bwoman\b|\bcharacter\b/g, "")
+      .replace(/\bboy\b|\bgirl\b|\bman\b|\bwoman\b|\bcharacter\b|\bthey\b|\bboth\b|\bcouple\b/g, "")
       .replace(/\bpicks?\s*up\b|\bpickup\b|\bpickups\b|\bpicksup\b/g, "")
       .replace(/\bgrabs?\b|\bchooses?\b|\bselects?\b|\btakes?\b/g, "")
       .replace(/\bpress(?:es|ed)?\b|\bclick(?:s|ed)?\b|\bhit(?:s)?\b/g, "")
-      .replace(/\binserts\b|\binsert\b|\binto\b/g, "")
+      .replace(/\binserts?\b|\binto\b/g, "")
+      .replace(/\bputs?\s*(?:in|back|down|on)\b|\bplaces?\b|\breturns?\b|\btoss(?:es)?\b|\bdrops?\b/g, "")
+      .replace(/\bwalks?\s*(?:toward|towards|to|over)?\b|\bgoes?\s*to\b|\bheads?\s*(?:to|toward|towards)?\b/g, "")
+      .replace(/\bhands?\s*(?:over|to)?\b|\bshows?\b|\bexamines?\b|\binspects?\b|\bcompares?\b/g, "")
+      .replace(/\badds?\s*to\b|\bdecides?\s*on\b/g, "")
       .replace(/\bthe\b|\ba\b|\ban\b/g, "")
       .replace(/[^a-z0-9\s]/g, " ")
       .replace(/\s+/g, " ")
