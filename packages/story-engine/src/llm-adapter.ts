@@ -14,8 +14,12 @@ export interface LlmResponse {
   latencyMs: number;
 }
 
+interface LlmGenerateOptions {
+  model?: string;
+}
+
 export interface LlmAdapter {
-  generate(messages: LlmMessage[]): Promise<LlmResponse>;
+  generate(messages: LlmMessage[], options?: LlmGenerateOptions): Promise<LlmResponse>;
 }
 
 class MockLlmAdapter implements LlmAdapter {
@@ -41,10 +45,11 @@ class OpenAIAdapter implements LlmAdapter {
     this.model = model || "gpt-4o-mini";
   }
 
-  async generate(messages: LlmMessage[]): Promise<LlmResponse> {
+  async generate(messages: LlmMessage[], options?: LlmGenerateOptions): Promise<LlmResponse> {
+    const model = options?.model || this.model;
     const start = Date.now();
     const response = await this.client.chat.completions.create({
-      model: this.model,
+      model,
       messages: messages.map((m) => ({ role: m.role, content: m.content })),
       response_format: { type: "json_object" },
       temperature: 0.3,
@@ -55,7 +60,7 @@ class OpenAIAdapter implements LlmAdapter {
     const latencyMs = Date.now() - start;
 
     console.log(
-      `[LLM] model=${this.model} input=${response.usage?.prompt_tokens ?? 0} output=${response.usage?.completion_tokens ?? 0} ms=${latencyMs}`,
+      `[LLM] purpose=${options?.model ? "override" : "default"} model=${model} input=${response.usage?.prompt_tokens ?? 0} output=${response.usage?.completion_tokens ?? 0} ms=${latencyMs}`,
     );
 
     return {
@@ -65,6 +70,20 @@ class OpenAIAdapter implements LlmAdapter {
       latencyMs,
     };
   }
+}
+
+function resolveModelForPurpose(purpose: string): string | undefined {
+  const normalized = purpose.trim().toUpperCase().replace(/[^A-Z0-9]+/g, "_");
+  const exact = process.env[`LLM_MODEL_${normalized}`];
+  if (exact) return exact;
+
+  if (normalized.includes("SETTLEMENT")) return process.env.LLM_MODEL_SETTLEMENT;
+  if (normalized.includes("CONTINUATION")) return process.env.LLM_MODEL_CONTINUATION;
+  if (normalized.includes("PLAUSIBILITY")) return process.env.LLM_MODEL_PLAUSIBILITY;
+  if (normalized.includes("USER_PREDICTION")) return process.env.LLM_MODEL_USER_PREDICTIONS;
+  if (normalized.includes("PREDICTION_ODDS")) return process.env.LLM_MODEL_PREDICTION_ODDS;
+
+  return process.env.LLM_MODEL;
 }
 
 let _adapter: LlmAdapter | null = null;
@@ -100,7 +119,7 @@ export async function generateAndValidate<T>(
   purpose: string
 ): Promise<{ data: T; response: LlmResponse }> {
   const adapter = getLlmAdapter();
-  const response = await adapter.generate(messages);
+  const response = await adapter.generate(messages, { model: resolveModelForPurpose(purpose) });
 
   let parsed: unknown;
   try {

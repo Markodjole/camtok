@@ -964,38 +964,62 @@ OBJECT STATE AWARENESS:
 - "on shelf" / "whole" = untouched on display → actions: reach for, pick up, examine
 - NEVER describe a character picking up something they already hold. This is nonsensical.
 
-EXAMPLE of correct video_prompt opening:
-"A young adult male with short brown curly hair, wearing a dark hoodie and jeans, average build, stands in a grocery store aisle. He extends his right hand toward..."
+EXAMPLE of correct video_prompt opening (starts with action, brief character anchor):
+"The young man in the dark hoodie extends his right hand toward the shelf, grabs the bottle of olive oil, and places it in the cart."
 
-EXAMPLE of WRONG video_prompt opening:
-"A person picks up a bottle..." (too vague, will generate different-looking character)
+EXAMPLE of WRONG video_prompt opening (re-describes static scene, wastes time):
+"A young adult male with short brown curly hair, wearing a dark hoodie and jeans, average build, stands in a grocery store aisle looking at products on the shelf. He seems interested. He extends his right hand toward..."
 
-VIDEO PROMPT — CRITICAL RULES FOR KLING AI:
+VIDEO PROMPT — CRITICAL RULES FOR KLING AI IMAGE-TO-VIDEO:
 You MUST return "video_prompt" and "negative_prompt" fields.
 
-The video_prompt is sent directly to Kling AI image-to-video model. Follow these rules strictly:
+The video_prompt is sent to Kling AI **image-to-video** model. The START IMAGE already shows the full scene (characters, environment, objects). Follow these rules:
 
-1. ONLY mention the target object/brand that the character interacts with. NEVER mention other brands or products in the prompt — the model gets confused and may show the wrong item.
-   BAD: "boy stands in front of a Coca-Cola vending machine and picks up Diet Coke" (model sees "Coca-Cola" and "Diet Coke" and gets confused)
-   GOOD: "boy reaches toward the vending machine, his hand grabs a Diet Coke can, he pulls it out and smiles"
+RULE 0 — THIS IS A CONTINUATION (PART 2). IT MUST SHOW THE RESOLUTION.
+Part 1 already showed the setup/tension/anticipation with NO resolution.
+Part 2 (this video) MUST show THE DECISIVE ACTION CLEARLY AND UNMISTAKABLY.
+The viewer must see the outcome happen — not just "about to happen" or "beginning to happen."
 
-2. Describe the PHYSICAL ACTION as a sequence of body movements:
-   BAD: "picks up a can"
-   GOOD: "extends his right hand, fingers wrap around the silver Diet Coke can, lifts it from the shelf"
+RULE 1 — DO NOT RE-DESCRIBE THE STATIC SCENE.
+The start image already contains the characters, setting, and objects. Kling sees it.
+If you describe "a kitten sits on the floor next to two bowls" — Kling will spend the first 2-3 seconds showing exactly that static scene, wasting video time.
+Instead, START WITH MOVEMENT. The very first words should describe what CHANGES from the start image.
 
-3. Structure the prompt as: [character appearance] + [specific physical action sequence] + [camera angle] + [lighting/mood]
-   Example: "A young boy with curly brown hair in a yellow shirt reaches toward a vending machine shelf. His hand grabs a red Coca-Cola can and pulls it toward his chest. He looks at it with wide excited eyes. Medium close-up shot, warm natural lighting."
+BAD (wastes time on static re-description):
+"A small curious kitten with soft fur sits on a cozy living room floor. The kitten looks around the room. Then the kitten steps forward and begins to eat."
 
-4. Put the MOST IMPORTANT action verb at the beginning of a sentence, not buried in a clause.
+GOOD (starts with action immediately):
+"The kitten steps forward toward the brown bowl. Its head lowers into the bowl and it eats eagerly, chewing the cat food. Its tail sways contentedly."
 
-5. negative_prompt must include all competing brands/products that should NOT appear in the action:
-   If character picks Diet Coke, negative_prompt should include other brands: "Sprite can in hand, Coca-Cola can in hand, wrong product, multiple cans"
+RULE 2 — FRONT-LOAD THE RESOLUTION ACTION.
+The most important action must happen in the FIRST HALF of the video, not the last second.
+If the resolution is "kitten eats cat food", that action must START within the first 2 seconds.
+Any secondary actions (looking around, pausing) come BEFORE the resolution, kept very brief (1-2 words, not a whole sentence).
 
-6. Enforce causal action consistency in ALL scenes:
-   - If an action has prerequisites, show them first (cause -> effect order).
-   - The selected object/action target must stay consistent through the sequence.
-   - Do not switch target mid-sequence (no "press Sprite button, get Diet Coke" type mismatches).
-   Example (vending): press Diet Coke button -> Diet Coke can dispenses -> pick up Diet Coke can.
+BAD: "The kitten pauses. The kitten looks left. The kitten looks right. The kitten sniffs. The kitten steps forward. The kitten begins to eat." (resolution buried at end, will get cut off)
+GOOD: "The kitten glances around briefly, then lowers its head into the brown bowl and eats the cat food eagerly." (resolution is the main event)
+
+RULE 3 — USE STRONG, COMPLETED ACTION VERBS.
+Kling interprets "begins to", "starts to", "about to" as APPROACHING but not doing.
+Use verbs that describe the COMPLETED or ONGOING action:
+BAD: "begins to eat", "starts picking up", "about to drink"
+GOOD: "eats eagerly", "picks up and holds", "drinks from the bowl", "chews the food"
+
+RULE 4 — ONLY mention the target object/brand. NEVER mention competing items in the prompt.
+BAD: "boy at Coca-Cola machine picks up Diet Coke" (model sees both brands, gets confused)
+GOOD: "boy reaches into the machine, grabs a Diet Coke can, pulls it out and smiles"
+
+RULE 5 — Describe PHYSICAL ACTION as body movements:
+BAD: "picks up a can"
+GOOD: "extends right hand, fingers wrap around the can, lifts it from the shelf"
+
+RULE 6 — Structure: [brief character anchor] + [DECISIVE ACTION] + [result/reaction] + [camera/mood]
+The character anchor is just enough to maintain identity (1 short phrase), NOT a full re-description.
+Example: "The boy in the yellow shirt grabs the Diet Coke can from the machine slot, holds it up, and grins widely. Close-up shot, warm lighting."
+
+RULE 7 — negative_prompt must include all competing items/actions that should NOT appear.
+
+RULE 8 — Causal consistency: action prerequisites come first, target stays consistent through the sequence.
 
 VIDEO DURATION:
 You MUST return "video_duration_seconds" — an integer from 2 to 10.

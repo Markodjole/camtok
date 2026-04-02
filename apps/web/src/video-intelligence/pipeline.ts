@@ -153,7 +153,7 @@ async function runPipeline(analysisId: string, clipNodeId: string) {
       warnings: allWarnings,
       score: temporal.score,
       frameCount: frames.length,
-      analysisModel: "gpt-4o-mini",
+      analysisModel: process.env.LLM_MODEL_ANALYSIS || process.env.LLM_MODEL || "gpt-4o-mini",
       analyzedAt: new Date().toISOString(),
     };
 
@@ -183,7 +183,7 @@ async function runPipeline(analysisId: string, clipNodeId: string) {
         warnings: allWarnings,
         score: temporal.score,
         frame_count: frames.length,
-        analysis_model: "gpt-4o-mini",
+        analysis_model: process.env.LLM_MODEL_ANALYSIS || process.env.LLM_MODEL || "gpt-4o-mini",
         completed_at: new Date().toISOString(),
       })
       .eq("id", analysisId);

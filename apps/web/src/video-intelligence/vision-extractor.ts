@@ -8,7 +8,7 @@ import { observedFactsSchema } from "./types";
 import { FRAME_EXTRACTION_SYSTEM, buildFrameExtractionUserMessage } from "./prompts";
 import { log } from "./utils";
 
-const VISION_MODEL = "gpt-4o-mini";
+const VISION_MODEL = process.env.LLM_MODEL_VISION || process.env.LLM_MODEL_ANALYSIS || process.env.LLM_MODEL || "gpt-4o-mini";
 const MAX_FRAMES_PER_CALL = 8;
 
 export async function extractObservedFacts(

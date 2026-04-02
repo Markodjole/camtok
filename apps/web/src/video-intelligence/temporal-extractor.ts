@@ -16,7 +16,7 @@ import type {
 import { TEMPORAL_EXTRACTION_SYSTEM, buildTemporalUserMessage } from "./prompts";
 import { log } from "./utils";
 
-const TEMPORAL_MODEL = "gpt-4o-mini";
+const TEMPORAL_MODEL = process.env.LLM_MODEL_TEMPORAL || process.env.LLM_MODEL_ANALYSIS || process.env.LLM_MODEL || "gpt-4o-mini";
 
 interface TemporalResult {
   actions: ActionEvent[];

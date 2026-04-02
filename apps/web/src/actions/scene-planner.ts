@@ -88,7 +88,7 @@ async function designScene(
   try {
     const client = new OpenAI({ apiKey });
     const res = await client.chat.completions.create({
-      model: "gpt-4o-mini",
+      model: process.env.LLM_MODEL_SCENE_PLANNER || process.env.LLM_MODEL || "gpt-4o-mini",
       response_format: { type: "json_object" },
       temperature: 0.3,
       messages: [
@@ -334,7 +334,7 @@ export async function scoreGeneratedFrame(
     const expected = `${scene.characters}, ${scene.scene}, ${keyEl}`;
 
     const res = await client.chat.completions.create({
-      model: "gpt-4o-mini",
+      model: process.env.LLM_MODEL_SCENE_PLANNER || process.env.LLM_MODEL || "gpt-4o-mini",
       response_format: { type: "json_object" },
       temperature: 0,
       messages: [

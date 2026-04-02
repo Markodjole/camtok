@@ -52,7 +52,7 @@ async function analyzeClipFrames(
   const client = new OpenAI({ apiKey });
 
   const response = await client.chat.completions.create({
-    model: "gpt-4o-mini",
+    model: process.env.LLM_MODEL_AI_CLIPS || process.env.LLM_MODEL || "gpt-4o-mini",
     response_format: { type: "json_object" },
     messages: [
       {

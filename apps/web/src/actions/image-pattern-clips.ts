@@ -89,7 +89,7 @@ async function buildMultiScenePrompt(
   const client = new OpenAI({ apiKey });
 
   const res = await client.chat.completions.create({
-    model: "gpt-4o-mini",
+    model: process.env.LLM_MODEL_IMAGE_PATTERNS || process.env.LLM_MODEL || "gpt-4o-mini",
     response_format: { type: "json_object" },
     temperature: 0.4,
     messages: [
@@ -256,7 +256,7 @@ async function analyzeVideoForResolution(
   const client = new OpenAI({ apiKey });
 
   const response = await client.chat.completions.create({
-    model: "gpt-4o-mini",
+    model: process.env.LLM_MODEL_IMAGE_PATTERNS || process.env.LLM_MODEL || "gpt-4o-mini",
     response_format: { type: "json_object" },
     messages: [
       {
@@ -346,7 +346,7 @@ export async function analyzeCustomImage(imageStoragePath: string): Promise<{ er
 
   try {
     const res = await client.chat.completions.create({
-      model: "gpt-4o-mini",
+      model: process.env.LLM_MODEL_IMAGE_ANALYSIS || process.env.LLM_MODEL_IMAGE_PATTERNS || process.env.LLM_MODEL || "gpt-4o-mini",
       response_format: { type: "json_object" },
       messages: [
         {
