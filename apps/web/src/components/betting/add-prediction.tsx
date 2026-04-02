@@ -81,6 +81,7 @@ export function AddPrediction({
     setSuggestedPredictions([]);
     setAvailableOptionVariables([]);
 
+    
     getClipContinuationContext(clipNodeId)
       .then(({ context, error }) => {
         if (!mounted) return;
