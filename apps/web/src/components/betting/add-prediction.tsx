@@ -68,7 +68,6 @@ export function AddPrediction({
       .replace(/\s+/g, " ")
       .trim();
   }
-  
 
   const existingPredictionKeys = useMemo(
     () => new Set(existingPredictions.map((p) => canonicalSuggestionKey(p)).filter(Boolean)),
