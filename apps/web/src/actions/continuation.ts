@@ -16,6 +16,10 @@ import type { SelectionCandidate, MultiSelectionResult } from "@bettok/fair-sele
 import { getContinuationContext } from "@/video-intelligence/pipeline";
 import type { ContinuationContext } from "@/video-intelligence/types";
 import { settleClipNode } from "@/actions/settlement";
+import {
+  clusterCandidateLabels,
+  expandPlausibilityScores,
+} from "@/lib/candidate-label-dedupe";
 
 export async function startContinuation(clipNodeId: string) {
   const supabase = await createServiceClient();
@@ -321,17 +325,22 @@ async function runContinuationPipeline(
       ...ctx.nextStepCandidates.map((c) => c.label),
       ...ctx.availableOptions.map((o) => o.label),
     ];
-    const uniqueLabels = [...new Set(allCandidateLabels)];
+    const { representatives: plausibilityRepresentatives, resolve: resolvePlausibilityLabel } =
+      clusterCandidateLabels(allCandidateLabels);
 
-    if (uniqueLabels.length > 0) {
+    if (plausibilityRepresentatives.length > 0) {
       try {
         const plausResult = await scoreRealWorldPlausibility(
-          uniqueLabels,
+          plausibilityRepresentatives,
           ctx.mainStory,
           ctx.characters,
           ctx.environment,
         );
-        plausibilityScores = plausResult.scores;
+        plausibilityScores = expandPlausibilityScores(
+          plausResult.scores,
+          allCandidateLabels,
+          resolvePlausibilityLabel,
+        );
         wildcards = plausResult.wildcards;
 
         console.log("[continuation][plausibility] Real-world scores:");
