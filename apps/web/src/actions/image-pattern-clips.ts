@@ -81,6 +81,7 @@ type EnhancedPlot = {
 async function buildMultiScenePrompt(
   baseScene: BaseScene,
   userPlotChange: string,
+  options?: { mood?: string; camera?: string },
 ): Promise<EnhancedPlot | null> {
   const apiKey = process.env.LLM_API_KEY;
   if (!apiKey || process.env.LLM_PROVIDER !== "openai") return null;
@@ -105,64 +106,79 @@ async function buildMultiScenePrompt(
 - Textures: ${baseScene.textures}
 
 ===== YOUR #1 GOAL =====
-Translate the USER'S plot into video prompts with STRICT intent fidelity.
-Do exactly what user asked, no extra behavior.
+Create ONE CONTINUOUS, NATURAL piece of motion that flows smoothly across all 3 scenes.
+The 3 scenes are NOT 3 separate shots — they are 3 segments of ONE UNBROKEN TAKE.
+Think of it as writing movement choreography for a single 6-second clip.
 
-===== WHAT KLING AI CAN DO =====
-Kling v3 Pro image-to-video is powerful. It CAN:
-✅ Move subjects (walk, turn, gesture, look around, change expression)
-✅ Shift camera angle significantly (POV shots, over-shoulder, wide to close-up, orbit)
-✅ Show the subject interacting with objects already in the environment
-✅ Show the subject moving to a different part of the same environment
-✅ Reveal more of the environment as the camera moves (shelves, products, signs)
-✅ Add environmental motion (people in background, lights, reflections)
-✅ Change lighting, atmosphere, mood
+===== CRITICAL: HOW KLING AI WORKS =====
+Kling generates video FROM the start image. It already sees the full scene.
 
-It CANNOT:
-❌ Teleport to a completely different location (indoor → outdoor)
-❌ Show readable on-screen text or speech bubbles
-❌ Reliably create objects that are wildly inconsistent with the environment
+NEVER re-describe the static scene. The image already shows it.
+NEVER start with "The camera captures..." or "The scene shows..." — nothing is being "captured", movement is being GENERATED.
 
-===== HOW TO HANDLE USER REQUESTS (STRICT) =====
+Each scene prompt should describe ONLY what CHANGES / MOVES during that 2-second window.
+The subject, environment, and objects are already visible — just describe the MOTION.
 
-1. RESPECT THE USER'S PLOT. If the user says "finds snacks" and the image is a supermarket aisle — snacks ARE in a supermarket. Don't strip them out. The environment IMPLIES their presence even if individual snack packages aren't pixel-visible in the start frame.
+===== MOVEMENT PRINCIPLES FOR NATURAL VIDEO =====
 
-2. CAMERA DIRECTION: If the user specifies a camera angle ("from his view", "POV", "over the shoulder", "close-up on hands"), USE IT. Override the base image camera. Kling can change camera angle.
+1. ONE CONTINUOUS FLOW — Each scene picks up EXACTLY where the previous one left off.
+   If Scene 1 ends with the man walking toward the rack, Scene 2 starts with him arriving at it.
+   NEVER "reset" the scene or re-establish the setting.
 
-3. DIALOGUE / VOICE IS ABSOLUTELY FORBIDDEN unless user explicitly asks:
-- ONLY include spoken_dialogue if the user explicitly includes speech (quoted words, "says", "asks", "whispers", etc.).
-- If user did not explicitly request speech, spoken_dialogue MUST be empty string.
-- NEVER write murmurs, "hmm", grunts, sighs, whispers, or ANY vocal sound into scene prompts.
-- NEVER use verbs like "murmurs", "says", "whispers", "mutters" in scene prompts unless user requested speech.
-- If you catch yourself writing dialogue/sound — DELETE IT.
+2. DESCRIBE PHYSICAL MOTION, NOT CAMERA NARRATION:
+   BAD: "The camera captures the man assessing the barbell. The atmosphere is quiet."
+   GOOD: "He walks toward the squat rack, eyes fixed on the barbell."
+   BAD: "The camera shifts to focus on his determined expression."
+   GOOD: "He grips the barbell, adjusts his stance, and takes a breath."
 
-4. OBJECTS IN CONTEXT: A supermarket has products, shelves, prices. A bar has drinks. A road has cars. Don't add things that are impossible for the setting, but DO include things the setting naturally contains. The start image is a STARTING POINT, not a prison.
+3. USE ACTION VERBS, NOT OBSERVATION VERBS:
+   BAD: "appears", "is seen", "can be observed", "the camera reveals"
+   GOOD: "walks", "grips", "lifts", "turns", "reaches", "steps", "leans"
 
-5. MOVEMENT IS EXACT, NOT DECORATIVE:
-- Include ONLY movement verbs that the user explicitly stated or directly implied.
-- Do NOT invent body movements: no hand hovering, no reaching, no pointing, no waving, no head turns, no gestures, no fidgeting — unless the user explicitly described that action.
-- "deciding" or "contemplating" does NOT mean hands move. It means the character LOOKS, maybe shifts gaze. Nothing more.
-- If user says "looks at X" → eyes/gaze move. Hands stay still. Body stays still.
-- If user says "reaches for X" → hand extends. But ONLY if user said "reaches".
+4. NO FILLER DESCRIPTIONS between actions:
+   BAD: "The ambient light casts soft shadows, highlighting the contours of his physique and the equipment, creating a sense of anticipation."
+   GOOD: (just skip it — Kling doesn't need mood paragraphs, it needs motion instructions)
+
+5. KEEP IT SHORT AND PHYSICAL — 30-40 words per scene, not 60.
+   Every word should describe either a body movement or a camera movement.
+
+===== DIALOGUE / VOICE =====
+ABSOLUTELY FORBIDDEN unless user explicitly asks for speech.
+No murmurs, "hmm", grunts, sighs, whispers, or ANY sound.
+
+===== MOVEMENT FIDELITY =====
+- Include ONLY movement that the user described or directly implied.
+- Do NOT invent extra body movements (no hand hovering, gesturing, fidgeting).
+- "deciding" / "contemplating" = gaze shifts only. Hands and body stay still.
 - When in doubt: LESS movement, not more.
 
-===== SCENE STRUCTURE =====
-- Scene 1 (2s): Establish the moment. Can include the user's described action beginning. Camera sets up.
-- Scene 2 (2s): The main beat of the user's plot. The action, the discovery, the choice being presented. This is the heart of what the user described.
-- Scene 3 (2s): FREEZE FRAME ENERGY. The character is STILL — no hand movement, no reaching, no gesturing, no speaking, no sound. Only the CAMERA may move (slow push-in, hold, subtle drift). Describe ONLY what the camera sees, NOT what the character does. The viewer should feel tension from stillness.
-- Each scene: 60 words max. Be specific and cinematic.
+===== MOOD & CAMERA (if provided) =====
+The user may specify a Mood and/or Camera style. If provided, use them:
+- Mood affects PACING: "tense" = slower movements, held pauses. "energetic" = quicker actions. "calm" = gentle, unhurried. "playful" = lighter, bouncier movement. "dramatic" = deliberate, weighted.
+- Camera options: "follow" = camera tracks the subject. "static" = camera locked, only subject moves. "closeup" = tight framing on hands/face. "pov" = first-person view. "orbit" = slow circular movement around subject.
+- If not provided, choose what fits the action naturally.
 
-===== WHAT TO AVOID =====
-- Don't RESOLVE the outcome (if choosing between items, don't show the choice being made)
-- Don't add jerky/sudden unnatural motion
-- Don't contradict the physical environment (outdoor elements in indoor scene)
-- Don't add extra actions not requested by user (no hand hover, no reaching, no pointing, no gesturing)
-- Don't add dialogue, murmurs, "hmm", grunts, or ANY vocal sounds unless user explicitly requested speech
-- Don't describe the character's hands moving in Scene 3 — EVER
+===== SCENE STRUCTURE =====
+- Scene 1 (2s): The action BEGINS. Subject starts moving as user described. Keep it simple — one smooth motion.
+- Scene 2 (2s): The action DEVELOPS. The main beat of the user's plot unfolds. This is the heart.
+- Scene 3 (2s): TENSION / ANTICIPATION. Movement slows to stillness. The subject holds position. Camera may drift slowly. No resolution — the viewer feels the moment hanging.
+- This is Part 1 of a two-part video. NEVER show the outcome or resolution.
+
+===== EXAMPLE =====
+User plot: "man walks up to squat rack and prepares to squat"
+BAD (robotic, re-describes scene each time):
+  scene_1: "The camera captures the barbell resting on the squat rack, its metallic surface gleaming under soft ambient lighting. A slim man walks into frame."
+  scene_2: "As the man approaches the squat rack, he pauses momentarily, assessing the barbell. The camera shifts to focus on his determined expression."
+  scene_3: "The camera holds steady on the man as he stands before the squat rack. The barbell looms large in the frame."
+
+GOOD (continuous motion, no re-description):
+  scene_1: "He walks toward the squat rack with steady steps, eyes locked on the barbell."
+  scene_2: "He grips the barbell with both hands, ducks under it, and positions it across his upper back. He plants his feet shoulder-width apart."
+  scene_3: "He takes a deep breath, knees slightly bent, holding the loaded position. The camera slowly pushes in on his focused face."
 
 ===== NEGATIVE PROMPT =====
-Include: "outcome revealed, result shown, action completed, decision finished, sudden jump, jerky motion, grabbing option, picking item, talking, speaking, murmuring, whispering, hand reaching, hand grabbing"
-Do NOT put items from the user's plot in the negative prompt. If the user asks for snacks, do NOT add "snacks" to negative prompt.
+Include: "outcome revealed, result shown, action completed, decision finished, sudden jump, jerky motion, talking, speaking, murmuring, whispering"
+Do NOT put items from the user's plot in the negative prompt.
 
 ===== OUTPUT FORMAT =====
 Return JSON:
@@ -171,9 +187,9 @@ Return JSON:
   "mood": "the emotional tone",
   "feasibility_notes": "brief note on any adaptations you made and why",
   "enhanced_plot": "your cinematic version of the user's plot (1-2 sentences)",
-  "scene_1": "scene 1 prompt (60 words max)",
-  "scene_2": "scene 2 prompt (60 words max)",
-  "scene_3": "scene 3 prompt (60 words max)",
+  "scene_1": "scene 1 prompt (40 words max, action only)",
+  "scene_2": "scene 2 prompt (40 words max, action only)",
+  "scene_3": "scene 3 prompt (40 words max, stillness + camera)",
   "negative_prompt": "things to avoid (do NOT include objects the user requested)",
   "outcomes": ["outcome A", "outcome B", "outcome C"],
   "spoken_dialogue": "If the user's plot includes speech (quoted words, 'says', 'whispers', etc.), write the subtitle line (max 120 chars). Otherwise empty string."
@@ -181,7 +197,11 @@ Return JSON:
       },
       {
         role: "user",
-        content: `Plot change: "${userPlotChange}"`,
+        content: [
+          `Action: "${userPlotChange}"`,
+          options?.mood ? `Mood: ${options.mood}` : null,
+          options?.camera ? `Camera: ${options.camera}` : null,
+        ].filter(Boolean).join("\n"),
       },
     ],
   });
@@ -195,7 +215,7 @@ Return JSON:
       logLine("llm", "feasibility", { notes: parsed.feasibility_notes, enhanced_plot: parsed.enhanced_plot });
     }
     const hardNegative =
-      "outcome revealed, result shown, action completed, decision finished, sudden jump, jerky motion, talking, speaking, murmuring, whispering, hand reaching, hand grabbing";
+      "outcome revealed, result shown, action completed, decision finished, sudden jump, jerky motion, talking, speaking, murmuring, whispering";
     const spoken =
       typeof parsed.spoken_dialogue === "string" ? parsed.spoken_dialogue.trim().slice(0, 120) : "";
     return {
@@ -220,20 +240,20 @@ function buildFallbackScenes(baseScene: BaseScene, userPlotChange: string): Enha
     spoken_dialogue: "",
     scenes: [
       {
-        prompt: `${baseScene.subject}, ${baseScene.subject_state}, ${baseScene.environment}. Camera holds steady. No movement, no action.`,
+        prompt: `${userPlotChange}. The action begins naturally.`,
         duration: "2",
       },
       {
-        prompt: `Same scene. ${userPlotChange}. Camera slowly pushes in. Subjects stay in their positions.`,
+        prompt: `Continuing smoothly. The moment develops.`,
         duration: "2",
       },
       {
-        prompt: `Same scene continues. Nothing resolved yet. Subjects remain still, same positions, same framing. Uncertainty lingers.`,
+        prompt: `Movement slows. Stillness. Camera drifts in slowly. No resolution.`,
         duration: "2",
       },
     ],
     negative_prompt:
-      "outcome revealed, result shown, action completed, decision finished, sudden jump, jerky motion",
+      "outcome revealed, result shown, action completed, decision finished, sudden jump, jerky motion, talking, speaking",
     outcomes: [],
   };
 }
@@ -424,11 +444,13 @@ async function runGeneration(opts: {
   patternImageUrl: string;
   baseScene: BaseScene;
   plotChange: string;
+  mood?: string;
+  camera?: string;
   sourceLabel: string;
 }) {
-  const { user, serviceClient, fal, imageStoragePath, patternImageUrl, baseScene, plotChange, sourceLabel } = opts;
+  const { user, serviceClient, fal, imageStoragePath, patternImageUrl, baseScene, plotChange, mood, camera, sourceLabel } = opts;
 
-  const llmResult = await buildMultiScenePrompt(baseScene, plotChange);
+  const llmResult = await buildMultiScenePrompt(baseScene, plotChange, { mood, camera });
   const enhanced = llmResult || buildFallbackScenes(baseScene, plotChange);
 
   logLine("pre-job", "scene_plan", { source: sourceLabel, plotChange, summary: enhanced.scene_summary });
@@ -553,6 +575,8 @@ async function runGeneration(opts: {
 export async function generateFromImagePattern(input: {
   patternId: string;
   plotChange: string;
+  mood?: string;
+  camera?: string;
 }) {
   const supabase = await createServerClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -590,6 +614,8 @@ export async function generateFromImagePattern(input: {
     patternImageUrl,
     baseScene,
     plotChange: input.plotChange,
+    mood: input.mood,
+    camera: input.camera,
     sourceLabel: `pattern:${(pattern as any).slug}`,
   });
 }
@@ -601,6 +627,8 @@ export async function generateFromImagePattern(input: {
 export async function generateFromCustomImage(input: {
   imageStoragePath: string;
   plotChange: string;
+  mood?: string;
+  camera?: string;
 }) {
   const supabase = await createServerClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -636,6 +664,8 @@ export async function generateFromCustomImage(input: {
     patternImageUrl: customImageUrl,
     baseScene: analysis.baseScene,
     plotChange: input.plotChange,
+    mood: input.mood,
+    camera: input.camera,
     sourceLabel: "custom_upload",
   });
 }

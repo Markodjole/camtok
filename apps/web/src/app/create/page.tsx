@@ -8,6 +8,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useToast } from "@/components/ui/toast";
 import {
   getImagePatterns,
@@ -26,6 +33,10 @@ import { cn, getMediaUrl } from "@/lib/utils";
 const PATTERNS_CACHE_KEY = "create:image_patterns:v2";
 const PATTERNS_CACHE_TTL_MS = 10 * 60 * 1000;
 const CREATE_REVIEW_CACHE_KEY = "create:pending_review:v1";
+
+/** Shared styles for create-page mood/camera pickers (readable, theme-aligned). */
+const CREATE_SCENE_SELECT_ITEM =
+  "rounded-lg py-3 pl-9 pr-3 text-base data-[highlighted]:bg-primary/15 data-[highlighted]:text-foreground";
 
 export default function CreatePage() {
   const router = useRouter();
@@ -46,8 +57,11 @@ export default function CreatePage() {
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
   const [previewTitle, setPreviewTitle] = useState<string | null>(null);
 
-  // Shared state
-  const [plotChange, setPlotChange] = useState("");
+  // Structured scene input
+  const [actionText, setActionText] = useState("");
+  const [tensionText, setTensionText] = useState("");
+  const [mood, setMood] = useState("neutral");
+  const [camera, setCamera] = useState("auto");
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState(0);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -296,9 +310,14 @@ export default function CreatePage() {
     }
   }
 
+  const plotChange = [
+    actionText.trim(),
+    tensionText.trim() ? `The moment ends with: ${tensionText.trim()}` : "",
+  ].filter(Boolean).join(". ");
+
   async function handleGenerate() {
-    if (!hasSource || !plotChange.trim()) {
-      toast({ title: "Missing fields", description: "Select or upload an image, and describe what happens", variant: "destructive" });
+    if (!hasSource || !actionText.trim()) {
+      toast({ title: "Missing fields", description: "Select an image and describe the physical actions", variant: "destructive" });
       return;
     }
 
@@ -318,11 +337,15 @@ export default function CreatePage() {
         res = await generateFromCustomImage({
           imageStoragePath: customImagePath,
           plotChange: plotChange.trim(),
+          mood: mood !== "neutral" ? mood : undefined,
+          camera: camera !== "auto" ? camera : undefined,
         });
       } else if (selectedPatternId) {
         res = await generateFromImagePattern({
           patternId: selectedPatternId,
           plotChange: plotChange.trim(),
+          mood: mood !== "neutral" ? mood : undefined,
+          camera: camera !== "auto" ? camera : undefined,
         });
       } else {
         res = { error: "No image selected" };
@@ -438,22 +461,49 @@ export default function CreatePage() {
     }
   }
 
-  const placeholderExamples: Record<string, string> = {
-    lion_grass: "e.g. spots a gazelle, eyes go wide, muscles tense",
-    vending_machine: "e.g. kid inserts coin, hand hovers over buttons",
-    beetle_red_light: "e.g. light turns green but car won't start, smoke rises",
-    woman_two_outfits: "e.g. phone rings, she looks at one dress then the other",
-    solo_shopper_aisle: "e.g. reaches for a jar but notices something on the top shelf",
-    couple_grocery: "e.g. she reads the label and frowns, he points at another option",
-    golf_putt: "e.g. wind picks up, ball starts rolling before the swing",
-    fluffy_kitten: "e.g. a hand offers food; kitten looks at food then camera, undecided",
+  const actionExamples: Record<string, string> = {
+    lion_grass: "e.g. lion spots a gazelle, eyes widen, body lowers into a crouch, muscles tense",
+    vending_machine: "e.g. kid walks up, inserts a coin, hand moves across the buttons left to right",
+    beetle_red_light: "e.g. light turns green, driver steps on gas, engine sputters, car shakes",
+    woman_two_outfits: "e.g. she picks up the red dress, holds it up, then turns to look at the black one",
+    solo_shopper_aisle: "e.g. he walks down the aisle, picks up a jar, reads the label, looks up at the top shelf",
+    couple_grocery: "e.g. she holds up the product, reads the label, shows it to him, he shrugs",
+    golf_putt: "e.g. he positions the ball, takes stance, draws the putter back slowly",
+    fluffy_kitten: "e.g. kitten walks toward two bowls on the floor, sniffs the left one, then the right",
+    woman_sleeping_mask:
+      "e.g. chest rises and falls slowly, fingers twitch slightly on the sheet, shadows drift across the bed",
+    friends_urban_group:
+      "e.g. group walks a few steps closer, laughing, then settles into pose; one person adjusts jacket",
+    friends_selfie_pond:
+      "e.g. they lean in tighter, peace sign held steady, phone arm shakes slightly from holding pose; breeze moves hair",
+    man_cooking_kitchen:
+      "e.g. left hand stirs the pan, he leans in to check the food, steam rises; right hand stays steady",
   };
 
-  const plotPlaceholder = selectedPattern
-    ? placeholderExamples[selectedPattern.slug] || "Describe what happens next..."
+  const tensionExamples: Record<string, string> = {
+    lion_grass: "e.g. frozen mid-crouch, ready to pounce",
+    vending_machine: "e.g. finger hovering between two buttons",
+    beetle_red_light: "e.g. engine stalling, smoke starting to rise",
+    woman_two_outfits: "e.g. holding both dresses, looking back and forth",
+    solo_shopper_aisle: "e.g. hand reaching toward shelf, hesitating",
+    couple_grocery: "e.g. both looking at the product, undecided",
+    golf_putt: "e.g. putter drawn back, about to swing",
+    fluffy_kitten: "e.g. kitten paused between both bowls, looking up",
+    woman_sleeping_mask: "e.g. hand suddenly grips the sheet; or she stirs, hand moving toward the mask",
+    friends_urban_group: "e.g. one person’s smile fades as they glance off-camera at something behind the group",
+    friends_selfie_pond: "e.g. loud splash in the pond behind them; they freeze mid-smile, about to turn",
+    man_cooking_kitchen: "e.g. flame flares up from the pan; he recoils slightly, still mid-reach",
+  };
+
+  const actionPlaceholder = selectedPattern
+    ? actionExamples[selectedPattern.slug] || "e.g. he walks to the table, picks up the cup, brings it to his lips"
     : isCustomMode
-      ? "Describe what happens next in this scene..."
+      ? "e.g. she steps forward, reaches out, picks up the item from the shelf"
       : "Select or upload an image first";
+
+  const tensionPlaceholder = selectedPattern
+    ? tensionExamples[selectedPattern.slug] || "e.g. frozen mid-action, about to decide"
+    : "e.g. hand hovering, about to choose";
 
   if (reviewMode && reviewVideoPath) {
     const videoUrl = getMediaUrl(reviewVideoPath);
@@ -731,26 +781,125 @@ export default function CreatePage() {
                 )}
               </div>
 
-              {/* Description of selected pattern */}
-              {selectedPattern && (
-                <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-                  {selectedPattern.description}
+              {/* Structured scene input */}
+              <div className="space-y-4">
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium" htmlFor="actionText">
+                    Describe movements
+                  </label>
+                  <textarea
+                    id="actionText"
+                    placeholder={actionPlaceholder}
+                    value={actionText}
+                    onChange={(e) => setActionText(e.target.value)}
+                    maxLength={400}
+                    disabled={!hasSource}
+                    rows={3}
+                    className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 resize-none"
+                  />
+                  <p className="text-xs text-muted-foreground text-right">{actionText.length}/400</p>
                 </div>
-              )}
 
-              {/* Plot change input */}
-              <div className="space-y-2">
-                <label className="text-sm font-medium" htmlFor="plotChange">
-                  What happens next?
-                </label>
-                <Input
-                  id="plotChange"
-                  placeholder={plotPlaceholder}
-                  value={plotChange}
-                  onChange={(e) => setPlotChange(e.target.value)}
-                  maxLength={200}
-                  disabled={!hasSource}
-                />
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium" htmlFor="tensionText">
+                    Cliffhanger scene <span className="text-muted-foreground font-normal">(optional)</span>
+                  </label>
+                  <Input
+                    id="tensionText"
+                    placeholder={tensionPlaceholder}
+                    value={tensionText}
+                    onChange={(e) => setTensionText(e.target.value)}
+                    maxLength={150}
+                    disabled={!hasSource}
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-4">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-foreground">Mood</label>
+                    <Select value={mood} onValueChange={setMood} disabled={!hasSource}>
+                      <SelectTrigger
+                        className={cn(
+                          "h-12 min-h-12 w-full rounded-lg border-border bg-card px-4 text-base text-foreground shadow-sm",
+                          "focus:ring-2 focus:ring-primary/40 focus:ring-offset-2 focus:ring-offset-background",
+                          "data-[placeholder]:text-muted-foreground [&_svg]:rotate-180",
+                        )}
+                      >
+                        <SelectValue placeholder="Auto" />
+                      </SelectTrigger>
+                      <SelectContent
+                        side="top"
+                        sideOffset={8}
+                        position="popper"
+                        className={cn(
+                          "z-[100] max-h-[min(22rem,55vh)] w-[var(--radix-select-trigger-width)] rounded-xl border-border bg-card p-1.5 text-foreground shadow-xl",
+                          "data-[state=open]:animate-in data-[state=closed]:animate-out",
+                        )}
+                      >
+                        <SelectItem value="neutral" className={CREATE_SCENE_SELECT_ITEM}>
+                          Auto
+                        </SelectItem>
+                        <SelectItem value="tense" className={CREATE_SCENE_SELECT_ITEM}>
+                          Tense / Suspenseful
+                        </SelectItem>
+                        <SelectItem value="calm" className={CREATE_SCENE_SELECT_ITEM}>
+                          Calm / Slow
+                        </SelectItem>
+                        <SelectItem value="energetic" className={CREATE_SCENE_SELECT_ITEM}>
+                          Energetic / Fast
+                        </SelectItem>
+                        <SelectItem value="playful" className={CREATE_SCENE_SELECT_ITEM}>
+                          Playful / Light
+                        </SelectItem>
+                        <SelectItem value="dramatic" className={CREATE_SCENE_SELECT_ITEM}>
+                          Dramatic / Cinematic
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-foreground">Camera</label>
+                    <Select value={camera} onValueChange={setCamera} disabled={!hasSource}>
+                      <SelectTrigger
+                        className={cn(
+                          "h-12 min-h-12 w-full rounded-lg border-border bg-card px-4 text-base text-foreground shadow-sm",
+                          "focus:ring-2 focus:ring-primary/40 focus:ring-offset-2 focus:ring-offset-background",
+                          "data-[placeholder]:text-muted-foreground [&_svg]:rotate-180",
+                        )}
+                      >
+                        <SelectValue placeholder="Auto" />
+                      </SelectTrigger>
+                      <SelectContent
+                        side="top"
+                        sideOffset={8}
+                        position="popper"
+                        className={cn(
+                          "z-[100] max-h-[min(22rem,55vh)] w-[var(--radix-select-trigger-width)] rounded-xl border-border bg-card p-1.5 text-foreground shadow-xl",
+                          "data-[state=open]:animate-in data-[state=closed]:animate-out",
+                        )}
+                      >
+                        <SelectItem value="auto" className={CREATE_SCENE_SELECT_ITEM}>
+                          Auto
+                        </SelectItem>
+                        <SelectItem value="follow" className={CREATE_SCENE_SELECT_ITEM}>
+                          Follow shot
+                        </SelectItem>
+                        <SelectItem value="static" className={CREATE_SCENE_SELECT_ITEM}>
+                          Static / Locked
+                        </SelectItem>
+                        <SelectItem value="closeup" className={CREATE_SCENE_SELECT_ITEM}>
+                          Close-up
+                        </SelectItem>
+                        <SelectItem value="pov" className={CREATE_SCENE_SELECT_ITEM}>
+                          POV / First person
+                        </SelectItem>
+                        <SelectItem value="orbit" className={CREATE_SCENE_SELECT_ITEM}>
+                          Slow orbit
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
               </div>
 
               {/* Progress */}
@@ -775,7 +924,7 @@ export default function CreatePage() {
                 className="w-full"
                 size="lg"
                 onClick={handleGenerate}
-                disabled={running || !hasSource || !plotChange.trim()}
+                disabled={running || !hasSource || !actionText.trim()}
               >
                 {running ? (
                   <>
