@@ -3,7 +3,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { submitPrediction } from "@/actions/predictions";
-import { getClipContinuationContext } from "@/actions/video-analysis";
+import { getClipContinuationContext, getVideoAnalysisStatus } from "@/actions/video-analysis";
+import type { ContinuationContext } from "@/video-intelligence/types";
 import { useToast } from "@/components/ui/toast";
 import { Sparkles, Loader2 } from "lucide-react";
 
@@ -33,6 +34,10 @@ export function AddPrediction({
     }>
   >([]);
   const [availableOptionVariables, setAvailableOptionVariables] = useState<string[]>([]);
+  /** True while polling for stored video analysis (server-side pipeline can take 1–2+ minutes). */
+  const [awaitingVideoAnalysis, setAwaitingVideoAnalysis] = useState(false);
+  /** Gave up polling without ever getting stored analysis (often env/timeout — check Vercel logs + video_analyses row). */
+  const [analysisPollExhausted, setAnalysisPollExhausted] = useState(false);
   const { toast } = useToast();
 
   function clamp01(n: number) {
@@ -75,88 +80,123 @@ export function AddPrediction({
   );
 
   useEffect(() => {
-    let mounted = true;
-    setSuggestionsError(null);
-    setSuggestionsLoading(true);
-    setSuggestedPredictions([]);
-    setAvailableOptionVariables([]);
+    let cancelled = false;
+    const POLL_MS = 5000;
+    const MAX_POLLS = 48;
 
-    
-    getClipContinuationContext(clipNodeId)
-      .then(({ context, error }) => {
-        if (!mounted) return;
+    function applyContext(context: ContinuationContext) {
+      const nextStepByCanonical = new Map<
+        string,
+        { rawText: string; yesProbability: number; noProbability: number }
+      >();
 
-        if (error) {
-          setSuggestionsError(error);
-          setSuggestionsLoading(false);
-          return;
-        }
+      for (const n of context.nextStepCandidates ?? []) {
+        const rawText = (n.label ?? "").trim();
+        if (!rawText) continue;
+        const key = canonicalSuggestionKey(rawText);
+        if (!key) continue;
 
-        if (!context) {
-          setSuggestionsLoading(false);
-          return;
-        }
+        const yesProbability = calibrateProbability(
+          typeof n.probabilityScore === "number" ? n.probabilityScore : 0.5,
+        );
+        const noProbability = clamp01(1 - yesProbability);
 
-        // Build suggestion list ONLY from nextStepCandidates.
-        const nextStepByCanonical = new Map<
-          string,
-          { rawText: string; yesProbability: number; noProbability: number }
-        >();
-
-        // Add ALL next-step candidates (possible outcomes)
-        for (const n of context.nextStepCandidates ?? []) {
-          const rawText = (n.label ?? "").trim();
-          if (!rawText) continue;
-          const key = canonicalSuggestionKey(rawText);
-          if (!key) continue;
-
-          const yesProbability = calibrateProbability(
-            typeof n.probabilityScore === "number" ? n.probabilityScore : 0.5,
-          );
-          const noProbability = clamp01(1 - yesProbability);
-
-          if (!nextStepByCanonical.has(key)) {
+        if (!nextStepByCanonical.has(key)) {
+          nextStepByCanonical.set(key, { rawText, yesProbability, noProbability });
+        } else {
+          const prev = nextStepByCanonical.get(key)!;
+          if (yesProbability > prev.yesProbability) {
             nextStepByCanonical.set(key, { rawText, yesProbability, noProbability });
-          } else {
-            // If duplicate concept exists, keep stronger probability signal.
-            const prev = nextStepByCanonical.get(key)!;
-            if (yesProbability > prev.yesProbability) {
-              nextStepByCanonical.set(key, { rawText, yesProbability, noProbability });
-            }
           }
         }
+      }
 
-        const built = Array.from(nextStepByCanonical.values()).map((s) => ({
+      const built = Array.from(nextStepByCanonical.values())
+        .map((s) => ({
           rawText: s.rawText,
           yesProbability: s.yesProbability,
           noProbability: s.noProbability,
           yesOdds: probToOdds(s.yesProbability),
           noOdds: probToOdds(s.noProbability),
         }))
-          .filter((s) => !existingPredictionKeys.has(canonicalSuggestionKey(s.rawText)));
+        .filter((s) => !existingPredictionKeys.has(canonicalSuggestionKey(s.rawText)));
 
-        setSuggestedPredictions(built);
-        const variableKeys = new Set<string>();
-        const variables: string[] = [];
-        for (const o of context.availableOptions ?? []) {
-          const rawText = (o.label ?? "").trim();
-          if (!rawText) continue;
-          const key = canonicalSuggestionKey(rawText);
-          if (!key || existingPredictionKeys.has(key) || variableKeys.has(key)) continue;
-          variableKeys.add(key);
-          variables.push(rawText);
+      setSuggestedPredictions(built);
+
+      const variableKeys = new Set<string>();
+      const variables: string[] = [];
+      for (const o of context.availableOptions ?? []) {
+        const rawText = (o.label ?? "").trim();
+        if (!rawText) continue;
+        const key = canonicalSuggestionKey(rawText);
+        if (!key || existingPredictionKeys.has(key) || variableKeys.has(key)) continue;
+        variableKeys.add(key);
+        variables.push(rawText);
+      }
+      setAvailableOptionVariables(variables);
+    }
+
+    (async () => {
+      setSuggestionsError(null);
+      setSuggestionsLoading(true);
+      setAwaitingVideoAnalysis(false);
+      setAnalysisPollExhausted(false);
+      setSuggestedPredictions([]);
+      setAvailableOptionVariables([]);
+
+      for (let i = 0; i < MAX_POLLS; i++) {
+        if (cancelled) return;
+
+        try {
+          const { context, error } = await getClipContinuationContext(clipNodeId);
+          if (cancelled) return;
+
+          if (error) {
+            setSuggestionsError(error);
+            setSuggestionsLoading(false);
+            return;
+          }
+
+          if (context) {
+            applyContext(context);
+            setAwaitingVideoAnalysis(false);
+            setSuggestionsLoading(false);
+            return;
+          }
+
+          const st = await getVideoAnalysisStatus(clipNodeId);
+          if (cancelled) return;
+
+          if (st?.status === "failed" && st.error) {
+            setSuggestionsError(st.error);
+            setAwaitingVideoAnalysis(false);
+            setSuggestionsLoading(false);
+            return;
+          }
+
+          if (i < MAX_POLLS - 1) {
+            setAwaitingVideoAnalysis(true);
+            await new Promise((r) => setTimeout(r, POLL_MS));
+          }
+        } catch (err) {
+          if (!cancelled) {
+            setSuggestionsError(err instanceof Error ? err.message : "Failed to load suggestions");
+            setAwaitingVideoAnalysis(false);
+            setSuggestionsLoading(false);
+          }
+          return;
         }
-        setAvailableOptionVariables(variables);
+      }
+
+      if (!cancelled) {
+        setAwaitingVideoAnalysis(false);
+        setAnalysisPollExhausted(true);
         setSuggestionsLoading(false);
-      })
-      .catch((err) => {
-        if (!mounted) return;
-        setSuggestionsError(err instanceof Error ? err.message : "Failed to load suggestions");
-        setSuggestionsLoading(false);
-      });
+      }
+    })();
 
     return () => {
-      mounted = false;
+      cancelled = true;
     };
   }, [clipNodeId, existingPredictionKeys]);
 
@@ -266,12 +306,22 @@ export function AddPrediction({
         {inputFocused ? (
           <div className="absolute bottom-full left-0 right-0 mb-2 max-h-64 overflow-y-auto rounded-xl border border-border bg-card/95 backdrop-blur-sm shadow-xl z-20 p-2">
             {suggestionsLoading ? (
-              <div className="px-2 py-2 text-xs text-muted-foreground">Loading options...</div>
+              <div className="px-2 py-2 text-xs text-muted-foreground">
+                {awaitingVideoAnalysis
+                  ? "Analyzing video… AI suggestions appear when analysis finishes (often 1–2 min)."
+                  : "Loading options…"}
+              </div>
             ) : suggestionsError ? (
-              <div className="px-2 py-2 text-xs text-destructive">Options unavailable</div>
+              <div className="px-2 py-2 text-xs text-destructive">
+                {suggestionsError}
+              </div>
             ) : !text.trim() ? (
               matchingSuggestions.length === 0 ? (
-                <div className="px-2 py-2 text-xs text-muted-foreground">No next-step candidates yet</div>
+                <div className="px-2 py-2 text-xs text-muted-foreground">
+                  {analysisPollExhausted
+                    ? "No AI suggestions yet after waiting. Refresh the page, or check server logs / video_analyses for failures (LLM keys, timeouts, storage)."
+                    : "No next-step candidates from analysis. You can still type a prediction."}
+                </div>
               ) : (
                 <div className="space-y-1">
                   {matchingSuggestions.map((s) => (
