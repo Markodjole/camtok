@@ -2,7 +2,7 @@
 
 export const dynamic = "force-dynamic";
 
-import { useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Upload, Loader2, ImageIcon, Film, Trash2, Users, ChevronRight, Plus, ArrowLeft } from "lucide-react";
 import { AppShell } from "@/components/layout/app-shell";
@@ -44,7 +44,7 @@ const CREATE_SCENE_SELECT_ITEM =
 
 type CreateMode = "character" | "image";
 
-export default function CreatePage() {
+function CreatePageClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { toast } = useToast();
@@ -1337,5 +1337,13 @@ export default function CreatePage() {
       )}
 
     </AppShell>
+  );
+}
+
+export default function CreatePage() {
+  return (
+    <Suspense fallback={<AppShell><div className="p-4 text-sm text-muted-foreground">Loading create page...</div></AppShell>}>
+      <CreatePageClient />
+    </Suspense>
   );
 }
