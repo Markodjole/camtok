@@ -4,6 +4,63 @@ import { revalidatePath } from "next/cache";
 import { createServerClient, createServiceClient } from "@/lib/supabase/server";
 import type { Character, CharacterWithImages, CharacterReferenceImage, BettingSignals } from "@/lib/characters/types";
 
+function detectAngleFromFilename(name: string): string {
+  const n = name.toLowerCase();
+  if (n.includes("front")) return "front";
+  if (n.includes("left_45") || n.includes("45_left")) return "left_45";
+  if (n.includes("right_45") || n.includes("45_right")) return "right_45";
+  if (n.includes("left")) return "left";
+  if (n.includes("right")) return "right";
+  if (n.includes("side")) return "side";
+  if (n.includes("back")) return "back";
+  if (n.includes("close")) return "closeup";
+  return "front";
+}
+
+async function listFallbackStorageImages(
+  serviceClient: Awaited<ReturnType<typeof createServiceClient>>,
+  character: Character,
+): Promise<CharacterReferenceImage[]> {
+  const slug = character.slug ?? "";
+  if (!slug) return [];
+
+  const folders = [`characters/${slug}`, `patterns/characters/${slug}`];
+  const discovered: CharacterReferenceImage[] = [];
+
+  for (const folder of folders) {
+    const { data } = await serviceClient.storage.from("media").list(folder, {
+      limit: 50,
+      sortBy: { column: "name", order: "asc" },
+    });
+    if (!data?.length) continue;
+
+    data
+      .filter((f) => !!f.name && /\.(png|jpe?g|webp)$/i.test(f.name))
+      .forEach((f, idx) => {
+        const path = `${folder}/${f.name}`;
+        discovered.push({
+          id: `${character.id}:${path}`,
+          image_storage_path: path,
+          angle: detectAngleFromFilename(f.name),
+          is_primary: idx === 0,
+          description: "Storage fallback image",
+          sort_order: idx,
+        });
+      });
+  }
+
+  return discovered;
+}
+
+async function hydrateReferenceImages(
+  serviceClient: Awaited<ReturnType<typeof createServiceClient>>,
+  character: Character,
+  dbImages: CharacterReferenceImage[],
+): Promise<CharacterReferenceImage[]> {
+  if (dbImages.length > 0) return dbImages;
+  return listFallbackStorageImages(serviceClient, character);
+}
+
 export async function getCharacters(): Promise<{
   characters: CharacterWithImages[];
   error?: string;
@@ -36,12 +93,18 @@ export async function getCharacters(): Promise<{
     imagesByChar.set(img.character_id, list);
   }
 
-  return {
-    characters: characters.map((c) => ({
+  const hydrated = await Promise.all(
+    characters.map(async (c) => ({
       ...c,
-      reference_images: imagesByChar.get(c.id) ?? [],
+      reference_images: await hydrateReferenceImages(
+        serviceClient,
+        c,
+        imagesByChar.get(c.id) ?? [],
+      ),
     })),
-  };
+  );
+
+  return { characters: hydrated };
 }
 
 export async function getCharacterBySlug(slug: string): Promise<{
@@ -70,7 +133,11 @@ export async function getCharacterBySlug(slug: string): Promise<{
   return {
     character: {
       ...char,
-      reference_images: (images ?? []) as CharacterReferenceImage[],
+      reference_images: await hydrateReferenceImages(
+        serviceClient,
+        char,
+        (images ?? []) as CharacterReferenceImage[],
+      ),
     },
   };
 }
@@ -100,7 +167,11 @@ export async function getCharacterById(id: string): Promise<{
   return {
     character: {
       ...char,
-      reference_images: (images ?? []) as CharacterReferenceImage[],
+      reference_images: await hydrateReferenceImages(
+        serviceClient,
+        char,
+        (images ?? []) as CharacterReferenceImage[],
+      ),
     },
   };
 }
