@@ -57,9 +57,9 @@ export function CharacterAiChat({
   }
 
   return (
-    <div className="fixed bottom-20 left-0 right-0 z-50 mx-auto w-full max-w-lg px-4">
+    <>
       {open ? (
-        <div className="fixed inset-x-2 top-14 bottom-20 rounded-2xl border border-border bg-card shadow-2xl">
+        <div className="fixed inset-x-2 top-14 bottom-20 z-[60] rounded-2xl border border-border bg-card shadow-2xl">
           <div className="flex items-center justify-between border-b border-border px-3 py-2">
             <p className="text-xs font-semibold text-foreground">
               AI search: {characterName}
@@ -143,12 +143,12 @@ export function CharacterAiChat({
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="ml-auto flex items-center gap-2 rounded-full border border-primary/40 bg-card px-3 py-2 text-xs font-medium text-foreground shadow-lg"
+        className="fixed bottom-20 right-4 z-[70] ml-auto flex items-center gap-2 rounded-full border border-primary/40 bg-card px-3 py-2 text-xs font-medium text-foreground shadow-lg"
       >
         <MessageCircle className="h-4 w-4 text-primary" />
         {open ? "Close AI" : "Ask AI"}
       </button>
-    </div>
+    </>
   );
 }
 

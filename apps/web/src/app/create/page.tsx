@@ -30,6 +30,10 @@ import {
   dismissDraft,
   deleteDraft,
 } from "@/actions/image-pattern-clips";
+import {
+  generateFromCharacter,
+  publishCharacterDraft,
+} from "../../actions/character-clips";
 import { getCharacters } from "@/actions/characters";
 import type { CharacterWithImages } from "@/lib/characters/types";
 import { createBrowserClient, getUserQueued } from "@/lib/supabase/client";
@@ -397,7 +401,6 @@ function CreatePageClient() {
       let res: { error?: string; data?: any };
 
       if (mode === "character" && selectedCharacterId) {
-        const { generateFromCharacter } = await import("@/actions/character-clips");
         res = await generateFromCharacter({
           characterId: selectedCharacterId,
           locationDescription: locationText.trim(),
@@ -491,7 +494,6 @@ function CreatePageClient() {
     try {
       let res: { error?: string; data?: any };
       if (reviewCharacterId) {
-        const { publishCharacterDraft } = await import("@/actions/character-clips");
         res = await publishCharacterDraft({
           jobId: reviewJobId!,
           videoStoragePath: reviewVideoPath!,
@@ -906,25 +908,13 @@ function CreatePageClient() {
                           )}
                         </div>
                       </button>
-                      <div className="flex flex-wrap gap-1.5">
-                        <span className="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary">
-                          {selectedCharacter.personality.temperament}
-                        </span>
-                        <span className="rounded-full bg-muted px-2.5 py-0.5 text-xs text-muted-foreground">
-                          {selectedCharacter.personality.decision_style}
-                        </span>
-                        <span className="rounded-full bg-muted px-2.5 py-0.5 text-xs text-muted-foreground">
-                          Risk: {selectedCharacter.personality.risk_appetite}
-                        </span>
-                      </div>
-
                       <div className="space-y-1.5">
                         <label className="text-sm font-medium" htmlFor="locationText">
                           Location / Setting
                         </label>
                         <Input
                           id="locationText"
-                          placeholder="e.g. busy supermarket, quiet park bench, rooftop bar at sunset"
+                          placeholder="e.g. rooftop bar, park bench, city street"
                           value={locationText}
                           onChange={(e) => setLocationText(e.target.value)}
                           maxLength={200}
@@ -936,7 +926,7 @@ function CreatePageClient() {
                         onClick={() => router.push(`/character/${selectedCharacter.slug}`)}
                         className="flex w-full items-center justify-between rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground hover:bg-muted transition-colors"
                       >
-                        <span>View {selectedCharacter.name}'s profile & history</span>
+                        <span>View {selectedCharacter.name} profile</span>
                         <ChevronRight className="h-4 w-4" />
                       </button>
                     </div>
@@ -951,7 +941,7 @@ function CreatePageClient() {
                       >
                         <ArrowLeft className="h-4 w-4" /> Back to characters
                       </button>
-                      <p className="text-sm font-medium text-foreground">Create your character</p>
+                      <p className="text-sm font-medium text-foreground">New character</p>
 
                       <input ref={newCharFileRef} type="file" accept="image/*" className="hidden" onChange={handleNewCharFileChange} />
                       {newCharFile ? (
@@ -979,15 +969,14 @@ function CreatePageClient() {
                         >
                           <Upload className="h-8 w-8 text-muted-foreground" />
                           <span className="text-sm font-medium text-muted-foreground">Upload character photo</span>
-                          <span className="text-xs text-muted-foreground/60">Front-facing, clear image works best</span>
                         </button>
                       )}
 
                       <div className="space-y-2">
                         <Input placeholder="Character name" value={newCharName} onChange={(e) => setNewCharName(e.target.value)} maxLength={50} />
-                        <Input placeholder="Tagline (optional, e.g. 'The impulsive foodie')" value={newCharTagline} onChange={(e) => setNewCharTagline(e.target.value)} maxLength={100} />
+                        <Input placeholder="Tagline (optional)" value={newCharTagline} onChange={(e) => setNewCharTagline(e.target.value)} maxLength={100} />
                         <textarea
-                          placeholder="Backstory (optional) — personality, habits, quirks..."
+                          placeholder="Backstory (optional)"
                           value={newCharBackstory}
                           onChange={(e) => setNewCharBackstory(e.target.value)}
                           maxLength={500}
