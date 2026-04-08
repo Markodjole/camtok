@@ -65,19 +65,19 @@ function CharacterCard({ c }: { c: CharacterRow }) {
     <Card className="overflow-hidden">
       <CardContent className="p-0">
         <div className="flex">
-          <div className="relative h-28 w-24 shrink-0 bg-muted">
+          <Link href={profileHref} className="relative h-28 w-24 shrink-0 bg-muted">
             {imageUrl ? (
               <Image src={imageUrl} alt={c.name} fill className="object-cover" />
             ) : null}
-          </div>
+          </Link>
           <div className="flex-1 space-y-2 p-3">
             <div className="flex items-start justify-between gap-2">
-              <div>
+              <Link href={profileHref} className="min-w-0">
                 <p className="text-sm font-semibold text-foreground">{c.name}</p>
                 {c.tagline ? (
                   <p className="line-clamp-1 text-[11px] text-muted-foreground">{c.tagline}</p>
                 ) : null}
-              </div>
+              </Link>
               <Link href={profileHref} className="text-muted-foreground hover:text-foreground">
                 <ChevronRight className="h-4 w-4" />
               </Link>

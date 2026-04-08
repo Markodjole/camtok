@@ -138,16 +138,16 @@ export function CharacterAiChat({
             ) : null}
           </div>
         </div>
-      ) : (
-        <button
-          type="button"
-          onClick={() => setOpen(true)}
-          className="ml-auto flex items-center gap-2 rounded-full border border-primary/40 bg-card px-3 py-2 text-xs font-medium text-foreground shadow-lg"
-        >
-          <MessageCircle className="h-4 w-4 text-primary" />
-          Ask AI
-        </button>
-      )}
+      ) : null}
+
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="ml-auto flex items-center gap-2 rounded-full border border-primary/40 bg-card px-3 py-2 text-xs font-medium text-foreground shadow-lg"
+      >
+        <MessageCircle className="h-4 w-4 text-primary" />
+        {open ? "Close AI" : "Ask AI"}
+      </button>
     </div>
   );
 }

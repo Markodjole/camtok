@@ -185,7 +185,7 @@ VALUES (
       'suspicious of anything marketed as new or premium'
     ),
     'context_modifiers', jsonb_build_object(
-      'shopping', jsonb_build_object(
+      'straightforward_purchase_moment', jsonb_build_object(
         'proven_reliable_option', 0.93,
         'decides_fast_and_commits', 0.90
       ),

@@ -180,7 +180,7 @@ VALUES (
       'defaults to data over gut feeling'
     ),
     'context_modifiers', jsonb_build_object(
-      'in_office', jsonb_build_object(
+      'structured_high_stakes_context', jsonb_build_object(
         'evaluates_before_acting', 0.92,
         'quality_understated_option', 0.85
       ),
@@ -188,7 +188,7 @@ VALUES (
         'evaluates_before_acting', 0.75,
         'walks_away_if_unconvinced', 0.55
       ),
-      'social_dinner', jsonb_build_object(
+      'with_others_social', jsonb_build_object(
         'quality_understated_option', 0.80,
         'impulse_option', 0.12
       )

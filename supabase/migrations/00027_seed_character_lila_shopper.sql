@@ -158,7 +158,7 @@ VALUES (
     'quick_read', jsonb_build_array(
       'Picks based on vibes not logic (78%)',
       'Changes mind at least once (72%)',
-      'Leaves store empty-handed (45%)'
+      'Walks away without committing (45%)'
     ),
     'choice_patterns', jsonb_build_object(
       'boldest_color_option', 0.68,
@@ -168,32 +168,32 @@ VALUES (
       'buys_then_returns', 0.35
     ),
     'behavior_patterns', jsonb_build_object(
-      'touches_everything_while_browsing', 0.82,
+      'explores_by_touch_while_deciding', 0.82,
       'changes_mind_multiple_times', 0.72,
       'checks_phone_between_decisions', 0.75,
       'asks_friend_opinion', 0.65,
-      'impulse_grab_near_checkout', 0.40
+      'last_minute_add_on_near_finish', 0.40
     ),
     'exploitable_tendencies', jsonb_build_array(
       'almost never picks the practical option',
       'very high chance of changing mind mid-decision',
       'bold colors and trending items win over everything',
-      'will abandon purchase if checkout line is long',
+      'will bail if the last step feels slow or annoying',
       'heavily influenced by whatever she saw online that day'
     ),
     'context_modifiers', jsonb_build_object(
-      'shopping_with_friends', jsonb_build_object(
+      'with_friends', jsonb_build_object(
         'trending_option', 0.80,
         'asks_friend_opinion', 0.85,
         'leaves_empty_handed', 0.30
       ),
-      'shopping_alone', jsonb_build_object(
+      'alone', jsonb_build_object(
         'changes_mind_multiple_times', 0.80,
         'leaves_empty_handed', 0.55,
         'checks_phone_between_decisions', 0.85
       ),
-      'sale_event', jsonb_build_object(
-        'impulse_grab_near_checkout', 0.60,
+      'high_excitement_limited_deal', jsonb_build_object(
+        'last_minute_add_on_near_finish', 0.60,
         'boldest_color_option', 0.75,
         'leaves_empty_handed', 0.20
       )

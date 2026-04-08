@@ -170,7 +170,7 @@ VALUES (
     'quick_read', jsonb_build_array(
       'Picks what he always picked (92%)',
       'Refuses anything new or trendy (88%)',
-      'Complains but still buys (70%)'
+      'Complains but still follows through (70%)'
     ),
     'choice_patterns', jsonb_build_object(
       'same_as_last_40_years', 0.92,
@@ -181,27 +181,27 @@ VALUES (
     'behavior_patterns', jsonb_build_object(
       'complains_about_prices', 0.85,
       'gives_unsolicited_opinion', 0.78,
-      'refuses_to_read_labels', 0.80,
+      'skips_fine_print', 0.80,
       'pays_cash_only', 0.90,
-      'asks_staff_where_they_moved_things', 0.72
+      'asks_where_things_went', 0.72
     ),
     'exploitable_tendencies', jsonb_build_array(
       'will literally never try the new option',
       'guaranteed to pick the same brand he always has',
       'complains but buys anyway most of the time',
       'walks out if inconvenienced even slightly',
-      'cash only — will skip purchase if card-only register'
+      'cash only — will bail if electronic payment is the only option'
     ),
     'context_modifiers', jsonb_build_object(
-      'in_familiar_store', jsonb_build_object(
+      'familiar_setting', jsonb_build_object(
         'same_as_last_40_years', 0.95,
         'complains_about_prices', 0.80
       ),
-      'in_unfamiliar_store', jsonb_build_object(
+      'unfamiliar_setting', jsonb_build_object(
         'walks_out_angry', 0.55,
-        'asks_staff_where_they_moved_things', 0.85
+        'asks_where_things_went', 0.85
       ),
-      'with_grandkids', jsonb_build_object(
+      'with_young_family_he_softens', jsonb_build_object(
         'same_as_last_40_years', 0.80,
         'complains_about_prices', 0.90,
         'walks_out_angry', 0.10

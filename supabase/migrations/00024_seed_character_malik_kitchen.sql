@@ -129,13 +129,13 @@ VALUES (
         'overpriced premium branding with no quality gain'
       )
     ),
-    'shopping', 'ingredient-first shopper — checks freshness, consistency, and value before choosing',
+    'shopping', 'checks quality, consistency, and value before choosing — same habit in any setting',
     'general_tendencies', jsonb_build_array(
-      'chooses reliable ingredients over trendy ones',
-      'keeps prep area clean while working',
-      'tests texture before finalizing heat step',
-      'prefers repeatable techniques over flashy improvisation',
-      'finishes one task cleanly before starting the next'
+      'chooses reliable options over trendy ones',
+      'keeps his space and process tidy while doing something',
+      'verifies the important detail before moving on',
+      'prefers repeatable methods over flashy improvisation',
+      'finishes one step cleanly before starting the next'
     )
   ),
   'Malik learned cooking through disciplined breakfast routines and iterative practice in small home kitchens. He treats cooking like a craft system: mise-en-place, controlled heat, and consistent execution. He is not theatrical; he optimizes for quality and repeatability.',
@@ -151,18 +151,18 @@ VALUES (
   jsonb_build_object(
     'quick_read', jsonb_build_array(
       'Chooses consistency over speed (82%)',
-      'Keeps prep workflow organized (86%)',
+      'Keeps his process organized (86%)',
       'Avoids flashy risky moves (78%)'
     ),
     'choice_patterns', jsonb_build_object(
-      'reliable_ingredient_option', 0.81,
+      'reliable_trusted_option', 0.81,
       'value_plus_quality_option', 0.77,
       'flashy_trend_option', 0.09,
-      'rework_before_serving', 0.58
+      'refine_before_committing', 0.58
     ),
     'behavior_patterns', jsonb_build_object(
-      'checks_texture_before_next_step', 0.84,
-      'cleans_as_he_works', 0.79,
+      'verifies_before_next_step', 0.84,
+      'stays_tidy_while_working', 0.79,
       'slows_down_under_pressure', 0.74,
       'asks_for_external_help', 0.24
     ),
@@ -170,20 +170,20 @@ VALUES (
       'will sacrifice speed for consistent output',
       'rarely chooses high-variance shortcuts',
       'prefers controlled sequences over improvisation',
-      'defaults to quality+value, not hype'
+      'defaults to quality plus value, not hype'
     ),
     'context_modifiers', jsonb_build_object(
-      'home_kitchen', jsonb_build_object(
-        'reliable_ingredient_option', 0.86,
-        'checks_texture_before_next_step', 0.88
+      'familiar_setting', jsonb_build_object(
+        'reliable_trusted_option', 0.86,
+        'verifies_before_next_step', 0.88
       ),
       'time_pressure', jsonb_build_object(
         'slows_down_under_pressure', 0.79,
         'flashy_trend_option', 0.05
       ),
-      'social_cooking', jsonb_build_object(
+      'with_others_nearby', jsonb_build_object(
         'asks_for_external_help', 0.30,
-        'cleans_as_he_works', 0.75
+        'stays_tidy_while_working', 0.75
       )
     )
   ),

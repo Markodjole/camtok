@@ -190,11 +190,8 @@ export default async function CharacterProfilePage({
           )}
 
           {/* Profile data */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Profile Data</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-1.5 text-sm">
+          <CollapsibleCard title="Profile Data" defaultOpen={false}>
+            <div className="space-y-1.5 text-sm">
               <KeyValueRow label="age_range" value={character.appearance.age_range} />
               <KeyValueRow label="gender_presentation" value={character.appearance.gender_presentation} />
               <KeyValueRow label="build" value={character.appearance.build} />
@@ -207,8 +204,8 @@ export default async function CharacterProfilePage({
               <KeyValueRow label="outfit_top" value={character.appearance.default_outfit.top} />
               <KeyValueRow label="outfit_bottom" value={character.appearance.default_outfit.bottom} />
               <KeyValueRow label="shoes" value={character.appearance.default_outfit.shoes} />
-            </CardContent>
-          </Card>
+            </div>
+          </CollapsibleCard>
 
           {/* Personality */}
           <PersonalitySection character={character} />
@@ -344,11 +341,8 @@ function PersonalitySection({ character }: { character: CharacterWithImages }) {
   const bigFive = p.big_five;
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Personality</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
+    <CollapsibleCard title="Personality" defaultOpen={false}>
+      <div className="space-y-4">
         {/* Big Five */}
         <div className="space-y-2.5">
           {Object.entries(bigFive).map(([key, val]) => (
@@ -374,8 +368,8 @@ function PersonalitySection({ character }: { character: CharacterWithImages }) {
           <KeyValueRow label="under_pressure" value={p.under_pressure} />
           <KeyValueRow label="attention_span" value={p.attention_span} />
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </CollapsibleCard>
   );
 }
 
@@ -387,11 +381,8 @@ function PreferencesSection({
   const pref = character.preferences;
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Preferences</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
+    <CollapsibleCard title="Preferences" defaultOpen={false}>
+      <div className="space-y-4">
         <PreferenceGroup title="Food" likes={pref.food.likes} dislikes={pref.food.dislikes} />
         <PreferenceGroup
           title="Activities"
@@ -407,7 +398,41 @@ function PreferencesSection({
         {pref.shopping && <KeyValueRow label="shopping_style" value={pref.shopping} />}
 
         {pref.general_tendencies.length > 0 && <KeyValueRow label="general_tendencies" value={pref.general_tendencies.join(" | ")} />}
-      </CardContent>
+      </div>
+    </CollapsibleCard>
+  );
+}
+
+function CollapsibleCard({
+  title,
+  defaultOpen = false,
+  children,
+}: {
+  title: string;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <Card>
+      <details className="group" open={defaultOpen}>
+        <summary className="flex cursor-pointer list-none items-center justify-between px-6 py-4">
+          <CardTitle>{title}</CardTitle>
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="text-muted-foreground transition-transform group-open:rotate-180"
+          >
+            <path d="m6 9 6 6 6-6" />
+          </svg>
+        </summary>
+        <CardContent>{children}</CardContent>
+      </details>
     </Card>
   );
 }

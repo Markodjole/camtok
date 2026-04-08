@@ -1,13 +1,7 @@
--- Add betting_signals JSONB to characters.
--- This is the user-facing, simplified layer: bettable patterns with approximate probabilities.
--- Internal AI uses the full personality data; users see these distilled signals.
--- Wording and context keys are scene-agnostic (pool, street, work, etc.), not one setting only.
+-- Scene-agnostic betting_signals for every character: UI labels derive from keys/strings.
+-- Replaces shopping/office/kitchen-specific context keys and pattern names.
 
-ALTER TABLE characters ADD COLUMN IF NOT EXISTS betting_signals JSONB NOT NULL DEFAULT '{}'::jsonb;
-
--- Seed betting signals for all 8 predefined characters
-
--- Mike: impulsive, flashy, impatient
+-- Original 8 (from revised 00022)
 UPDATE characters SET betting_signals = jsonb_build_object(
   'quick_read', jsonb_build_array(
     'Grabs the first option that pops (80%)',
@@ -39,7 +33,6 @@ UPDATE characters SET betting_signals = jsonb_build_object(
   )
 ) WHERE slug = 'mike';
 
--- Elena: perfectionist, detail-focused, cautious
 UPDATE characters SET betting_signals = jsonb_build_object(
   'quick_read', jsonb_build_array(
     'Reads every detail carefully (90%)',
@@ -71,7 +64,6 @@ UPDATE characters SET betting_signals = jsonb_build_object(
   )
 ) WHERE slug = 'elena';
 
--- Darius: strategic, value-focused, calm
 UPDATE characters SET betting_signals = jsonb_build_object(
   'quick_read', jsonb_build_array(
     'Picks best value (75%)',
@@ -104,7 +96,6 @@ UPDATE characters SET betting_signals = jsonb_build_object(
   )
 ) WHERE slug = 'darius';
 
--- Yuki: shy, aesthetic-driven, retreat tendency
 UPDATE characters SET betting_signals = jsonb_build_object(
   'quick_read', jsonb_build_array(
     'Picks the softest prettiest option (70%)',
@@ -137,7 +128,6 @@ UPDATE characters SET betting_signals = jsonb_build_object(
   )
 ) WHERE slug = 'yuki';
 
--- Frank: old-school, familiar, stubborn
 UPDATE characters SET betting_signals = jsonb_build_object(
   'quick_read', jsonb_build_array(
     'Picks what he knows (85%)',
@@ -170,7 +160,6 @@ UPDATE characters SET betting_signals = jsonb_build_object(
   )
 ) WHERE slug = 'frank';
 
--- Priya: efficient, practical, organized
 UPDATE characters SET betting_signals = jsonb_build_object(
   'quick_read', jsonb_build_array(
     'Picks the most practical option (80%)',
@@ -203,7 +192,6 @@ UPDATE characters SET betting_signals = jsonb_build_object(
   )
 ) WHERE slug = 'priya';
 
--- Carlos: romantic, aesthetic, emotional
 UPDATE characters SET betting_signals = jsonb_build_object(
   'quick_read', jsonb_build_array(
     'Picks the most beautiful option (75%)',
@@ -236,7 +224,6 @@ UPDATE characters SET betting_signals = jsonb_build_object(
   )
 ) WHERE slug = 'carlos';
 
--- Zara: content-driven, trend-obsessed, performative
 UPDATE characters SET betting_signals = jsonb_build_object(
   'quick_read', jsonb_build_array(
     'Picks the most photogenic option (80%)',
@@ -268,3 +255,255 @@ UPDATE characters SET betting_signals = jsonb_build_object(
     'private_or_offline', jsonb_build_object('most_photogenic', 0.50, 'records_while_deciding', 0.30)
   )
 ) WHERE slug = 'zara';
+
+-- Newer seeded characters
+UPDATE characters SET betting_signals = jsonb_build_object(
+  'quick_read', jsonb_build_array(
+    'Evaluates before acting (88%)',
+    'Picks quality understated option (79%)',
+    'Stays composed under pressure (84%)'
+  ),
+  'choice_patterns', jsonb_build_object(
+    'quality_understated_option', 0.79,
+    'data_backed_option', 0.83,
+    'impulse_option', 0.06,
+    'walks_away_if_unconvinced', 0.42
+  ),
+  'behavior_patterns', jsonb_build_object(
+    'evaluates_before_acting', 0.88,
+    'crosses_arms_when_thinking', 0.76,
+    'asks_clarifying_questions', 0.72,
+    'impulse_decision', 0.07
+  ),
+  'exploitable_tendencies', jsonb_build_array(
+    'will not act without sufficient information',
+    'always picks understated over flashy',
+    'rarely makes impulsive moves',
+    'composure can mask indecision on edge cases',
+    'defaults to data over gut feeling'
+  ),
+  'context_modifiers', jsonb_build_object(
+    'structured_high_stakes_context', jsonb_build_object(
+      'evaluates_before_acting', 0.92,
+      'quality_understated_option', 0.85
+    ),
+    'under_time_pressure', jsonb_build_object(
+      'evaluates_before_acting', 0.75,
+      'walks_away_if_unconvinced', 0.55
+    ),
+    'with_others_social', jsonb_build_object(
+      'quality_understated_option', 0.80,
+      'impulse_option', 0.12
+    )
+  )
+) WHERE slug = 'nina';
+
+UPDATE characters SET betting_signals = jsonb_build_object(
+  'quick_read', jsonb_build_array(
+    'Picks the proven reliable option (90%)',
+    'Decides fast, no second-guessing (85%)',
+    'Refuses anything flashy or unproven (82%)'
+  ),
+  'choice_patterns', jsonb_build_object(
+    'proven_reliable_option', 0.90,
+    'cheapest_functional_option', 0.55,
+    'flashy_new_option', 0.03,
+    'walks_away_if_unnecessary', 0.60
+  ),
+  'behavior_patterns', jsonb_build_object(
+    'decides_fast_and_commits', 0.85,
+    'checks_quality_and_durability', 0.82,
+    'follows_routine_path', 0.88,
+    'asks_for_opinions', 0.12
+  ),
+  'exploitable_tendencies', jsonb_build_array(
+    'will never pick the trendy or flashy option',
+    'always defaults to what he already knows works',
+    'makes fast decisions — rarely reconsiders',
+    'structured routine is extremely predictable',
+    'suspicious of anything marketed as new or premium'
+  ),
+  'context_modifiers', jsonb_build_object(
+    'straightforward_purchase_moment', jsonb_build_object(
+      'proven_reliable_option', 0.93,
+      'decides_fast_and_commits', 0.90
+    ),
+    'under_time_pressure', jsonb_build_object(
+      'decides_fast_and_commits', 0.95,
+      'follows_routine_path', 0.92
+    ),
+    'unfamiliar_environment', jsonb_build_object(
+      'follows_routine_path', 0.80,
+      'asks_for_opinions', 0.25
+    )
+  )
+) WHERE slug = 'baxter';
+
+UPDATE characters SET betting_signals = jsonb_build_object(
+  'quick_read', jsonb_build_array(
+    'Picks based on vibes not logic (78%)',
+    'Changes mind at least once (72%)',
+    'Walks away without committing (45%)'
+  ),
+  'choice_patterns', jsonb_build_object(
+    'boldest_color_option', 0.68,
+    'trending_option', 0.72,
+    'practical_option', 0.12,
+    'leaves_empty_handed', 0.45,
+    'buys_then_returns', 0.35
+  ),
+  'behavior_patterns', jsonb_build_object(
+    'explores_by_touch_while_deciding', 0.82,
+    'changes_mind_multiple_times', 0.72,
+    'checks_phone_between_decisions', 0.75,
+    'asks_friend_opinion', 0.65,
+    'last_minute_add_on_near_finish', 0.40
+  ),
+  'exploitable_tendencies', jsonb_build_array(
+    'almost never picks the practical option',
+    'very high chance of changing mind mid-decision',
+    'bold colors and trending items win over everything',
+    'will bail if the last step feels slow or annoying',
+    'heavily influenced by whatever she saw online that day'
+  ),
+  'context_modifiers', jsonb_build_object(
+    'with_friends', jsonb_build_object(
+      'trending_option', 0.80,
+      'asks_friend_opinion', 0.85,
+      'leaves_empty_handed', 0.30
+    ),
+    'alone', jsonb_build_object(
+      'changes_mind_multiple_times', 0.80,
+      'leaves_empty_handed', 0.55,
+      'checks_phone_between_decisions', 0.85
+    ),
+    'high_excitement_limited_deal', jsonb_build_object(
+      'last_minute_add_on_near_finish', 0.60,
+      'boldest_color_option', 0.75,
+      'leaves_empty_handed', 0.20
+    )
+  )
+) WHERE slug = 'lila';
+
+UPDATE characters SET betting_signals = jsonb_build_object(
+  'quick_read', jsonb_build_array(
+    'Picks what he always picked (92%)',
+    'Refuses anything new or trendy (88%)',
+    'Complains but still follows through (70%)'
+  ),
+  'choice_patterns', jsonb_build_object(
+    'same_as_last_40_years', 0.92,
+    'cheapest_familiar_option', 0.65,
+    'new_or_trendy', 0.02,
+    'walks_out_angry', 0.30
+  ),
+  'behavior_patterns', jsonb_build_object(
+    'complains_about_prices', 0.85,
+    'gives_unsolicited_opinion', 0.78,
+    'skips_fine_print', 0.80,
+    'pays_cash_only', 0.90,
+    'asks_where_things_went', 0.72
+  ),
+  'exploitable_tendencies', jsonb_build_array(
+    'will literally never try the new option',
+    'guaranteed to pick the same brand he always has',
+    'complains but buys anyway most of the time',
+    'walks out if inconvenienced even slightly',
+    'cash only — will bail if electronic payment is the only option'
+  ),
+  'context_modifiers', jsonb_build_object(
+    'familiar_setting', jsonb_build_object(
+      'same_as_last_40_years', 0.95,
+      'complains_about_prices', 0.80
+    ),
+    'unfamiliar_setting', jsonb_build_object(
+      'walks_out_angry', 0.55,
+      'asks_where_things_went', 0.85
+    ),
+    'with_young_family_he_softens', jsonb_build_object(
+      'same_as_last_40_years', 0.80,
+      'complains_about_prices', 0.90,
+      'walks_out_angry', 0.10
+    )
+  )
+) WHERE slug = 'earl';
+
+UPDATE characters SET betting_signals = jsonb_build_object(
+  'quick_read', jsonb_build_array(
+    'Protects status in social situations (81%)',
+    'Chooses value+tough look over premium labels (76%)',
+    'Walks away when he feels disrespected (58%)'
+  ),
+  'choice_patterns', jsonb_build_object(
+    'value_tough_option', 0.76,
+    'status_protective_option', 0.81,
+    'premium_showoff_option', 0.14,
+    'walks_away_if_disrespected', 0.58
+  ),
+  'behavior_patterns', jsonb_build_object(
+    'tests_people_first', 0.72,
+    'sarcastic_deflection', 0.67,
+    'slow_deliberate_presence', 0.79,
+    'quick_temper_response', 0.38
+  ),
+  'exploitable_tendencies', jsonb_build_array(
+    'reacts strongly to disrespect cues',
+    'picks familiar value options over unknown premium',
+    'prefers social dominance over compromise',
+    'rarely chooses subtle or polished style'
+  ),
+  'context_modifiers', jsonb_build_object(
+    'with_friends', jsonb_build_object(
+      'status_protective_option', 0.88,
+      'sarcastic_deflection', 0.75
+    ),
+    'alone', jsonb_build_object(
+      'value_tough_option', 0.82,
+      'walks_away_if_disrespected', 0.42
+    ),
+    'under_pressure', jsonb_build_object(
+      'quick_temper_response', 0.52,
+      'status_protective_option', 0.86
+    )
+  )
+) WHERE slug = 'viktor';
+
+UPDATE characters SET betting_signals = jsonb_build_object(
+  'quick_read', jsonb_build_array(
+    'Chooses consistency over speed (82%)',
+    'Keeps his process organized (86%)',
+    'Avoids flashy risky moves (78%)'
+  ),
+  'choice_patterns', jsonb_build_object(
+    'reliable_trusted_option', 0.81,
+    'value_plus_quality_option', 0.77,
+    'flashy_trend_option', 0.09,
+    'refine_before_committing', 0.58
+  ),
+  'behavior_patterns', jsonb_build_object(
+    'verifies_before_next_step', 0.84,
+    'stays_tidy_while_working', 0.79,
+    'slows_down_under_pressure', 0.74,
+    'asks_for_external_help', 0.24
+  ),
+  'exploitable_tendencies', jsonb_build_array(
+    'will sacrifice speed for consistent output',
+    'rarely chooses high-variance shortcuts',
+    'prefers controlled sequences over improvisation',
+    'defaults to quality plus value, not hype'
+  ),
+  'context_modifiers', jsonb_build_object(
+    'familiar_setting', jsonb_build_object(
+      'reliable_trusted_option', 0.86,
+      'verifies_before_next_step', 0.88
+    ),
+    'time_pressure', jsonb_build_object(
+      'slows_down_under_pressure', 0.79,
+      'flashy_trend_option', 0.05
+    ),
+    'with_others_nearby', jsonb_build_object(
+      'asks_for_external_help', 0.30,
+      'stays_tidy_while_working', 0.75
+    )
+  )
+) WHERE slug = 'malik';
