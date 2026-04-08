@@ -53,7 +53,7 @@ export default async function CharacterProfilePage({
         {/* Back button */}
         <div className="sticky top-0 z-10 bg-background/80 backdrop-blur-sm px-4 py-2">
           <Link
-            href="/"
+            href="/characters"
             className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
           >
             <svg
@@ -98,6 +98,37 @@ export default async function CharacterProfilePage({
               </p>
             </div>
           </div>
+
+          {/* All reference images */}
+          {character.reference_images.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle>All Reference Images</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
+                  {character.reference_images.map((img, idx) => {
+                    const src = getMediaUrl(img.image_storage_path);
+                    return (
+                      <div
+                        key={`${img.image_storage_path}-${idx}`}
+                        className="relative h-28 w-20 shrink-0 overflow-hidden rounded-md border border-border bg-secondary"
+                      >
+                        {src ? (
+                          <Image
+                            src={src}
+                            alt={`${character.name} reference ${idx + 1}`}
+                            fill
+                            className="object-cover"
+                          />
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
           {/* Stats bar */}
           <div className="grid grid-cols-3 gap-2">
