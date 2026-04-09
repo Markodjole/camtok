@@ -3,7 +3,7 @@
 export const dynamic = "force-dynamic";
 
 
-import { Suspense, useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Upload, Loader2, ImageIcon, Film, Trash2, Users, ChevronRight, Plus, ArrowLeft, X } from "lucide-react";
 import { CharacterFieldWithSuggestions } from "@/components/create/character-field-suggestions";
@@ -37,6 +37,11 @@ import {
 } from "../../actions/character-clips";
 import { getCharacters } from "@/actions/characters";
 import type { CharacterWithImages } from "@/lib/characters/types";
+import {
+  cliffhangersForLocationAndDescription,
+  descriptionsForLocation,
+  listLocations,
+} from "@/lib/characters/clip-suggestions";
 import { createBrowserClient, getUserQueued } from "@/lib/supabase/client";
 import { cn, getMediaUrl } from "@/lib/utils";
 
@@ -322,6 +327,39 @@ function CreatePageClient() {
 
   const selectedPattern = patterns.find((p) => p.id === selectedPatternId);
   const selectedCharacter = characters.find((c) => c.id === selectedCharacterId);
+  const clipBundle = selectedCharacter?.clip_suggestions;
+  const locationIdeas = useMemo(
+    () => listLocations(clipBundle ?? { scenes: [] }),
+    [clipBundle],
+  );
+  const actionIdeas = useMemo(
+    () => descriptionsForLocation(clipBundle ?? { scenes: [] }, locationText),
+    [clipBundle, locationText],
+  );
+  const cliffIdeas = useMemo(
+    () =>
+      cliffhangersForLocationAndDescription(
+        clipBundle ?? { scenes: [] },
+        locationText,
+        actionText,
+      ),
+    [clipBundle, locationText, actionText],
+  );
+  const hasCuratedScenes = (clipBundle?.scenes?.length ?? 0) > 0;
+  const actionIdeasEmptyHint =
+    hasCuratedScenes && actionIdeas.length === 0
+      ? !locationText.trim()
+        ? "Pick a setting from the location ideas first (tap a row to paste it exactly). Then open this field again for movements that belong in that place."
+        : "No curated lines match this location text. Choose a location from the list, or write your own movement."
+      : undefined;
+  const cliffIdeasEmptyHint =
+    hasCuratedScenes && cliffIdeas.length === 0
+      ? !locationText.trim()
+        ? "Pick a location from ideas first, then a movement, then ending beats that fit that pair."
+        : actionIdeas.length > 0 && actionText.trim() && !actionIdeas.includes(actionText.trim())
+          ? "For curated ending beats, paste a movement line from this location’s list exactly (or write your own ending)."
+          : "Pick a location and movement from the paired ideas (exact text), or write your own ending beat."
+      : undefined;
   const isCustomMode = !!customImagePath && customAnalyzed;
   const hasSource = mode === "character"
     ? !!selectedCharacterId
@@ -1024,15 +1062,15 @@ function CreatePageClient() {
                         hint={
                           <p className="text-[11px] text-muted-foreground">
                             Sent only as setting — describe movement below so nothing is duplicated or cut off.
-                            Focus here for setting ideas tuned to {selectedCharacter.name}.
+                            Each location here unlocks matching scene lines and cliffhangers for {selectedCharacter.name}.
                           </p>
                         }
                         placeholder="e.g. rooftop bar, park bench, city street"
                         value={locationText}
                         onChange={setLocationText}
                         maxLength={LOCATION_TEXT_MAX}
-                        suggestions={selectedCharacter.clip_suggestions?.locations ?? []}
-                        suggestionsTitle={`Settings for ${selectedCharacter.name} (Kling-friendly, readable pacing)`}
+                        suggestions={locationIdeas}
+                        suggestionsTitle={`Settings for ${selectedCharacter.name} — each row is paired with specific scenes`}
                       />
 
                       <button
@@ -1280,8 +1318,8 @@ function CreatePageClient() {
                       hint={
                         <p className="text-xs text-muted-foreground leading-relaxed">
                           Describe what happens around {selectedCharacter.name} (place, people, tension). How they
-                          move and react comes from their profile — not a new role you invent. Focus the field for
-                          scene ideas: one or two clear motions per beat, natural speed for short video.
+                          move and react comes from their profile — not a new role you invent. Ideas below only
+                          appear after your location text matches a row from the location list (same wording).
                         </p>
                       }
                       placeholder={actionPlaceholder}
@@ -1292,8 +1330,9 @@ function CreatePageClient() {
                       multiline
                       rows={5}
                       textAreaClassName="min-h-[120px]"
-                      suggestions={selectedCharacter.clip_suggestions?.actions ?? []}
-                      suggestionsTitle={`Scene ideas for ${selectedCharacter.name}`}
+                      suggestions={actionIdeas}
+                      suggestionsTitle={`Scenes for this location — ${selectedCharacter.name}`}
+                      emptyMessage={actionIdeasEmptyHint}
                     />
                     <CharacterFieldWithSuggestions
                       id="tensionText"
@@ -1311,8 +1350,9 @@ function CreatePageClient() {
                       multiline
                       rows={3}
                       textAreaClassName="min-h-[72px]"
-                      suggestions={selectedCharacter.clip_suggestions?.cliffhangers ?? []}
-                      suggestionsTitle={`Dilemma & tension beats for ${selectedCharacter.name}`}
+                      suggestions={cliffIdeas}
+                      suggestionsTitle={`Ending beats for this location + movement — ${selectedCharacter.name}`}
+                      emptyMessage={cliffIdeasEmptyHint}
                     />
                   </>
                 ) : (

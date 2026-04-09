@@ -17,6 +17,8 @@ type Props = {
   suggestions: string[];
   /** Shown above the suggestion list (e.g. "Settings tailored for Nina") */
   suggestionsTitle: string;
+  /** When focused but `suggestions` is empty, show this hint (e.g. pick location first). */
+  emptyMessage?: string;
   multiline?: boolean;
   rows?: number;
   textAreaClassName?: string;
@@ -33,6 +35,7 @@ export function CharacterFieldWithSuggestions({
   disabled,
   suggestions,
   suggestionsTitle,
+  emptyMessage,
   multiline,
   rows = 4,
   textAreaClassName,
@@ -47,6 +50,7 @@ export function CharacterFieldWithSuggestions({
   }, []);
 
   const hasSuggestions = suggestions.length > 0;
+  const showPanel = hasSuggestions || !!emptyMessage;
 
   const cancelBlurClose = () => {
     if (blurTimer.current) {
@@ -87,7 +91,7 @@ export function CharacterFieldWithSuggestions({
             placeholder={placeholder}
             onFocus={() => {
               cancelBlurClose();
-              if (hasSuggestions) setOpen(true);
+              if (showPanel) setOpen(true);
             }}
             onBlur={scheduleClose}
             className={cn(
@@ -106,13 +110,13 @@ export function CharacterFieldWithSuggestions({
             placeholder={placeholder}
             onFocus={() => {
               cancelBlurClose();
-              if (hasSuggestions) setOpen(true);
+              if (showPanel) setOpen(true);
             }}
             onBlur={scheduleClose}
           />
         )}
 
-        {open && hasSuggestions && !disabled ? (
+        {open && showPanel && !disabled ? (
           <div
             className="absolute left-0 right-0 top-full z-[80] mt-1 overflow-hidden rounded-lg border border-border bg-popover shadow-lg"
             onMouseDown={cancelBlurClose}
@@ -120,26 +124,30 @@ export function CharacterFieldWithSuggestions({
             <p className="border-b border-border bg-muted/50 px-3 py-2 text-[11px] font-medium text-muted-foreground">
               {suggestionsTitle}
             </p>
-            <ScrollArea className="h-[min(14rem,40vh)]">
-              <ul className="p-1.5" role="listbox">
-                {suggestions.map((s, i) => (
-                  <li key={i}>
-                    <button
-                      type="button"
-                      role="option"
-                      title={s}
-                      onMouseDown={(e) => {
-                        e.preventDefault();
-                        handlePick(s);
-                      }}
-                      className="w-full rounded-md px-2.5 py-2 text-left text-xs leading-snug text-foreground transition-colors hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    >
-                      <span className="line-clamp-4">{s}</span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </ScrollArea>
+            {hasSuggestions ? (
+              <ScrollArea className="h-[min(14rem,40vh)]">
+                <ul className="p-1.5" role="listbox">
+                  {suggestions.map((s, i) => (
+                    <li key={i}>
+                      <button
+                        type="button"
+                        role="option"
+                        title={s}
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          handlePick(s);
+                        }}
+                        className="w-full rounded-md px-2.5 py-2 text-left text-xs leading-snug text-foreground transition-colors hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      >
+                        <span className="line-clamp-4">{s}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </ScrollArea>
+            ) : (
+              <p className="px-3 py-3 text-xs leading-relaxed text-muted-foreground">{emptyMessage}</p>
+            )}
           </div>
         ) : null}
       </div>
