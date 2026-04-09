@@ -111,6 +111,8 @@ function CreatePageClient() {
   // Review state
   const [reviewMode, setReviewMode] = useState(false);
   const [reviewVideoPath, setReviewVideoPath] = useState<string | null>(null);
+  /** Fal CDN URL when Kling succeeded but our download/upload failed (hydrated on post). */
+  const [reviewFalVideoUrl, setReviewFalVideoUrl] = useState<string | null>(null);
   const [reviewJobId, setReviewJobId] = useState<string | null>(null);
   const [reviewImagePath, setReviewImagePath] = useState<string | null>(null);
   const [reviewSummary, setReviewSummary] = useState<string | null>(null);
@@ -199,9 +201,10 @@ function CreatePageClient() {
     getPendingReviewDraft().then((res) => {
       if (pendingDraftSeqRef.current !== seqAtStart) return;
       const d = res.data;
-      if (!d || !d.reviewVideoPath || !d.reviewJobId) return;
+      if (!d?.reviewJobId || (!d.reviewVideoPath && !d.reviewFalVideoUrl)) return;
       setReviewMode(true);
-      setReviewVideoPath(d.reviewVideoPath);
+      setReviewVideoPath(d.reviewVideoPath ?? null);
+      setReviewFalVideoUrl(d.reviewFalVideoUrl ?? null);
       setReviewJobId(d.reviewJobId);
       setReviewImagePath(d.reviewImagePath ?? null);
       setReviewSummary(d.reviewSummary ?? null);
@@ -211,7 +214,8 @@ function CreatePageClient() {
         window.localStorage.setItem(
           CREATE_REVIEW_CACHE_KEY,
           JSON.stringify({
-            reviewVideoPath: d.reviewVideoPath,
+            reviewVideoPath: d.reviewVideoPath ?? null,
+            reviewFalVideoUrl: d.reviewFalVideoUrl ?? null,
             reviewJobId: d.reviewJobId,
             reviewImagePath: d.reviewImagePath,
             reviewSummary: d.reviewSummary,
@@ -229,16 +233,18 @@ function CreatePageClient() {
       const raw = window.localStorage.getItem(CREATE_REVIEW_CACHE_KEY);
       if (!raw) return;
       const cached = JSON.parse(raw) as {
-        reviewVideoPath?: string;
+        reviewVideoPath?: string | null;
+        reviewFalVideoUrl?: string | null;
         reviewJobId?: string;
         reviewImagePath?: string;
         reviewSummary?: string;
         reviewLlmGen?: any;
         reviewCharacterId?: string;
       };
-      if (cached.reviewVideoPath && cached.reviewJobId) {
+      if (cached.reviewJobId && (cached.reviewVideoPath || cached.reviewFalVideoUrl)) {
         setReviewMode(true);
-        setReviewVideoPath(cached.reviewVideoPath);
+        setReviewVideoPath(cached.reviewVideoPath ?? null);
+        setReviewFalVideoUrl(cached.reviewFalVideoUrl ?? null);
         setReviewJobId(cached.reviewJobId);
         setReviewImagePath(cached.reviewImagePath ?? null);
         setReviewSummary(cached.reviewSummary ?? null);
@@ -437,6 +443,7 @@ function CreatePageClient() {
     // Starting a fresh generation should not be overridden by an older cached review draft.
     setReviewMode(false);
     setReviewVideoPath(null);
+    setReviewFalVideoUrl(null);
     setReviewJobId(null);
     setReviewImagePath(null);
     setReviewSummary(null);
@@ -491,7 +498,7 @@ function CreatePageClient() {
       }
 
       const d = res.data;
-      if (!d?.jobId || !d?.videoStoragePath) {
+      if (!d?.jobId || (!d?.videoStoragePath && !d?.falVideoUrl)) {
         stopFakeProgress();
         toast({
           title: "Generation incomplete",
@@ -510,7 +517,8 @@ function CreatePageClient() {
       setErrorMsg(null);
 
       setReviewMode(true);
-      setReviewVideoPath(d.videoStoragePath);
+      setReviewVideoPath(d.videoStoragePath ?? null);
+      setReviewFalVideoUrl(d.falVideoUrl ?? null);
       setReviewJobId(d.jobId);
       setReviewImagePath(d.imageStoragePath);
       setReviewSummary(d.sceneSummary);
@@ -520,7 +528,8 @@ function CreatePageClient() {
         window.localStorage.setItem(
           CREATE_REVIEW_CACHE_KEY,
           JSON.stringify({
-            reviewVideoPath: d.videoStoragePath,
+            reviewVideoPath: d.videoStoragePath ?? null,
+            reviewFalVideoUrl: d.falVideoUrl ?? null,
             reviewJobId: d.jobId,
             reviewImagePath: d.imageStoragePath,
             reviewSummary: d.sceneSummary,
@@ -534,6 +543,11 @@ function CreatePageClient() {
           title: `Adapted for ${selectedCharacter?.name ?? "character"}`,
           description: d.characterAdaptation.explanation || d.characterAdaptation.warnings?.[0] || "Input was adjusted to fit character personality",
           duration: 8000,
+        });
+      } else if (d.falVideoUrl && !d.videoStoragePath) {
+        toast({
+          title: "Video ready",
+          description: "Preview below; posting saves a copy to your library.",
         });
       } else {
         toast({ title: "Video ready!", description: "Review your clip before posting" });
@@ -557,14 +571,15 @@ function CreatePageClient() {
   }
 
   async function handlePublish() {
-    if (!reviewJobId || !reviewVideoPath) return;
+    if (!reviewJobId || (!reviewVideoPath && !reviewFalVideoUrl)) return;
     setPublishing(true);
     try {
       let res: { error?: string; data?: any };
       if (reviewCharacterId) {
         res = await publishCharacterDraft({
           jobId: reviewJobId!,
-          videoStoragePath: reviewVideoPath!,
+          videoStoragePath: reviewVideoPath || "",
+          falVideoUrl: reviewFalVideoUrl,
           imageStoragePath: reviewImagePath || "",
           sceneSummary: reviewSummary || "",
           llmGeneration: reviewLlmGen,
@@ -744,9 +759,13 @@ function CreatePageClient() {
     ? tensionExamples[selectedPattern.slug] || "e.g. frozen mid-action, about to decide"
     : "e.g. hand hovering, about to choose";
 
-  if (!running && reviewMode && reviewVideoPath) {
-    const videoUrl = getMediaUrl(reviewVideoPath);
+  if (!running && reviewMode && (reviewVideoPath || reviewFalVideoUrl)) {
+    const videoPlayUrl =
+      reviewVideoPath != null && reviewVideoPath !== ""
+        ? getMediaUrl(reviewVideoPath) ?? reviewFalVideoUrl
+        : reviewFalVideoUrl;
     const isMockClip = reviewLlmGen?.mock_clip === true;
+    const falOnly = !!reviewFalVideoUrl && !reviewVideoPath;
     return (
       <AppShell>
         <div className="flex h-full flex-col overflow-y-auto no-scrollbar">
@@ -764,11 +783,16 @@ function CreatePageClient() {
                     Local mock clip (MEDIA_PROVIDER=mock): Fal / Kling was skipped. Remove mock from env to generate real video.
                   </p>
                 ) : null}
-                {videoUrl && (
+                {falOnly ? (
+                  <p className="rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-xs text-foreground/90">
+                    Preview from the video provider. When you post, we save a copy to your library (same clip).
+                  </p>
+                ) : null}
+                {videoPlayUrl && (
                   <div className="overflow-hidden rounded-xl border border-border bg-black">
                     <video
-                      key={reviewVideoPath}
-                      src={videoUrl}
+                      key={`${reviewVideoPath ?? ""}|${reviewFalVideoUrl ?? ""}`}
+                      src={videoPlayUrl}
                       controls
                       autoPlay
                       loop
@@ -829,7 +853,9 @@ function CreatePageClient() {
                     variant="outline"
                     size="lg"
                     onClick={handleImprove}
-                    disabled={improving || publishing || !improveFeedback.trim()}
+                    disabled={
+                      improving || publishing || !improveFeedback.trim() || !reviewVideoPath
+                    }
                   >
                     {improving ? (
                       <>
@@ -856,13 +882,14 @@ function CreatePageClient() {
                     size="sm"
                     className="flex-1 text-muted-foreground"
                     onClick={async () => {
-                      if (reviewJobId && reviewVideoPath) {
+                      if (reviewJobId) {
                         setDeleting(true);
-                        await deleteDraft(reviewJobId, reviewVideoPath).catch(() => {});
+                        await deleteDraft(reviewJobId, reviewVideoPath || "").catch(() => {});
                         setDeleting(false);
                       }
                       setReviewMode(false);
                       setReviewVideoPath(null);
+                      setReviewFalVideoUrl(null);
                       setReviewJobId(null);
                       setReviewImagePath(null);
                       setReviewSummary(null);
@@ -882,10 +909,10 @@ function CreatePageClient() {
                     size="sm"
                     className="flex-1 text-destructive hover:text-destructive hover:bg-destructive/10"
                     onClick={async () => {
-                      if (!reviewJobId || !reviewVideoPath) return;
+                      if (!reviewJobId) return;
                       setDeleting(true);
                       try {
-                        await deleteDraft(reviewJobId, reviewVideoPath);
+                        await deleteDraft(reviewJobId, reviewVideoPath || "");
                       } catch {}
                       if (typeof window !== "undefined") {
                         window.localStorage.removeItem(CREATE_REVIEW_CACHE_KEY);

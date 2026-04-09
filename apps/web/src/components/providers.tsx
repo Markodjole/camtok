@@ -63,6 +63,36 @@ function AuthSync() {
   return null;
 }
 
+function OrientationLock() {
+  useEffect(() => {
+    const tryLock = async () => {
+      try {
+        const orientation = screen.orientation as ScreenOrientation & {
+          lock?: (orientation: "portrait" | "portrait-primary" | "portrait-secondary") => Promise<void>;
+        };
+        if (typeof orientation?.lock === "function") {
+          await orientation.lock("portrait");
+        }
+      } catch {
+        // Some browsers require fullscreen/PWA context or don't support lock.
+      }
+    };
+
+    void tryLock();
+    const onChange = () => void tryLock();
+    window.addEventListener("orientationchange", onChange);
+    window.addEventListener("focus", onChange);
+    document.addEventListener("visibilitychange", onChange);
+    return () => {
+      window.removeEventListener("orientationchange", onChange);
+      window.removeEventListener("focus", onChange);
+      document.removeEventListener("visibilitychange", onChange);
+    };
+  }, []);
+
+  return null;
+}
+
 export function Providers({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(
     () =>
@@ -81,6 +111,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
     <QueryClientProvider client={queryClient}>
       <ToastProvider>
         <AuthSync />
+        <OrientationLock />
         {children}
       </ToastProvider>
     </QueryClientProvider>

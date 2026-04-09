@@ -443,6 +443,7 @@ ABSOLUTELY FORBIDDEN unless user explicitly asks for speech.
 No murmurs, "hmm", grunts, sighs, whispers, or ANY sound.
 
 ===== MOVEMENT FIDELITY & PACING =====
+- Never use time-lapse, sped-up, or hyperactive motion; each gesture must read clearly on screen at normal speed.
 - MAX 1-2 ACTIONS PER 2-SECOND SCENE. Kling needs time to render each action.
   If the user asks for 5 things, spread them across all 3 scenes or cut the less important ones.
   BAD: "He picks up shoes, stands up, tests side steps, swaps to second pair, stands tall" (5 actions in 2s!)
@@ -460,6 +461,7 @@ The user may specify a Mood and/or Camera style. If provided, use them:
 
 ===== SCENE STRUCTURE =====
 You MUST decide the total duration: 6, 8, or 10 seconds. Return "total_duration_seconds" in JSON.
+Prefer 8 or 10 seconds total so motion is readable; use 6s only for the simplest single-beat setup.
 - Simple setup (1 action + cliffhanger): 6s → 3 scenes × 2s
 - Medium setup (2 actions + cliffhanger): 8s → scene_1=3s, scene_2=3s, scene_3=2s
 - Complex setup (3+ actions + cliffhanger): 10s → scene_1=3s, scene_2=4s, scene_3=3s
@@ -471,7 +473,7 @@ Set each scene's "duration" field accordingly.
 - This is Part 1 of a two-part video. NEVER show the outcome or resolution. The clip MUST end with a visible dilemma.
 
 ===== NEGATIVE PROMPT =====
-Include: "outcome revealed, result shown, action completed, decision finished, sudden jump, jerky motion, talking, speaking, murmuring, whispering"
+Include: "outcome revealed, result shown, action completed, decision finished, sudden jump, jerky motion, fast motion, time-lapse, sped up, face morphing, wrong identity, talking, speaking, murmuring, whispering"
 Do NOT put items from the user's plot in the negative prompt.
 
 ===== OUTPUT FORMAT =====
@@ -518,7 +520,7 @@ Return JSON:
       });
     }
     const hardNegative =
-      "outcome revealed, result shown, action completed, decision finished, sudden jump, jerky motion, talking, speaking, murmuring, whispering";
+      "outcome revealed, result shown, action completed, decision finished, sudden jump, jerky motion, fast motion, time-lapse, sped up, motion blur streaks, face morphing, wrong facial identity, inconsistent character appearance, talking, speaking, murmuring, whispering";
     const spoken =
       typeof parsed.spoken_dialogue === "string"
         ? parsed.spoken_dialogue.trim().slice(0, 120)
@@ -554,13 +556,14 @@ function buildFallbackScenes(
     scene_summary: `${character.name} — ${userPlotChange}`,
     spoken_dialogue: "",
     scenes: [
-      { prompt: `${identity}. ${userPlotChange}. The action begins naturally.`, duration: "2" },
-      { prompt: `Continuing smoothly. The moment develops.`, duration: "2" },
-      { prompt: `Movement slows. Stillness. Camera drifts in slowly. No resolution.`, duration: "2" },
+      { prompt: `${identity}. In ${baseScene.environment}. ${userPlotChange}. The action begins slowly and naturally.`, duration: "3" },
+      { prompt: `Continuing smoothly at a calm pace. The moment develops with clear, readable motion.`, duration: "3" },
+      { prompt: `Movement slows to stillness. Camera drifts in slowly. No resolution.`, duration: "2" },
     ],
     negative_prompt:
-      "outcome revealed, result shown, action completed, decision finished, sudden jump, jerky motion, talking, speaking",
+      "outcome revealed, result shown, action completed, decision finished, sudden jump, jerky motion, fast motion, time-lapse, sped up, talking, speaking",
     outcomes: [],
+    total_duration_seconds: 8,
   };
 }
 
@@ -580,7 +583,7 @@ async function composeSceneFrame(opts: {
   const prompt = [
     `Same person, exact same face and body, now standing in: ${baseScene.environment}.`,
     scenePrompt,
-    `${baseScene.camera}. Keep the person identical, only change the background and surroundings.`,
+    `${baseScene.camera}. Keep the person identical, only change the background and surroundings. Natural motion speed, not sped up.`,
   ].join(" ");
 
   logLine("compose", "scene_frame_prompt", { prompt: prompt.slice(0, 300) });
@@ -693,6 +696,8 @@ async function runCharacterGeneration(opts: {
   if (jobErr || !job) return { error: "Failed to create generation job" };
 
   const jobId = String((job as any).id);
+  let falRecoverVideoUrl: string | undefined;
+  let klingRequestId: string | null = null;
   try {
     const startedAt = Date.now();
 
@@ -719,7 +724,7 @@ async function runCharacterGeneration(opts: {
         })),
         shot_type: "customize",
         negative_prompt: enhanced.negative_prompt,
-        duration: String(Math.min(10, Math.max(5, enhanced.total_duration_seconds || 6))),
+        duration: String(Math.min(10, Math.max(5, enhanced.total_duration_seconds || 8))),
         generate_audio: true,
       },
       logs: true,
@@ -727,8 +732,11 @@ async function runCharacterGeneration(opts: {
         logLine(jobId, "video.queue", { status: u?.status ?? "unknown" }),
     });
 
+    klingRequestId = ((video as any)?.requestId as string | undefined) ?? null;
+
     const videoUrl = (video as any)?.data?.video?.url as string | undefined;
     if (!videoUrl) throw new Error("Kling video missing url");
+    falRecoverVideoUrl = videoUrl;
     logLine(jobId, "video.done", {
       requestId: (video as any)?.requestId ?? null,
       ms: Date.now() - startedAt,
@@ -792,7 +800,54 @@ async function runCharacterGeneration(opts: {
     };
   } catch (e: any) {
     const message = formatFalError(e) || e?.message || "Generation failed";
-    logLine(jobId, "failed", { message });
+    logLine(jobId, "failed", { message, falRecoverVideoUrl: !!falRecoverVideoUrl });
+
+    if (falRecoverVideoUrl) {
+      const { data: jobSnap } = await serviceClient
+        .from("clip_generation_jobs")
+        .select("llm_generation_json")
+        .eq("id", (job as any).id)
+        .single();
+      const prevLlm = (jobSnap?.llm_generation_json as Record<string, unknown> | null) ?? {};
+      const mergedLlm = {
+        ...prevLlm,
+        fal_external_video_url: falRecoverVideoUrl,
+      };
+      await serviceClient
+        .from("clip_generation_jobs")
+        .update({
+          status: "review",
+          video_storage_path: null,
+          video_request_id: klingRequestId,
+          error_message: message.slice(0, 500),
+          llm_generation_json: mergedLlm,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", (job as any).id);
+
+      await serviceClient.from("notifications").insert({
+        user_id: user.id,
+        type: "video_review_ready",
+        title: "Video ready for review",
+        body: `Your ${character.name} video is ready. Tap to review, improve, or post.`,
+        link: "/create",
+        read: false,
+      });
+
+      logLine(jobId, "ready_for_review_external_only", { reason: message.slice(0, 120) });
+      return {
+        data: {
+          jobId,
+          videoStoragePath: null as string | null,
+          falVideoUrl: falRecoverVideoUrl,
+          imageStoragePath,
+          sceneSummary: enhanced.scene_summary,
+          llmGeneration: mergedLlm as any,
+          characterId: character.id,
+        },
+      };
+    }
+
     await serviceClient
       .from("clip_generation_jobs")
       .update({
@@ -1070,7 +1125,10 @@ export async function generateFromCharacter(input: {
 
 export async function publishCharacterDraft(input: {
   jobId: string;
+  /** Set when the clip is already in Supabase media bucket */
   videoStoragePath: string;
+  /** When download/upload failed after Kling, client passes Fal CDN URL until we persist */
+  falVideoUrl?: string | null;
   imageStoragePath: string;
   sceneSummary: string;
   llmGeneration: any;
@@ -1085,6 +1143,49 @@ export async function publishCharacterDraft(input: {
 
     const serviceClient = await createServiceClient();
     const now = new Date().toISOString();
+
+    const { data: jobRow, error: jobLoadErr } = await serviceClient
+      .from("clip_generation_jobs")
+      .select("user_id, llm_generation_json, video_storage_path")
+      .eq("id", input.jobId)
+      .single();
+    if (jobLoadErr || !jobRow || jobRow.user_id !== user.id) {
+      return { error: "Job not found" };
+    }
+
+    let finalVideoPath =
+      (input.videoStoragePath && input.videoStoragePath.trim()) ||
+      (jobRow.video_storage_path as string | null) ||
+      "";
+    const llmFromDb = (jobRow.llm_generation_json as Record<string, unknown> | null) ?? {};
+    const falFromInput =
+      typeof input.falVideoUrl === "string" && input.falVideoUrl.trim()
+        ? input.falVideoUrl.trim()
+        : null;
+    const falFromJob =
+      typeof llmFromDb.fal_external_video_url === "string" && llmFromDb.fal_external_video_url.trim()
+        ? (llmFromDb.fal_external_video_url as string).trim()
+        : null;
+    const falUrl = falFromInput || falFromJob;
+
+    if (!finalVideoPath && falUrl) {
+      logLine(input.jobId, "publish.hydrate_from_fal", { urlPrefix: falUrl.slice(0, 64) });
+      const videoBytes = await downloadToUint8Array(falUrl);
+      finalVideoPath = `clips/${user.id}/${input.jobId}.mp4`;
+      await uploadBytesToMedia(finalVideoPath, videoBytes, "video/mp4");
+      const cleanedLlm = { ...llmFromDb };
+      delete cleanedLlm.fal_external_video_url;
+      await serviceClient
+        .from("clip_generation_jobs")
+        .update({
+          video_storage_path: finalVideoPath,
+          llm_generation_json: cleanedLlm,
+          updated_at: now,
+        })
+        .eq("id", input.jobId);
+    }
+
+    if (!finalVideoPath) return { error: "No video file for this draft" };
 
     const { data: story, error: storyErr } = await serviceClient
       .from("stories")
@@ -1110,7 +1211,7 @@ export async function publishCharacterDraft(input: {
         character_id: input.characterId,
         source_type: "image_to_video",
         status: "betting_open",
-        video_storage_path: input.videoStoragePath,
+        video_storage_path: finalVideoPath,
         poster_storage_path: input.imageStoragePath,
         first_frame_storage_path: input.imageStoragePath,
         llm_generation_json: input.llmGeneration,

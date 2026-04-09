@@ -4,6 +4,7 @@
   "description": "Watch. Predict. Win.",
   "start_url": "/feed",
   "display": "standalone",
+  "orientation": "portrait",
   "background_color": "#0d0d0d",
   "theme_color": "#7c3aed",
   "icons": [

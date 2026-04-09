@@ -15,9 +15,30 @@ function logLine(jobId: string, phase: string, extra?: Record<string, unknown>) 
 }
 
 export async function downloadToUint8Array(url: string) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Failed to download asset: ${res.status}`);
-  return new Uint8Array(await res.arrayBuffer());
+  const attempts = 5;
+  let lastErr: unknown = null;
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      const res = await fetch(url, {
+        method: "GET",
+        cache: "no-store",
+      });
+      if (!res.ok) throw new Error(`Failed to download asset: HTTP ${res.status}`);
+      return new Uint8Array(await res.arrayBuffer());
+    } catch (err) {
+      lastErr = err;
+      // Short exponential backoff for transient CDN/object availability race.
+      if (i < attempts - 1) {
+        const waitMs = 300 * Math.pow(2, i);
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+      }
+    }
+  }
+
+  const cause =
+    (lastErr as { message?: string } | null)?.message ??
+    String(lastErr ?? "unknown");
+  throw new Error(`Unable to fetch generated media file after ${attempts} attempts: ${cause}`);
 }
 
 export async function uploadBytesToMedia(storagePath: string, bytes: Uint8Array, contentType: string) {
@@ -867,25 +888,37 @@ export async function getPendingReviewDraft() {
   if (!user) return { data: null };
 
   const serviceClient = await createServiceClient();
-  const { data, error } = await serviceClient
+  const { data: rows, error } = await serviceClient
     .from("clip_generation_jobs")
     .select("id, status, video_storage_path, llm_generation_json, updated_at, generation_mode")
     .eq("user_id", user.id)
     .in("generation_mode", ["image_pattern", "character"])
     .eq("status", "review")
     .order("updated_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .limit(20);
 
-  if (error || !data || !data.video_storage_path) return { data: null };
+  if (error || !rows?.length) return { data: null };
+
+  const data = rows.find((r) => {
+    if (r.video_storage_path) return true;
+    const llm = (r.llm_generation_json as Record<string, unknown> | null) ?? {};
+    const u = llm.fal_external_video_url;
+    return typeof u === "string" && u.trim().length > 0;
+  });
+  if (!data) return { data: null };
 
   const llm = (data.llm_generation_json as Record<string, unknown> | null) ?? {};
   const reviewCharacterId =
     typeof llm.character_id === "string" && llm.character_id ? llm.character_id : null;
+  const falUrl =
+    typeof llm.fal_external_video_url === "string" && llm.fal_external_video_url.trim()
+      ? llm.fal_external_video_url.trim()
+      : null;
   return {
     data: {
       reviewJobId: String(data.id),
-      reviewVideoPath: data.video_storage_path as string,
+      reviewVideoPath: (data.video_storage_path as string | null) ?? null,
+      reviewFalVideoUrl: falUrl,
       reviewImagePath: (llm.image_storage_path as string | undefined) ?? null,
       reviewSummary: (llm.scene_summary as string | undefined) ?? null,
       reviewLlmGen: data.llm_generation_json,
