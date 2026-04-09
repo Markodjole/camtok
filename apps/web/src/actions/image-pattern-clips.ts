@@ -869,17 +869,19 @@ export async function getPendingReviewDraft() {
   const serviceClient = await createServiceClient();
   const { data, error } = await serviceClient
     .from("clip_generation_jobs")
-    .select("id, status, video_storage_path, llm_generation_json, updated_at")
+    .select("id, status, video_storage_path, llm_generation_json, updated_at, generation_mode")
     .eq("user_id", user.id)
-    .eq("generation_mode", "image_pattern")
+    .in("generation_mode", ["image_pattern", "character"])
     .eq("status", "review")
     .order("updated_at", { ascending: false })
     .limit(1)
-    .single();
+    .maybeSingle();
 
   if (error || !data || !data.video_storage_path) return { data: null };
 
-  const llm = (data.llm_generation_json as Record<string, any> | null) ?? {};
+  const llm = (data.llm_generation_json as Record<string, unknown> | null) ?? {};
+  const reviewCharacterId =
+    typeof llm.character_id === "string" && llm.character_id ? llm.character_id : null;
   return {
     data: {
       reviewJobId: String(data.id),
@@ -887,6 +889,7 @@ export async function getPendingReviewDraft() {
       reviewImagePath: (llm.image_storage_path as string | undefined) ?? null,
       reviewSummary: (llm.scene_summary as string | undefined) ?? null,
       reviewLlmGen: data.llm_generation_json,
+      reviewCharacterId,
     },
   };
 }

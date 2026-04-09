@@ -1,6 +1,10 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { execFile } from "child_process";
+import { writeFile, readFile, unlink, mkdtemp } from "fs/promises";
+import { tmpdir } from "os";
+import { join } from "path";
 import { falLongJobOptions, getFalClient } from "@/lib/fal/server";
 import { createServerClient, createServiceClient } from "@/lib/supabase/server";
 import { getCharacterById } from "./characters";
@@ -30,6 +34,67 @@ function logLine(jobId: string, phase: string, extra?: Record<string, unknown>) 
 function isFalForbiddenError(err: unknown): boolean {
   const e = err as { status?: number; message?: string } | undefined;
   return e?.status === 403 || /forbidden/i.test(String(e?.message ?? ""));
+}
+
+/** Next.js Flight can serialize `undefined` as the literal string "$undefined". */
+function sanitizeOptionalString(v: string | undefined): string | undefined {
+  if (v == null || v === "" || v === "$undefined" || v === "undefined") return undefined;
+  return v;
+}
+
+function isMediaMockMode(): boolean {
+  return process.env.MEDIA_PROVIDER === "mock";
+}
+
+function formatFalError(err: unknown): string {
+  const e = err as {
+    status?: number;
+    message?: string;
+    body?: { detail?: string; error?: string; message?: string };
+  };
+  const detail =
+    e?.body?.detail ||
+    e?.body?.error ||
+    e?.body?.message ||
+    (typeof e?.body === "string" ? e.body : null);
+  const parts = [e?.message, detail, e?.status ? `HTTP ${e.status}` : null].filter(Boolean);
+  return parts.join(" — ") || "Fal request failed";
+}
+
+/** Visible H.264 MP4 for local dev when MEDIA_PROVIDER=mock (requires ffmpeg). */
+async function createMockClipMp4(): Promise<Uint8Array> {
+  const dir = await mkdtemp(join(tmpdir(), "mock-char-clip-"));
+  const outPath = join(dir, "out.mp4");
+  try {
+    await new Promise<void>((resolve, reject) => {
+      execFile(
+        "ffmpeg",
+        [
+          "-y",
+          "-f",
+          "lavfi",
+          "-i",
+          // Use an obvious test pattern so mock clips are clearly visible in review/feed.
+          "testsrc2=s=720x1280:r=24:d=4",
+          "-c:v",
+          "libx264",
+          "-t",
+          "4",
+          "-pix_fmt",
+          "yuv420p",
+          "-movflags",
+          "+faststart",
+          outPath,
+        ],
+        { timeout: 45_000 },
+        (err) => (err ? reject(err) : resolve()),
+      );
+    });
+    const buf = await readFile(outPath);
+    return new Uint8Array(buf);
+  } finally {
+    await unlink(outPath).catch(() => {});
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -196,14 +261,20 @@ async function checkCharacterCompatibility(
           role: "system",
           content: `You are a character consistency enforcer. You receive a CHARACTER PROFILE and a USER'S requested video plot.
 
-Your job: ensure the plot is CONSISTENT with the character's personality, physical behavior, and comfort zone. The character's identity is SACRED — users cannot override it.
+Your job: keep WHO this person is and HOW they react aligned with profile data. Users must not assign them a fake job, moral role, or personality that contradicts the profile.
+
+SITUATION vs ASSIGNED ROLE (critical):
+- ALLOW external circumstances: wrong place, strangers approach, trouble finds them, they witness something, they get stopped, accidental danger, etc. The world can do things TO them.
+- REJECT or REWRITE user-assigned identity/role that the profile does not support: e.g. "is a drug dealer", "runs the operation", "acts like a hardened criminal", "flirts aggressively" if that contradicts profile. Instead: same rough situation, but ${character.name} is still themselves — reacting with THEIR temperament, decision style, and physical behavior — not performing a new persona.
+- NEVER script specific emotional beats the user invents if they clash with profile (e.g. "he freaks out" for a calm character → show measured tension, slower breathing, controlled assessment instead).
+- Reactions, micro-movements, pace, and choices come ONLY from profile + physical_behavior + personality — not from user headcanon.
 
 RULES:
-1. CHARACTER DATA ALWAYS WINS over user input. If user says "Yuki dances excitedly" but Yuki is shy and avoids being the center of attention, you MUST adapt the plot.
-2. Adapt GENTLY — keep the spirit of the user's idea but adjust HOW the character does it to match their personality. Don't completely reject the idea unless truly impossible.
+1. CHARACTER DATA ALWAYS WINS over user input for behavior and inner response. If user says "dances wildly in the spotlight" but the character is reserved, adapt to a smaller, in-character version of the beat.
+2. Adapt GENTLY — preserve the user's EXTERNAL situation when possible; change HOW the character carries themselves through it.
 3. BEHAVIORAL RED FLAGS are actions this character would NEVER do: ${redFlags}
-4. Location should match the character's comfort zone when possible. If the location makes sense for the story, keep it even if it's outside comfort zone — but adjust the character's BEHAVIOR to show discomfort.
-5. Only user resolutions (from video continuation system) can change a character's traits over time. User video creation input CANNOT change who the character is.
+4. Location: keep if plausible; if outside comfort zone, show behavior that fits their profile (caution, withdrawal, controlled unease — not a random new personality).
+5. Only canonical story resolutions can change traits over time. Creation input cannot rewrite who they are.
 
 Return JSON:
 {
@@ -285,7 +356,12 @@ ${klingIdentity}
 
 ===== CHARACTER BEHAVIOR IS LAW (overrides user input) =====
 This character's physical behavior MUST govern every movement in the video.
-The user's plot describes WHAT happens. The character data dictates HOW it happens.
+The user's plot may describe CIRCUMSTANCES (where they are, what happens around them, who approaches them).
+The CHARACTER PROFILE alone dictates HOW ${character.name} reacts — pace, posture, gestures, fear/anger/calm, whether they engage or withdraw. Do NOT invent a new persona, job, or moral alignment for them.
+
+SITUATION vs REACTION:
+- OK: User puts them in tension, ambiguity, social pressure, or danger — show ${character.name} moving through it AS THIS CHARACTER.
+- NOT OK: User makes them someone they are not (criminal role, opposite temperament, theatrical emotion not in profile). Strip the false role; keep the situation if possible with in-character responses.
 
 PHYSICAL BEHAVIOR:
 - Energy level: ${character.personality.physical_behavior?.energy_level ?? character.personality.temperament}
@@ -371,7 +447,7 @@ No murmurs, "hmm", grunts, sighs, whispers, or ANY sound.
   If the user asks for 5 things, spread them across all 3 scenes or cut the less important ones.
   BAD: "He picks up shoes, stands up, tests side steps, swaps to second pair, stands tall" (5 actions in 2s!)
   GOOD: "He slips on the white sneakers and stands up slowly, flexing his feet on the polished store floor." (1-2 actions)
-- Include ONLY movement that the user described or directly implied.
+- Include movement implied by the user's situation, but ALWAYS executed in this character's physical and emotional style (profile-driven), never as a generic action hero or a different personality.
 - Do NOT invent extra body movements unless they are this character's TYPICAL GESTURES.
 - "deciding" / "contemplating" = ${character.name}'s typical thinking gesture, not generic pondering.
 - Movement speed and energy MUST match: ${character.personality.physical_behavior?.energy_level ?? character.personality.temperament}
@@ -715,7 +791,7 @@ async function runCharacterGeneration(opts: {
       },
     };
   } catch (e: any) {
-    const message = e?.message || "Generation failed";
+    const message = formatFalError(e) || e?.message || "Generation failed";
     logLine(jobId, "failed", { message });
     await serviceClient
       .from("clip_generation_jobs")
@@ -726,6 +802,123 @@ async function runCharacterGeneration(opts: {
       })
       .eq("id", (job as any).id);
     return { error: message };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Local dev: skip Fal when MEDIA_PROVIDER=mock (localhost images are not reachable by Fal)
+// ---------------------------------------------------------------------------
+
+async function runCharacterGenerationMock(opts: {
+  user: { id: string };
+  serviceClient: any;
+  character: CharacterWithImages;
+  imageStoragePath: string;
+  baseScene: BaseScene;
+  plotChange: string;
+  mood?: string;
+  camera?: string;
+}) {
+  const {
+    user,
+    serviceClient,
+    character,
+    imageStoragePath,
+    baseScene,
+    plotChange,
+    mood,
+    camera,
+  } = opts;
+
+  const llmResult = await buildCharacterMultiScenePrompt(character, baseScene, plotChange, {
+    mood,
+    camera,
+  });
+  const enhanced = llmResult || buildFallbackScenes(character, baseScene, plotChange);
+
+  logLine("pre-job", "mock_mode", { character: character.name, summary: enhanced.scene_summary });
+
+  const { data: job, error: jobErr } = await serviceClient
+    .from("clip_generation_jobs")
+    .insert({
+      user_id: user.id,
+      status: "generating_video",
+      provider: "mock",
+      image_model_key: "mock",
+      video_model_key: "mock",
+      generation_mode: "character",
+      llm_generation_json: {
+        ...enhanced,
+        base_scene: baseScene,
+        source: `character:${character.slug || character.id}`,
+        character_id: character.id,
+        character_name: character.name,
+        image_storage_path: imageStoragePath,
+        mock_clip: true,
+      },
+    })
+    .select()
+    .single();
+  if (jobErr || !job) return { error: "Failed to create generation job" };
+
+  const jobId = String((job as any).id);
+  try {
+    const videoBytes = await createMockClipMp4();
+    const videoPath = `clips/${user.id}/${jobId}.mp4`;
+    await uploadBytesToMedia(videoPath, videoBytes, "video/mp4");
+
+    await serviceClient
+      .from("clip_generation_jobs")
+      .update({
+        status: "review",
+        video_storage_path: videoPath,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", (job as any).id);
+
+    await serviceClient.from("notifications").insert({
+      user_id: user.id,
+      type: "video_review_ready",
+      title: "Video ready for review (mock)",
+      body: `Mock clip for ${character.name}. Install ffmpeg for a real file, or use Fal in production.`,
+      link: "/create",
+      read: false,
+    });
+
+    logLine(jobId, "mock_ready_for_review", { videoPath });
+    return {
+      data: {
+        jobId,
+        videoStoragePath: videoPath,
+        imageStoragePath,
+        sceneSummary: enhanced.scene_summary,
+        llmGeneration: {
+          ...enhanced,
+          base_scene: baseScene,
+          character_id: character.id,
+          mock_clip: true,
+        },
+        characterId: character.id,
+      },
+    };
+  } catch (e: any) {
+    const msg = String(e?.message ?? e);
+    logLine(jobId, "mock_failed", { message: msg });
+    await serviceClient
+      .from("clip_generation_jobs")
+      .update({
+        status: "failed",
+        error_message: msg,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", (job as any).id);
+    if (/ffmpeg|ENOENT|spawn/i.test(msg)) {
+      return {
+        error:
+          "MEDIA_PROVIDER=mock needs ffmpeg on PATH to build a test MP4. Install ffmpeg, or remove MEDIA_PROVIDER=mock and use a Fal key with Kling + storage upload access.",
+      };
+    }
+    return { error: msg || "Mock generation failed" };
   }
 }
 
@@ -741,6 +934,9 @@ export async function generateFromCharacter(input: {
   camera?: string;
 }) {
   try {
+    const mood = sanitizeOptionalString(input.mood);
+    const camera = sanitizeOptionalString(input.camera);
+
     const supabase = await createServerClient();
     const {
       data: { user },
@@ -775,6 +971,33 @@ export async function generateFromCharacter(input: {
     });
 
     const imageStoragePath = bestImage.image_storage_path;
+    const baseScene = buildBaseSceneFromCharacter(character, effectiveLocation);
+
+    logLine("pre-job", "character_media_route", {
+      character: character.name,
+      mock: isMediaMockMode(),
+    });
+
+    if (isMediaMockMode()) {
+      const result = await runCharacterGenerationMock({
+        user,
+        serviceClient,
+        character,
+        imageStoragePath,
+        baseScene,
+        plotChange: effectivePlot,
+        mood,
+        camera,
+      });
+      if (!compat.compatible && result.data) {
+        (result.data as any).characterAdaptation = {
+          adapted: true,
+          warnings: compat.warnings,
+          explanation: compat.explanation,
+        };
+      }
+      return result;
+    }
 
     const fal = getFalClient();
 
@@ -811,8 +1034,6 @@ export async function generateFromCharacter(input: {
       url: characterImageUrl,
     });
 
-    const baseScene = buildBaseSceneFromCharacter(character, effectiveLocation);
-
     const result = await runCharacterGeneration({
       user,
       serviceClient,
@@ -822,8 +1043,8 @@ export async function generateFromCharacter(input: {
       characterImageUrl,
       baseScene,
       plotChange: effectivePlot,
-      mood: input.mood,
-      camera: input.camera,
+      mood,
+      camera,
     });
 
     // Attach adaptation info so the UI can inform the user

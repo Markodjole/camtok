@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 
 import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Upload, Loader2, ImageIcon, Film, Trash2, Users, ChevronRight, Plus, ArrowLeft } from "lucide-react";
+import { Upload, Loader2, ImageIcon, Film, Trash2, Users, ChevronRight, Plus, ArrowLeft, X } from "lucide-react";
 import { AppShell } from "@/components/layout/app-shell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -42,6 +42,11 @@ import { cn, getMediaUrl } from "@/lib/utils";
 const PATTERNS_CACHE_KEY = "create:image_patterns:v2";
 const PATTERNS_CACHE_TTL_MS = 10 * 60 * 1000;
 const CREATE_REVIEW_CACHE_KEY = "create:pending_review:v1";
+
+/** Enough room for a full scene; server still summarizes for the model. */
+const ACTION_TEXT_MAX = 1200;
+const TENSION_TEXT_MAX = 450;
+const LOCATION_TEXT_MAX = 400;
 
 /** Shared styles for create-page mood/camera pickers (readable, theme-aligned). */
 const CREATE_SCENE_SELECT_ITEM =
@@ -98,6 +103,8 @@ function CreatePageClient() {
   const [mood, setMood] = useState("neutral");
   const [camera, setCamera] = useState("auto");
   const [running, setRunning] = useState(false);
+  /** User closed the full-screen loader; generation still runs until the server returns. */
+  const [generationOverlayDismissed, setGenerationOverlayDismissed] = useState(false);
   const [progress, setProgress] = useState(0);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -114,6 +121,8 @@ function CreatePageClient() {
   const [publishing, setPublishing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const progressTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  /** Ignore late `getPendingReviewDraft` results after the user started a new generation. */
+  const pendingDraftSeqRef = useRef(0);
 
   useEffect(() => {
     let mounted = true;
@@ -186,7 +195,9 @@ function CreatePageClient() {
 
   useEffect(() => {
     // Source of truth recovery from server in case user navigated away during generation.
+    const seqAtStart = pendingDraftSeqRef.current;
     getPendingReviewDraft().then((res) => {
+      if (pendingDraftSeqRef.current !== seqAtStart) return;
       const d = res.data;
       if (!d || !d.reviewVideoPath || !d.reviewJobId) return;
       setReviewMode(true);
@@ -195,6 +206,7 @@ function CreatePageClient() {
       setReviewImagePath(d.reviewImagePath ?? null);
       setReviewSummary(d.reviewSummary ?? null);
       setReviewLlmGen(d.reviewLlmGen ?? null);
+      setReviewCharacterId(d.reviewCharacterId ?? null);
       if (typeof window !== "undefined") {
         window.localStorage.setItem(
           CREATE_REVIEW_CACHE_KEY,
@@ -204,6 +216,7 @@ function CreatePageClient() {
             reviewImagePath: d.reviewImagePath,
             reviewSummary: d.reviewSummary,
             reviewLlmGen: d.reviewLlmGen,
+            reviewCharacterId: d.reviewCharacterId ?? null,
           }),
         );
       }
@@ -237,17 +250,42 @@ function CreatePageClient() {
     }
   }, []);
 
-  function CinemaLoader({ label }: { label: string }) {
+  function CinemaLoader({
+    label,
+    onDismiss,
+  }: {
+    label: string;
+    onDismiss?: () => void;
+  }) {
     return (
-      <div className="rounded-xl border border-border bg-muted/85 p-5 shadow-xl backdrop-blur-sm">
-        <div className="flex items-center justify-center">
+      <div className="relative rounded-xl border border-border bg-card/95 p-5 shadow-xl backdrop-blur-md">
+        {onDismiss ? (
+          <button
+            type="button"
+            onClick={onDismiss}
+            className="absolute right-3 top-3 rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            aria-label="Close generation overlay"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        ) : null}
+        <div className="flex items-center justify-center pt-1">
           <div className="relative h-14 w-14">
             <div className="absolute inset-0 rounded-full border-[6px] border-primary/25 border-t-primary animate-spin" />
             <Film className="absolute inset-0 m-auto h-6 w-6 text-primary" />
           </div>
         </div>
         <p className="mt-3 text-center text-sm font-medium text-foreground">{label}</p>
-        <p className="mt-1 text-center text-xs text-muted-foreground">Rolling cameras... please wait</p>
+        <p className="mt-1 text-center text-xs text-muted-foreground">Rolling cameras… this can take a few minutes.</p>
+        <p className="mt-3 text-center text-[11px] leading-relaxed text-muted-foreground">
+          You can close this and keep using the app. Allow browser notifications to get an alert when your clip is ready — or open{" "}
+          <span className="font-medium text-foreground">Create</span> again to review.
+        </p>
+        {onDismiss ? (
+          <Button type="button" variant="outline" size="sm" className="mt-4 w-full" onClick={onDismiss}>
+            Close and continue in background
+          </Button>
+        ) : null}
       </div>
     );
   }
@@ -367,14 +405,16 @@ function CreatePageClient() {
 
   const plotChange = [
     actionText.trim(),
-    tensionText.trim() ? `The moment ends with: ${tensionText.trim()}` : "",
-  ].filter(Boolean).join(". ");
+    tensionText.trim() ? `Ending beat: ${tensionText.trim()}` : "",
+  ].filter(Boolean).join("\n\n");
 
+  // Location is sent separately as `locationDescription` — do not duplicate it here (avoids truncation surprises).
   const characterPlotChange = [
-    locationText.trim() ? `Location: ${locationText.trim()}.` : "",
     actionText.trim(),
-    tensionText.trim() ? `The moment ends with: ${tensionText.trim()}` : "",
-  ].filter(Boolean).join(" ");
+    tensionText.trim() ? `Ending beat: ${tensionText.trim()}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 
   async function handleGenerate() {
     if (!hasSource || !actionText.trim()) {
@@ -392,8 +432,23 @@ function CreatePageClient() {
       Notification.requestPermission().catch(() => {});
     }
 
+    pendingDraftSeqRef.current += 1;
+
+    // Starting a fresh generation should not be overridden by an older cached review draft.
+    setReviewMode(false);
+    setReviewVideoPath(null);
+    setReviewJobId(null);
+    setReviewImagePath(null);
+    setReviewSummary(null);
+    setReviewLlmGen(null);
+    setReviewCharacterId(null);
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem(CREATE_REVIEW_CACHE_KEY);
+    }
+
     setProgress(15);
     setRunning(true);
+    setGenerationOverlayDismissed(false);
     setErrorMsg(null);
     startFakeProgress();
 
@@ -405,22 +460,22 @@ function CreatePageClient() {
           characterId: selectedCharacterId,
           locationDescription: locationText.trim(),
           plotChange: characterPlotChange.trim(),
-          mood: mood !== "neutral" ? mood : undefined,
-          camera: camera !== "auto" ? camera : undefined,
+          ...(mood !== "neutral" ? { mood } : {}),
+          ...(camera !== "auto" ? { camera } : {}),
         });
       } else if (isCustomMode && customImagePath) {
         res = await generateFromCustomImage({
           imageStoragePath: customImagePath,
           plotChange: plotChange.trim(),
-          mood: mood !== "neutral" ? mood : undefined,
-          camera: camera !== "auto" ? camera : undefined,
+          ...(mood !== "neutral" ? { mood } : {}),
+          ...(camera !== "auto" ? { camera } : {}),
         });
       } else if (selectedPatternId) {
         res = await generateFromImagePattern({
           patternId: selectedPatternId,
           plotChange: plotChange.trim(),
-          mood: mood !== "neutral" ? mood : undefined,
-          camera: camera !== "auto" ? camera : undefined,
+          ...(mood !== "neutral" ? { mood } : {}),
+          ...(camera !== "auto" ? { camera } : {}),
         });
       } else {
         res = { error: "No source selected" };
@@ -436,6 +491,19 @@ function CreatePageClient() {
       }
 
       const d = res.data;
+      if (!d?.jobId || !d?.videoStoragePath) {
+        stopFakeProgress();
+        toast({
+          title: "Generation incomplete",
+          description: "The server did not return a video. Check the dev server terminal for [char-gen] / [pattern-gen] logs.",
+          variant: "destructive",
+        });
+        setErrorMsg("No video path in response");
+        setProgress(0);
+        setRunning(false);
+        return;
+      }
+
       stopFakeProgress();
       setProgress(100);
       setRunning(false);
@@ -676,8 +744,9 @@ function CreatePageClient() {
     ? tensionExamples[selectedPattern.slug] || "e.g. frozen mid-action, about to decide"
     : "e.g. hand hovering, about to choose";
 
-  if (reviewMode && reviewVideoPath) {
+  if (!running && reviewMode && reviewVideoPath) {
     const videoUrl = getMediaUrl(reviewVideoPath);
+    const isMockClip = reviewLlmGen?.mock_clip === true;
     return (
       <AppShell>
         <div className="flex h-full flex-col overflow-y-auto no-scrollbar">
@@ -690,6 +759,11 @@ function CreatePageClient() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
+                {isMockClip ? (
+                  <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-900 dark:text-amber-100/90">
+                    Local mock clip (MEDIA_PROVIDER=mock): Fal / Kling was skipped. Remove mock from env to generate real video.
+                  </p>
+                ) : null}
                 {videoUrl && (
                   <div className="overflow-hidden rounded-xl border border-border bg-black">
                     <video
@@ -701,6 +775,14 @@ function CreatePageClient() {
                       playsInline
                       preload="auto"
                       className="w-full aspect-[9/16] object-contain"
+                      onError={() => {
+                        toast({
+                          title: "Video failed to load",
+                          description:
+                            "Open the clip URL in a new tab or confirm Supabase is running and NEXT_PUBLIC_SUPABASE_URL matches your storage.",
+                          variant: "destructive",
+                        });
+                      }}
                     />
                   </div>
                 )}
@@ -912,13 +994,26 @@ function CreatePageClient() {
                         <label className="text-sm font-medium" htmlFor="locationText">
                           Location / Setting
                         </label>
+                        <p className="text-[11px] text-muted-foreground">
+                          Sent only as setting — describe movement below so nothing is duplicated or cut off.
+                        </p>
                         <Input
                           id="locationText"
                           placeholder="e.g. rooftop bar, park bench, city street"
                           value={locationText}
                           onChange={(e) => setLocationText(e.target.value)}
-                          maxLength={200}
+                          maxLength={LOCATION_TEXT_MAX}
                         />
+                        <p
+                          className={cn(
+                            "text-xs text-right",
+                            locationText.length > LOCATION_TEXT_MAX * 0.9
+                              ? "text-amber-600 dark:text-amber-500"
+                              : "text-muted-foreground",
+                          )}
+                        >
+                          {locationText.length}/{LOCATION_TEXT_MAX}
+                        </p>
                       </div>
 
                       <button
@@ -1162,31 +1257,58 @@ function CreatePageClient() {
                   <label className="text-sm font-medium" htmlFor="actionText">
                     Describe movements
                   </label>
+                  {mode === "character" && selectedCharacter ? (
+                    <p className="text-xs text-muted-foreground leading-relaxed">
+                      Describe what happens around {selectedCharacter.name} (place, people, tension). How they move and react comes from their profile — not a new role or personality you invent for them.
+                    </p>
+                  ) : null}
                   <textarea
                     id="actionText"
                     placeholder={actionPlaceholder}
                     value={actionText}
                     onChange={(e) => setActionText(e.target.value)}
-                    maxLength={400}
+                    maxLength={ACTION_TEXT_MAX}
                     disabled={!hasSource}
-                    rows={3}
-                    className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 resize-none"
+                    rows={5}
+                    className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 resize-y min-h-[120px]"
                   />
-                  <p className="text-xs text-muted-foreground text-right">{actionText.length}/400</p>
+                  <p
+                    className={cn(
+                      "text-xs text-right",
+                      actionText.length > ACTION_TEXT_MAX * 0.9
+                        ? "text-amber-600 dark:text-amber-500"
+                        : "text-muted-foreground",
+                    )}
+                  >
+                    {actionText.length}/{ACTION_TEXT_MAX}
+                  </p>
                 </div>
 
                 <div className="space-y-1.5">
                   <label className="text-sm font-medium" htmlFor="tensionText">
-                    Cliffhanger scene <span className="text-muted-foreground font-normal">(optional)</span>
+                    Cliffhanger / ending beat{" "}
+                    <span className="text-muted-foreground font-normal">(optional)</span>
                   </label>
-                  <Input
+                  <textarea
                     id="tensionText"
                     placeholder={tensionPlaceholder}
                     value={tensionText}
                     onChange={(e) => setTensionText(e.target.value)}
-                    maxLength={150}
+                    maxLength={TENSION_TEXT_MAX}
                     disabled={!hasSource}
+                    rows={3}
+                    className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 resize-y min-h-[72px]"
                   />
+                  <p
+                    className={cn(
+                      "text-xs text-right",
+                      tensionText.length > TENSION_TEXT_MAX * 0.9
+                        ? "text-amber-600 dark:text-amber-500"
+                        : "text-muted-foreground",
+                    )}
+                  >
+                    {tensionText.length}/{TENSION_TEXT_MAX}
+                  </p>
                 </div>
 
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-4">
@@ -1280,9 +1402,16 @@ function CreatePageClient() {
               {/* Progress */}
               {running && progress > 0 && (
                 <div className="space-y-2">
+                  {generationOverlayDismissed && (
+                    <div className="rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-center text-[11px] text-muted-foreground">
+                      Video still generating. Allow notifications for an alert when it is ready, or stay on this page — the review step will appear here.
+                    </div>
+                  )}
                   <Progress value={progress} />
                   <p className="text-center text-xs text-muted-foreground">
-                    Generating in background... you can keep using the app.
+                    {generationOverlayDismissed
+                      ? "Working in the background."
+                      : "You can close the full-screen loader and keep using the app."}
                   </p>
                 </div>
               )}
@@ -1318,10 +1447,22 @@ function CreatePageClient() {
         </div>
       </div>
 
-      {running && (
-        <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center px-6">
-          <div className="w-full max-w-sm">
-            <CinemaLoader label="Generating your cinematic clip" />
+      {running && !generationOverlayDismissed && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/55 px-6 backdrop-blur-[2px]"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="create-gen-loader-title"
+          onClick={() => setGenerationOverlayDismissed(true)}
+        >
+          <div className="w-full max-w-sm" onClick={(e) => e.stopPropagation()}>
+            <p id="create-gen-loader-title" className="sr-only">
+              Generating video
+            </p>
+            <CinemaLoader
+              label="Generating your video"
+              onDismiss={() => setGenerationOverlayDismissed(true)}
+            />
           </div>
         </div>
       )}
