@@ -7,6 +7,8 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { falLongJobOptions, getFalClient } from "@/lib/fal/server";
 import { createServerClient, createServiceClient } from "@/lib/supabase/server";
+import { seedPredictionStartersForClip } from "./predictions";
+import { mergeNegativePromptLayers } from "@/lib/llm/character-clip-json";
 
 function logLine(jobId: string, phase: string, extra?: Record<string, unknown>) {
   const ts = new Date().toISOString();
@@ -86,6 +88,12 @@ export type MultiScene = {
   duration: string;
 };
 
+/** LLM-authored lines users can post as YES/NO prediction markets; opening_yes_hint is prior P(YES) before calibration. */
+export type PredictionStarter = {
+  label: string;
+  opening_yes_hint: number;
+};
+
 export type EnhancedPlot = {
   scene_summary: string;
   scenes: MultiScene[];
@@ -95,6 +103,12 @@ export type EnhancedPlot = {
   spoken_dialogue: string;
   /** LLM-decided total clip duration: 6, 8, or 10 seconds */
   total_duration_seconds?: number;
+  /** Richer logline for creators / metadata */
+  enhanced_plot?: string;
+  /** Obvious “what you’re watching” line with character name + situation + fork (feed-friendly) */
+  viewer_hook?: string;
+  /** Ready-made prediction prompts with rough YES odds hints for the betting UI */
+  prediction_starters?: PredictionStarter[];
 };
 
 // ---------------------------------------------------------------------------
@@ -128,10 +142,13 @@ async function buildMultiScenePrompt(
 - Camera: ${baseScene.camera}
 - Textures: ${baseScene.textures}
 
+===== SIMPLE CAST (MANDATORY) =====
+- **One main moving subject** (the person from the image). **No crowds, teams, animals, or multi-person choreography.** At most **one** static background person or **none**. Dilemmas = **props, doors, screens, two products** — not arguing groups or sports scenes.
+
 ===== YOUR #1 GOAL =====
 Create ONE CONTINUOUS, NATURAL piece of motion that flows smoothly across all 3 scenes.
 The 3 scenes are NOT 3 separate shots — they are 3 segments of ONE UNBROKEN TAKE.
-Think of it as writing movement choreography for a single 6-second clip.
+Think of it as choreography for a single **8–10 second** take at **normal, real-life pace** — not frantic or sped-up unless Mood explicitly demands it.
 
 ===== CRITICAL: HOW KLING AI WORKS =====
 Kling generates video FROM the start image. It already sees the full scene.
@@ -174,13 +191,15 @@ No murmurs, "hmm", grunts, sighs, whispers, or ANY sound.
 
 ===== MOVEMENT FIDELITY =====
 - Include ONLY movement that the user described or directly implied.
+- **Default tempo: unhurried.** Avoid quickly, rushes, briskly, frantically, rapid succession unless Mood or user plot explicitly requires urgency.
+- **2s segment → at most ONE clear motion.** **3–4s → at most two simple linked motions.** Never chain many actions in one scene.
 - Do NOT invent extra body movements (no hand hovering, gesturing, fidgeting).
 - "deciding" / "contemplating" = gaze shifts only. Hands and body stay still.
 - When in doubt: LESS movement, not more.
 
 ===== MOOD & CAMERA (if provided) =====
 The user may specify a Mood and/or Camera style. If provided, use them:
-- Mood affects PACING: "tense" = slower movements, held pauses. "energetic" = quicker actions. "calm" = gentle, unhurried. "playful" = lighter, bouncier movement. "dramatic" = deliberate, weighted.
+- Mood affects PACING: "tense" = slower movements, held pauses. "energetic" = lively but **still legible**, not frantic. "calm" = gentle, unhurried. "playful" = lighter movement, clear beats. "dramatic" = deliberate, **slow**, weighted.
 - Camera options: "follow" = camera tracks the subject. "static" = camera locked, only subject moves. "closeup" = tight framing on hands/face. "pov" = first-person view. "orbit" = slow circular movement around subject.
 - If not provided, choose what fits the action naturally.
 
@@ -209,7 +228,7 @@ GOOD (continuous motion, no re-description):
   scene_3: "He takes a deep breath, knees slightly bent, holding the loaded position. The camera slowly pushes in on his focused face."
 
 ===== NEGATIVE PROMPT =====
-Include: "outcome revealed, result shown, action completed, decision finished, sudden jump, jerky motion, talking, speaking, murmuring, whispering"
+Include: "outcome revealed, result shown, action completed, decision finished, sudden jump, jerky motion, fast motion, rushed pacing, frantic hurried movement, crowd, large group, multiple people moving, team sports, animals, pets, illegible text, gibberish letters, subtitles, on-screen text, talking, speaking, murmuring, whispering"
 Do NOT put items from the user's plot in the negative prompt.
 
 ===== OUTPUT FORMAT =====
@@ -251,7 +270,7 @@ Return JSON:
       logLine("llm", "feasibility", { notes: parsed.feasibility_notes, enhanced_plot: parsed.enhanced_plot });
     }
     const hardNegative =
-      "outcome revealed, result shown, action completed, decision finished, sudden jump, jerky motion, talking, speaking, murmuring, whispering";
+      "outcome revealed, result shown, action completed, decision finished, sudden jump, jerky motion, fast motion, rushed pacing, frantic hurried movement, crowd, large group, multiple people moving, team sports, animals, pets, illegible text, gibberish letters, subtitles, on-screen text, talking, speaking, murmuring, whispering";
     const spoken =
       typeof parsed.spoken_dialogue === "string" ? parsed.spoken_dialogue.trim().slice(0, 120) : "";
     return {
@@ -261,7 +280,7 @@ Return JSON:
         { prompt: parsed.scene_2, duration: String(parsed.scene_2_duration || "2") },
         { prompt: parsed.scene_3, duration: String(parsed.scene_3_duration || "2") },
       ],
-      negative_prompt: `${parsed.negative_prompt || ""}, ${hardNegative}`.replace(/^,\s*/, ""),
+      negative_prompt: mergeNegativePromptLayers(parsed.negative_prompt || "", hardNegative),
       outcomes: parsed.outcomes || [],
       spoken_dialogue: spoken,
       total_duration_seconds: parsed.total_duration_seconds,
@@ -277,21 +296,22 @@ function buildFallbackScenes(baseScene: BaseScene, userPlotChange: string): Enha
     spoken_dialogue: "",
     scenes: [
       {
-        prompt: `${userPlotChange}. The action begins naturally.`,
-        duration: "2",
+        prompt: `${userPlotChange}. The action begins slowly and clearly in the setting.`,
+        duration: "3",
       },
       {
-        prompt: `Continuing smoothly. The moment develops.`,
-        duration: "2",
+        prompt: `Continuing at a calm, unhurried pace. One beat develops — readable motion.`,
+        duration: "4",
       },
       {
         prompt: `Movement slows. Stillness. Camera drifts in slowly. No resolution.`,
-        duration: "2",
+        duration: "3",
       },
     ],
     negative_prompt:
-      "outcome revealed, result shown, action completed, decision finished, sudden jump, jerky motion, talking, speaking",
+      "outcome revealed, result shown, action completed, decision finished, sudden jump, jerky motion, fast motion, rushed pacing, frantic hurried movement, talking, speaking",
     outcomes: [],
+    total_duration_seconds: 10,
   };
 }
 
@@ -532,7 +552,7 @@ async function runGeneration(opts: {
         multi_prompt: enhanced.scenes.map((s: MultiScene) => ({ prompt: s.prompt, duration: s.duration })),
         shot_type: "customize",
         negative_prompt: enhanced.negative_prompt,
-        duration: String(Math.min(10, Math.max(5, enhanced.total_duration_seconds || 6))),
+        duration: String(Math.min(10, Math.max(5, enhanced.total_duration_seconds || 10))),
         generate_audio: true,
       },
       logs: true,
@@ -770,8 +790,23 @@ export async function publishDraft(input: {
     .then((m) => m.analyzeClipVideo(String((clipNode as any).id)))
     .catch(() => {});
 
+  const starters = Array.isArray((input.llmGeneration as Record<string, unknown> | null)?.prediction_starters)
+    ? ((input.llmGeneration as Record<string, unknown>).prediction_starters as Array<{
+        label?: unknown;
+        opening_yes_hint?: unknown;
+      }>)
+    : [];
+  const seed = await seedPredictionStartersForClip({
+    clipNodeId: String((clipNode as any).id),
+    userId: user.id,
+    starters,
+  });
+  if (seed.created > 0) {
+    logLine(input.jobId, "prediction_starters_seeded", { created: seed.created, skipped: seed.skipped });
+  }
+
   revalidatePath("/feed");
-  return { data: { clipId: (clipNode as any).id } };
+  return { data: { clipId: (clipNode as any).id, predictionsSeeded: seed.created } };
 }
 
 // ---------------------------------------------------------------------------

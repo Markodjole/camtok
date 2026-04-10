@@ -839,7 +839,7 @@ function CreatePageClient() {
   };
 
   const actionPlaceholder = mode === "character" && selectedCharacter
-    ? `e.g. ${selectedCharacter.name} walks to the counter, looks at the options, reaches for...`
+    ? `e.g. ${selectedCharacter.name} alone at a quiet counter, one slow reach toward one of two options (keep it simple — no crowds or animals)`
     : selectedPattern
       ? actionExamples[selectedPattern.slug] || "e.g. he walks to the table, picks up the cup, brings it to his lips"
       : isCustomMode
@@ -905,6 +905,41 @@ function CreatePageClient() {
                 {reviewSummary && (
                   <p className="text-sm text-muted-foreground text-center">{reviewSummary}</p>
                 )}
+                {reviewCharacterId && typeof reviewLlmGen?.enhanced_plot === "string" && reviewLlmGen.enhanced_plot.trim() ? (
+                  <p className="rounded-lg border border-border/60 bg-muted/25 px-3 py-2 text-sm text-foreground/90 leading-snug">
+                    {String(reviewLlmGen.enhanced_plot).trim()}
+                  </p>
+                ) : null}
+                {reviewCharacterId &&
+                Array.isArray(reviewLlmGen?.prediction_starters) &&
+                reviewLlmGen.prediction_starters.length > 0 ? (
+                  <div className="space-y-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2.5">
+                    <p className="text-xs font-medium text-foreground/80">
+                      Suggested predictions for viewers (with opening YES odds — they can tap to add after you post)
+                    </p>
+                    <ul className="space-y-1.5">
+                      {(reviewLlmGen.prediction_starters as { label?: string; opening_yes_hint?: number }[]).map(
+                        (p, i) => {
+                          const hint = typeof p.opening_yes_hint === "number" && Number.isFinite(p.opening_yes_hint)
+                            ? Math.max(0.05, Math.min(0.95, p.opening_yes_hint))
+                            : 0.5;
+                          const yesOdds = Math.round((1 / hint) * 100) / 100;
+                          return (
+                            <li
+                              key={i}
+                              className="flex flex-col gap-0.5 rounded-md border border-border/40 bg-card/90 px-2.5 py-2 text-left sm:flex-row sm:items-center sm:justify-between sm:gap-2"
+                            >
+                              <span className="text-sm text-foreground">{p.label ?? ""}</span>
+                              <span className="shrink-0 text-[11px] text-muted-foreground">
+                                ~{yesOdds.toFixed(2)}x YES
+                              </span>
+                            </li>
+                          );
+                        },
+                      )}
+                    </ul>
+                  </div>
+                ) : null}
 
                 <Button
                   className="w-full"
@@ -1147,8 +1182,9 @@ function CreatePageClient() {
                       <p className="text-[11px] text-muted-foreground leading-snug">
                         Uses your profile + location + mood/camera. Picks follow video rules (smooth motion, in-character,
                         no speech, paired cliffhangers). Set{" "}
-                        <span className="font-medium text-foreground">LLM_MODEL_CHARACTER_CLIP_SUGGEST</span> for a
-                        stronger model (defaults to your other LLM_MODEL settings).
+                        <span className="font-medium text-foreground">LLM_MODEL_CHARACTER_CLIP_SUGGEST</span> (ideas + video
+                        prompt JSON) or <span className="font-medium text-foreground">LLM_MODEL_CHARACTER_VIDEO</span> for
+                        Kling scenes only — default is <span className="font-medium text-foreground">gpt-4o</span> if unset.
                       </p>
 
                       <button

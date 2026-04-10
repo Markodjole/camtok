@@ -3,6 +3,11 @@
 import { createServerClient } from "@/lib/supabase/server";
 import { getCharacterById } from "./characters";
 import { characterToPromptContext } from "@/lib/characters/types";
+import {
+  characterClipLlmConfigured,
+  completeCharacterClipJson,
+  getCharacterClipLlmBackend,
+} from "@/lib/llm/character-clip-json";
 
 export type CharacterClipAiOption = {
   description: string;
@@ -41,40 +46,49 @@ export async function suggestCharacterClipIdeas(input: {
     return { error: "You cannot use this character" };
   }
 
-  const apiKey = process.env.LLM_API_KEY;
-  if (!apiKey || process.env.LLM_PROVIDER !== "openai") {
-    return { error: "AI suggestions require LLM_PROVIDER=openai and LLM_API_KEY" };
+  if (!characterClipLlmConfigured()) {
+    const backend = getCharacterClipLlmBackend();
+    return {
+      error:
+        backend === "anthropic"
+          ? "AI suggestions require ANTHROPIC_API_KEY (CHARACTER_CLIP_LLM_BACKEND=anthropic)"
+          : "AI suggestions require LLM_API_KEY",
+    };
   }
-
-  const model =
-    process.env.LLM_MODEL_CHARACTER_CLIP_SUGGEST ||
-    process.env.LLM_MODEL_IMAGE_PATTERNS ||
-    process.env.LLM_MODEL ||
-    "gpt-4o-mini";
 
   const ctx = characterToPromptContext(character);
   const mood = (input.mood || "neutral").trim();
   const camera = (input.camera || "auto").trim();
 
-  const { default: OpenAI } = await import("openai");
-  const client = new OpenAI({ apiKey });
+  const system = `You write FUN, PUNCHY, BETTABLE scene setups for short AI video (Kling image-to-video). Think relatable micro-stories (diner tip, gym signup, text send, two doors) — not generic "tension". A viewer who sees ONE frame at the cut must understand (1) exactly what situation ${character.name} is in and (2) what two or three concrete outcomes they could bet on.
 
-  const system = `You write SHORT scene snippets for AI video (Kling image-to-video). The app will:
-- Send LOCATION separately to an image composer (do NOT repeat the full setting as an opening clause).
-- Use your "description" as the main movement/plot field for scene 1 style beats.
-- Use one "cliffhanger" as the optional ending beat (visible dilemma, no resolution).
+PIPELINE:
+- LOCATION is sent separately to an image composer — do NOT open "description" with "In [place]…" / "At the [place]…". Start with ${character.name} or a physical verb.
+- "description" fills the main movement field: it must make the STAKES obvious in plain language, then the motion leading toward a freeze.
+- Each "cliffhanger" is the ending beat: frozen moment, NO resolution, NO speech.
+
+SIMPLE CAST (STRICT — Kling fails on busy scenes):
+- **Only ${character.name} moves** in any meaningful way. Prefer **zero** other people; if needed, **one** static background figure (clerk facing away, unmoving) — never pairs arguing, families, teams, crowds, queues of people, or choreographed groups.
+- **No animals** (no dogs, cats, birds, insects as focus). No stadiums, parades, pickup games with multiple players, or "group approaches".
+- Dilemmas come from **two or three props / buttons / doors / products / screens**, not from multiple actors.
+- Pick **calm, sparse locations** in the user's LOCATION (empty aisle, quiet counter after hours, solo booth, one machine) — never suggest "crowded", "tournament", "funeral procession", "food truck line", etc.
 
 CHARACTER DATA (behavior is law — do not invent a new personality or job for them):
 ${ctx}
 
-RULES:
-1. LOCATION CONTEXT (user-supplied, do not re-copy as a sentence opener): The user already entered where this happens. Each "description" must clearly take place IN that setting using props, surfaces, light, objects — but do NOT start with "In [place]…" or "At the [place]…". Start with ${character.name} or an action (e.g. "${character.name} pauses…").
-2. MOVEMENT: Max 1–2 clear physical actions per description; normal speed; readable in ~6–10s total video. Match energy, gestures, pace, and red flags from PHYSICAL BEHAVIOR.
-3. STORY: External situation can happen TO them; reactions stay in-character. No random genre flip.
-4. CLIFFHANGERS: Each is a frozen beat or two-way choice — hand hovering, two objects, door half-open, unread message, etc. No outcome. No speech, murmurs, or dialogue.
-5. CONCRETE: Specific objects, surfaces, lighting. Avoid vague poetry.
-6. VARIETY: The ${OPTIONS_COUNT} options should feel meaningfully different (social pressure, object choice, timing, interpersonal, environmental).
-7. MOOD/CAMERA HINTS (optional): User mood=${mood}, camera=${camera}. If mood is not neutral, bias pacing/tension. If camera is not auto, hint framing only inside description (still no "the camera" meta-narration — describe what we see).
+STYLE — DESCRIPTION (2–4 short sentences, hard-hitting, entertaining):
+- Sentence 1: One clear logline a stranger would get — **who, where, what choice** — in words a friend would repeat. (e.g. "${character.name} at the diner counter with the leather bill folder — deciding whether to tip the waitress or stiff her.")
+- Next sentences: **one unhurried physical beat** (or two only if both are slow and simple). **Everyday pace** — not rushing, not a montage. Prefer slowly, pauses, holds — avoid quickly, rushes, frantically, rapid-fire unless the dilemma is explicitly about a deadline. Match PHYSICAL BEHAVIOR (energy = readable, not frantic).
+- Avoid mushy mood writing ("a sense of uncertainty fills the air"). Name objects and body positions instead.
+
+STYLE — CLIFFHANGERS (${CLIFFS_PER_OPTION} per option, each a different phrasing of the SAME visible fork):
+- Every cliffhanger MUST name BOTH options (or all THREE) using **color, side, shape, material** — **never** spelled words on screens or signs (video AI draws nonsense letters). e.g. "Thumb between **green-lit tile** and **red-lit tile** on the phone — neither pressed", "Palm on the **brass** door handle, eyes on the **white** door still closed", "**White** sneaker laced, **black** sneaker still boxed — one foot raised, undecided".
+- Short clauses, strong verbs, present tense. No dialogue, no sounds.
+- The last frame logic: we see the fork; we do not see the pick.
+
+VARIETY: The ${OPTIONS_COUNT} options must differ in TYPE of dilemma (money vs pride, safety vs curiosity, social vs object, time pressure vs temptation, etc.), not just reword the same fork.
+
+MOOD/CAMERA: mood=${mood}, camera=${camera}. If not neutral, bias pacing/tension. Never write "the camera…" — only what appears on screen.
 
 OUTPUT: JSON only, no markdown:
 {
@@ -87,21 +101,15 @@ OUTPUT: JSON only, no markdown:
 }
 Return exactly ${OPTIONS_COUNT} options; each exactly ${CLIFFS_PER_OPTION} cliffhangers.`;
 
-  const userMsg = `LOCATION (already chosen by user — weave into action, do not open with it):\n${location}\n\nGenerate the JSON.`;
+  const userMsg = `LOCATION (user already set this — weave in via props only, no opener clause):\n${location}\n\nGenerate the JSON. Every option must be obviously bettable: name the competing outcomes in both description (stakes) and each cliffhanger (visible A vs B).\n\nKeep every option strictly single-protagonist: only ${character.name} moves; no crowds, teams, or animals.`;
 
   try {
-    const res = await client.chat.completions.create({
-      model,
-      response_format: { type: "json_object" },
-      temperature: 0.55,
-      max_tokens: 2800,
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: userMsg },
-      ],
+    const raw = await completeCharacterClipJson({
+      system,
+      user: userMsg,
+      temperature: 0.42,
+      maxTokens: 2800,
     });
-
-    const raw = res.choices[0]?.message?.content;
     if (!raw) return { error: "Empty model response" };
 
     const parsed = JSON.parse(raw) as { options?: unknown };

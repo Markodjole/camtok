@@ -10,6 +10,113 @@ import {
 } from "@bettok/story-engine";
 import { getContinuationContext } from "@/video-intelligence/pipeline";
 
+function clampProbability(n: number) {
+  return Math.max(0.05, Math.min(0.95, n));
+}
+
+/** Match add-prediction calibration so seeded markets feel similar to user-added ones. */
+function calibrateOpeningYes(hint: number) {
+  const clamped = clampProbability(hint);
+  const centered = 0.5 + (clamped - 0.5) * 0.28;
+  return clampProbability(centered);
+}
+
+/**
+ * Create open prediction markets from LLM `prediction_starters` when a clip is published.
+ * Uses opening_yes_hint for initial odds (no extra LLM calls).
+ */
+export async function seedPredictionStartersForClip(input: {
+  clipNodeId: string;
+  userId: string;
+  starters: Array<{ label?: unknown; opening_yes_hint?: unknown }>;
+}): Promise<{ created: number; skipped: number }> {
+  const serviceClient = await createServiceClient();
+  let created = 0;
+  let skipped = 0;
+
+  const rows = Array.isArray(input.starters) ? input.starters : [];
+  if (rows.length === 0) return { created: 0, skipped: 0 };
+
+  const { data: existingRows } = await serviceClient
+    .from("prediction_markets")
+    .select("market_key")
+    .eq("clip_node_id", input.clipNodeId);
+  const existingKeys = new Set((existingRows || []).map((r: { market_key: string }) => r.market_key));
+
+  const triedKeys = new Set<string>();
+
+  for (const row of rows) {
+    const raw = typeof row?.label === "string" ? row.label.trim() : "";
+    if (raw.length < 3 || raw.length > 300) {
+      skipped++;
+      continue;
+    }
+
+    const normalized = mockNormalize(raw);
+    if (existingKeys.has(normalized.market_key) || triedKeys.has(normalized.market_key)) {
+      skipped++;
+      continue;
+    }
+    triedKeys.add(normalized.market_key);
+
+    const { data: market, error: marketError } = await serviceClient
+      .from("prediction_markets")
+      .insert({
+        clip_node_id: input.clipNodeId,
+        raw_creator_input: raw,
+        canonical_text: normalized.canonical_text,
+        market_key: normalized.market_key,
+        normalization_confidence: normalized.confidence,
+        normalization_explanation: normalized.explanation,
+        created_by_user_id: input.userId,
+        status: "open",
+      })
+      .select("id")
+      .single();
+
+    if (marketError || !market) {
+      skipped++;
+      continue;
+    }
+
+    let hint = Number(row?.opening_yes_hint);
+    if (!Number.isFinite(hint)) hint = 0.5;
+    hint = Math.max(0.12, Math.min(0.88, hint));
+    const yesProbability = calibrateOpeningYes(hint);
+    const noProbability = clampProbability(1 - yesProbability);
+
+    await serviceClient.from("market_sides").insert([
+      {
+        prediction_market_id: (market as { id: string }).id,
+        side_key: "yes",
+        current_odds_decimal: Math.round((1 / yesProbability) * 100) / 100,
+        probability: yesProbability,
+      },
+      {
+        prediction_market_id: (market as { id: string }).id,
+        side_key: "no",
+        current_odds_decimal: Math.round((1 / noProbability) * 100) / 100,
+        probability: noProbability,
+      },
+    ]);
+
+    existingKeys.add(normalized.market_key);
+    created++;
+  }
+
+  if (created > 0) {
+    const { data: prof } = await serviceClient
+      .from("profiles")
+      .select("total_predictions")
+      .eq("id", input.userId)
+      .single();
+    const next = (Number(prof?.total_predictions) || 0) + created;
+    await serviceClient.from("profiles").update({ total_predictions: next }).eq("id", input.userId);
+  }
+
+  return { created, skipped };
+}
+
 export async function submitPrediction(input: {
   clip_node_id: string;
   raw_text: string;
@@ -93,7 +200,13 @@ export async function submitPrediction(input: {
 
   const llmJson = clipFull?.llm_generation_json as Record<string, unknown> | null;
   const llmOutcomes = (llmJson?.obvious_outcomes as string[]) ?? [];
-  const allSuggestedOutcomes = [...new Set([...suggestedOutcomes, ...llmOutcomes])];
+  const starterLabels =
+    Array.isArray(llmJson?.prediction_starters)
+      ? (llmJson.prediction_starters as { label?: unknown }[])
+          .map((x) => (typeof x?.label === "string" ? x.label.trim() : ""))
+          .filter(Boolean)
+      : [];
+  const allSuggestedOutcomes = [...new Set([...suggestedOutcomes, ...llmOutcomes, ...starterLabels])];
 
   const { data: existingMarkets } = await serviceClient
     .from("prediction_markets")

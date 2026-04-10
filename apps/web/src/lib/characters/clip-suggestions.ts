@@ -1,7 +1,8 @@
 /**
  * Curated clip-creation ideas per canonical character slug.
- * Structure: each LOCATION has SETUPS (what happens there); each setup has CLIFFHANGERS that fit.
- * Written for Kling: one environment, 1–2 readable motions, natural 6–10s pacing, dilemma end.
+ * Rules: only the character moves in a meaningful way; at most one static background person (or none).
+ * No crowds, queues of people, teams, animals, or multi-person choreography — dilemmas use props, doors, screens, or two products.
+ * Locations stay sparse and readable for Kling image-to-video.
  */
 
 export type CharacterSceneSetup = {
@@ -81,11 +82,11 @@ export const CLIP_SUGGESTIONS_BY_SLUG: Record<string, CharacterClipSuggestions> 
       loc("Hotel lobby with low marble and a single reception desk", [
         {
           description:
-            "A suited guest and the concierge disagree in low voices about a reservation; Nina stands aside with her rolling bag handle in one hand, listening.",
+            "Nina waits alone beside her rolling bag; the marble desk is quiet, two key cards and a printed slip sit on the counter edge for pickup.",
           cliffhangers: [
             "The clerk slides two key cards forward on the counter; neither matches the name she expected.",
             "Her booking confirmation is on her phone beside a printed slip that shows a different floor.",
-            "Glass doors behind her reflect two figures approaching; she has not stepped forward to the desk.",
+            "Glass doors behind her reflect empty sidewalk; she has not stepped forward to the desk.",
           ],
         },
         {
@@ -104,7 +105,7 @@ export const CLIP_SUGGESTIONS_BY_SLUG: Record<string, CharacterClipSuggestions> 
             "She arranges three clickers and a cable at the head of the table; the screen stays blank and the door behind her is ajar.",
           cliffhangers: [
             "The projector suddenly wakes to an unfamiliar deck title; her hand hovers above the remote without pressing.",
-            "Footsteps pause in the hallway; two different voices disagree about which room is free.",
+            "Intercom speaker crackles with two overlapping room numbers; she has not moved toward either door.",
             "A sticky note on the chair reads a name that is not hers; she has not sat down.",
           ],
         },
@@ -121,20 +122,20 @@ export const CLIP_SUGGESTIONS_BY_SLUG: Record<string, CharacterClipSuggestions> 
       loc("Upscale café window seat, rain faint on glass", [
         {
           description:
-            "She pauses mid-sip as her name floats from the barista counter; steam rises between her and the crowded queue.",
+            "She pauses mid-sip as her name is called softly; the counter area is nearly empty, steam rising from two identical cups on the pickup shelf.",
           cliffhangers: [
             "Two drinks sit waiting with nearly identical sleeves; her name is on both stickers.",
-            "Someone at the counter turns with a half-smile, holding a cup that could be hers or theirs.",
             "Rain smears a reflection over her phone screen; she has not unlocked it.",
+            "The printed receipt shows two different totals; her thumb rests between them on the paper.",
           ],
         },
         {
           description:
-            "A former collaborator slides into the seat across without asking, folder damp from the rain.",
+            "A sealed folder lies on the table across from her seat, damp from the rain; she has not touched it.",
           cliffhangers: [
             "The folder is labeled with a project she thought closed; she has not opened the cover.",
-            "Their phone slides halfway across the table showing a calendar invite; accept and decline both visible.",
-            "Behind them, through the glass, a car pulls up with two people inside; neither door has opened.",
+            "Her phone shows a calendar invite sliding into view; accept and decline both visible.",
+            "Through the glass, a parked car's headlights sweep the wet curb once; she has not looked up.",
           ],
         },
       ]),
@@ -150,11 +151,11 @@ export const CLIP_SUGGESTIONS_BY_SLUG: Record<string, CharacterClipSuggestions> 
         },
         {
           description:
-            "Security paging uses her middle name only; she rises from the plastic seat as others glance up.",
+            "Security paging uses her middle name only; she rises from the plastic seat, alone in the row.",
           cliffhangers: [
             "The nearest desk points left for re-screening, right for customer service; she has not moved toward either sign.",
-            "Her bag strap catches on the armrest; the gate agent is already waving the next passenger.",
-            "Two officers stand at the fork in the corridor; neither has gestured which way yet.",
+            "Her bag strap catches on the armrest; the gate screen flashes boarding for the next group.",
+            "Two corridor signs hang at the fork — re-screening left, service right; no one else in frame.",
           ],
         },
       ]),
@@ -165,14 +166,14 @@ export const CLIP_SUGGESTIONS_BY_SLUG: Record<string, CharacterClipSuggestions> 
           cliffhangers: [
             "The loose page is numbered from a different appendix than the rest; she has not realigned the stack.",
             "Her phone shows a text: wrong terrace—other building; the stair doors behind her are identical on both sides.",
-            "A second voice calls up from the stairwell, climbing; she has not answered which floor she is on.",
+            "Stairwell echo carries a muffled floor number; she has not answered which level she is on.",
           ],
         },
         {
           description:
-            "Someone joins her at the rail without speaking, both watching traffic far below.",
+            "She stands alone at the rail; two business cards lie on the ledge beside her phone, corners lifting in the wind.",
           cliffhangers: [
-            "They place two business cards side by side; the logos almost match but the suffixes differ.",
+            "The logos on the cards almost match but the suffixes differ; she has not picked either up.",
             "Her phone buzzes with a location share pin dropped on this block; three buildings share the outline.",
             "Rain begins over the river only, a straight shadow line moving toward the terrace.",
           ],
@@ -204,7 +205,7 @@ export const CLIP_SUGGESTIONS_BY_SLUG: Record<string, CharacterClipSuggestions> 
             "Her key envelope shows 412; the brass numbers on the nearest door read 412 with a fresh screw beside a faint outline of a former digit.",
           cliffhangers: [
             "The next door reads 412 as well around the corner; both keycards sit in her palm.",
-            "Housekeeping's cart blocks one end of the hall; voices laugh behind the farthest door.",
+            "Housekeeping's cart blocks one end of the hall; the farthest door shows a DO NOT DISTURB tag swinging.",
             "The key light blinks red then green; she has not pressed it into the slot.",
           ],
         },
@@ -250,7 +251,7 @@ export const CLIP_SUGGESTIONS_BY_SLUG: Record<string, CharacterClipSuggestions> 
           cliffhangers: [
             "The mirror duplicates a fourth size sticker she did not pull off any box.",
             "Her reflection and the shelf behind disagree on which color is brighter under the LEDs.",
-            "A child runs past; one box rocks toward the glass without her hand on it.",
+            "A loose shopping cart rolls past; one box rocks toward the glass without her hand on it.",
           ],
         },
         {
@@ -258,12 +259,12 @@ export const CLIP_SUGGESTIONS_BY_SLUG: Record<string, CharacterClipSuggestions> 
             "Her phone shows a text: get the green one; green and teal sit side by side under the same model name.",
           cliffhangers: [
             "The app photo she saved is closer to teal; the caption says green.",
-            "Stock app claims one pair in back; the associate pauses with two identical boxes in hand.",
+            "Stock app claims one pair in back; two identical boxes sit on the top shelf out of reach.",
             "Checkout ping sounds on her watch for an online cart while she holds physical inventory.",
           ],
         },
       ]),
-      loc("Thrift store jacket rack, plastic hangers crowded", [
+      loc("Thrift store jacket rack, plastic hangers, quiet aisle", [
         {
           description:
             "She finds a jacket with the patch she wanted but a stain near the cuff; she turns the sleeve slowly toward the window light.",
@@ -400,11 +401,11 @@ export const CLIP_SUGGESTIONS_BY_SLUG: Record<string, CharacterClipSuggestions> 
         },
         {
           description:
-            "A grandkid holds up a tablet asking streaming or cable; the old remote sits between them on wood worn smooth.",
+            "A tablet and the old remote sit on the armrest; both screens glow with different channel guides for the same game.",
           cliffhangers: [
             "Both devices show different local channel numbers for the same game.",
-            "The dog's tail thumps once under his rocker; the kid has not tapped either icon.",
-            "Lightning brightens the yard; something moves at the fence line the dog does not bark at.",
+            "His thumb hovers between the remote and the tablet; neither input is pressed.",
+            "Lightning brightens the yard; rain starts on the tin roof left channel or right.",
           ],
         },
       ]),
@@ -415,7 +416,7 @@ export const CLIP_SUGGESTIONS_BY_SLUG: Record<string, CharacterClipSuggestions> 
           cliffhangers: [
             "Reward card screen asks verify before pump; wallet thick, not opened.",
             "Diesel handle swings closer in wind; his hand is midway between grades.",
-            "A voice behind offers to fill while he rests; hat brim hides whether he turned.",
+            "The pump speaker crackles with a pre-pay prompt; his hand has not lifted the nozzle yet.",
           ],
         },
         {
@@ -435,7 +436,7 @@ export const CLIP_SUGGESTIONS_BY_SLUG: Record<string, CharacterClipSuggestions> 
           cliffhangers: [
             "Screen sample and paper chip look different under fluorescent vs window strip.",
             "Two gallons wait labeled same name different bases; neither lid opened.",
-            "Intercom calls paint desk extension twice with two voices.",
+            "Intercom calls paint desk extension twice; the speaker crackles between static bursts.",
           ],
         },
         {
@@ -460,10 +461,10 @@ export const CLIP_SUGGESTIONS_BY_SLUG: Record<string, CharacterClipSuggestions> 
         },
         {
           description:
-            "Two hunters debate cartridge brands across the counter; Earl listens, thumb on belt loop, coffee untouched.",
+            "Two cartridge boxes sit on the counter edge; Earl listens to the grill hiss, thumb on belt loop, coffee untouched.",
           cliffhangers: [
-            "Both slide boxes toward him for tie-break without asking.",
-            "Door chime rings; boots pause on mat not entering.",
+            "Both boxes face him with different brand labels; he has not slid either closer.",
+            "Door chime rings once; the mat stays empty.",
             "His pie fork taps once; clock above grill loses a second hand tick.",
           ],
         },
@@ -471,20 +472,20 @@ export const CLIP_SUGGESTIONS_BY_SLUG: Record<string, CharacterClipSuggestions> 
       loc("Bait shop counter, Styrofoam coolers stacked", [
         {
           description:
-            "Kid asks which bait for lake versus river; two tubs sit unlabeled except faint marker.",
+            "Two bait tubs sit unlabeled except faint marker; a chalkboard lists lake versus river in faded handwriting.",
           cliffhangers: [
-            "Owner says trust smell; both lids crack open a breath apart.",
+            "Both lids sit cracked a breath apart; he has not lifted either.",
             "Rain starts on metal roof; tournament weigh-in time on wall chalk behind.",
             "Credit card reader asks tip on worms; screen waits.",
           ],
         },
         {
           description:
-            "Stray dog approaches his boots; he does not move the cigar, eyes on a collar without tag.",
+            "He studies two tackle bundles on the counter, cigar steady; price tags curl at different corners.",
           cliffhangers: [
-            "Second dog appears from cooler aisle tail low, no sound.",
-            "Kid offers half a sandwich; meat type disagrees with sign on wall.",
-            "Owner says town ordinance leash or fine; clock behind counter wrong by hour.",
+            "A third tub sits half-hidden under the shelf; label faces away.",
+            "Printed sign lists lake hours crossed out in pen; river block still blank.",
+            "Credit reader tip screen glows; his wallet stays closed on the glass.",
           ],
         },
       ]),
@@ -500,9 +501,9 @@ export const CLIP_SUGGESTIONS_BY_SLUG: Record<string, CharacterClipSuggestions> 
         },
         {
           description:
-            "He weighs lifting 50lb alone; young hand offers help from each side of the flatbed.",
+            "He weighs lifting a 50lb bag alone; two different lot stickers face him from neighboring stacks.",
           cliffhangers: [
-            "Neither helper wears store vest; both have gloves on.",
+            "Sale tags disagree on the same SKU; neither stack has a clear winner.",
             "Strap ratchet clicks once; bag handle tears thread without breaking.",
             "Radio weather alert cuts music; hail possible line crosses map corner.",
           ],
@@ -556,10 +557,10 @@ export const CLIP_SUGGESTIONS_BY_SLUG: Record<string, CharacterClipSuggestions> 
       loc("Curbside beside a vintage car, hood cool in shade", [
         {
           description:
-            "Two drivers argue over the angled parking slip; Viktor stands beside his own car, keys slow-rotating on one finger.",
+            "Fresh scrape marks angle along the concrete wall; Viktor stands beside his own car, keys slow-rotating on one finger.",
           cliffhangers: [
             "Paint scrape height on concrete wall matches neither bumper yet.",
-            "Security cart turns corner; neither driver looks toward it.",
+            "Security camera housing blinks once on the pole; he has not moved toward the curb paint.",
             "His phone vibrates twice same contact different icons.",
           ],
         },
@@ -568,7 +569,7 @@ export const CLIP_SUGGESTIONS_BY_SLUG: Record<string, CharacterClipSuggestions> 
             "Second keyring visible on driver's seat through glass; door sticks on first pull.",
           cliffhangers: [
             "Alarm chirp pattern wrong sequence; thumb on fob not pressed.",
-            "Alley voice calls name not his; shoulder turns halfway.",
+            "Phone screen shows wrong contact name vibrating; shoulder turns halfway.",
             "Sun breaks cloud; reflection blinds plate read attempt.",
           ],
         },
@@ -605,21 +606,21 @@ export const CLIP_SUGGESTIONS_BY_SLUG: Record<string, CharacterClipSuggestions> 
         },
         {
           description:
-            "Friend leans from upper rail offering shortcut through roof door or basement exit.",
+            "He reads the phone map at the landing; a roof-door sign and a basement arrow both point off-frame.",
           cliffhangers: [
             "Roof alarm LED sleeps dark; basement sign says wet floor partial letters.",
             "Carried bag strap slips notch; both hands busy with phone map.",
-            "Voice from his floor calls nickname variant not quite his.",
+            "Stairwell echo carries a distant door slam; he has not picked a direction.",
           ],
         },
       ]),
-      loc("Late-night food truck queue, steam and string lights", [
+      loc("Late-night food truck window, steam and string lights, no line", [
         {
           description:
-            "Cash slides through early window slot ahead of order called; he watches the cook's pause on spatula.",
+            "Cash slides through the window slot; the menu board shows a fresh chalk cross-out over the item he wanted.",
           cliffhangers: [
-            "Menu flip removes item he queued for; chalk cross-out fresh.",
-            "Two order numbers sound similar over speaker static.",
+            "Menu flip removes item he wanted; chalk cross-out fresh.",
+            "Two order stickers on the ledge show nearly the same number.",
             "Card reader taped over but sign says cash preferred tonight.",
           ],
         },
@@ -629,16 +630,16 @@ export const CLIP_SUGGESTIONS_BY_SLUG: Record<string, CharacterClipSuggestions> 
           cliffhangers: [
             "Dot pauses alley mouth not truck coordinates.",
             "Second share link opens same map different ETA minute.",
-            "Steam wipes his glasses; queue steps forward without him.",
+            "Steam wipes his glasses; string light flicker catches the truck awning edge.",
           ],
         },
       ]),
       loc("Underground parking column, tire marks and echo", [
         {
           description:
-            "Dog chain rattles fence behind vent; he stops mid-step one foot half off safety stripe.",
+            "A loose chain link rattles against the vent grille; he stops mid-step one foot half off the safety stripe.",
           cliffhangers: [
-            "Shadow tail wag silhouette without bark sound.",
+            "Shadow of the chain swings once; no sound follows.",
             "Pillar number plaque mismatched painted column stencil.",
             "Alarm chirp distant three floors echo cancels direction.",
           ],
@@ -653,22 +654,22 @@ export const CLIP_SUGGESTIONS_BY_SLUG: Record<string, CharacterClipSuggestions> 
           ],
         },
       ]),
-      loc("Outdoor basketball court, chain-link and one hoop lit", [
+      loc("Outdoor basketball court, chain-link and one hoop lit, court empty", [
         {
           description:
-            "Pickup game debate who had next; ball rolls to his toe at three-point arc.",
+            "The ball rolls to his toe at the three-point arc; chalk lines show two half-court games marked for tomorrow.",
           cliffhangers: [
-            "Both teams jerseys same color under sodium light.",
-            "Phone timer runs overtime bet; neither captain looks at it.",
-            "Second ball drops from darkened bleachers without throw visible.",
+            "Two jerseys hang on the fence hook, same color under sodium light.",
+            "Phone timer runs overtime bet; lock screen glows on the blacktop.",
+            "Second ball rests against the chain-link; no one else on the asphalt.",
           ],
         },
         {
           description:
-            "Scraped knuckle bleeds slow; two people offer paper towels from left and right.",
+            "Scraped knuckle bleeds slow; two paper towel dispensers on the cinderblock wall, both empty except one.",
           cliffhangers: [
             "Towel prints differ logo community center vs gym chain.",
-            "Whistle mouth far sideline not in ref shirt.",
+            "Whistle hangs on the fence hook, still swinging slightly.",
             "Scoreboard flickers home guest swap digits once.",
           ],
         },
@@ -700,7 +701,7 @@ export const CLIP_SUGGESTIONS_BY_SLUG: Record<string, CharacterClipSuggestions> 
           cliffhangers: [
             "Owner taps glass over third watch shadow blocked.",
             "Offer slips slide under counter glass each different last digit.",
-            "Door bell rings; reflection overlays stranger behind him.",
+            "Door bell rings; glass reflects an empty doorway shape behind him.",
           ],
         },
         {
@@ -730,9 +731,9 @@ export const CLIP_SUGGESTIONS_BY_SLUG: Record<string, CharacterClipSuggestions> 
         },
         {
           description:
-            "Two NCOs mention staggered times by three minutes for same formation name.",
+            "His phone shows two text timestamps three minutes apart for the same formation name.",
           cliffhangers: [
-            "Formation graphic on phone third time not matching either voice.",
+            "Formation graphic on phone third time not matching either timestamp.",
             "Bleacher shadow crosses his face half sun half cloud line.",
             "Whistle on lanyard swing freezes mid arc wind pause.",
           ],
@@ -744,7 +745,7 @@ export const CLIP_SUGGESTIONS_BY_SLUG: Record<string, CharacterClipSuggestions> 
             "Map pin lands between grid squares; fingertip traces fold paper valley not printed dot.",
           cliffhangers: [
             "Second map layer transparency slid halfway mismatches river ink.",
-            "Door window shows silhouettes two ranks arguing gesture.",
+            "Door window shows a single blurred silhouette past frosted glass.",
             "Dry erase marker squeak stops mid label no cap replaced.",
           ],
         },
@@ -752,7 +753,7 @@ export const CLIP_SUGGESTIONS_BY_SLUG: Record<string, CharacterClipSuggestions> 
           description:
             "New private salutes wrong hand; correction syllable hangs air not spoken yet.",
           cliffhangers: [
-            "Other privates mirror error contagious half rise.",
+            "Clipboard edge shows another handout with the same mistake printed.",
             "Clock above map loses second tick two beats.",
             "Clipboards stack three different versions same op name.",
           ],
@@ -864,7 +865,7 @@ export const CLIP_SUGGESTIONS_BY_SLUG: Record<string, CharacterClipSuggestions> 
             "Flag rope fray found inspection; clip rests palm eye on knot studying not pole lower.",
           cliffhangers: [
             "Second stone plaque revision year chisel fresh dust toe line.",
-            "Mourner group approach two deep three wide unsure yield path.",
+            "Second wreath ribbon color clashes with the posted diagram on the easel.",
             "Wind gust half furl snap sound rope slap metal once.",
           ],
         },
@@ -903,22 +904,22 @@ export const CLIP_SUGGESTIONS_BY_SLUG: Record<string, CharacterClipSuggestions> 
           ],
         },
       ]),
-      loc("Busy brunch restaurant line kitchen, tickets on rail", [
+      loc("Restaurant kitchen after brunch rush, tickets on rail, stations quiet", [
         {
           description:
             "Two identical tickets same table different modifiers; he reads each word once spatula lifted not down.",
           cliffhangers: [
-            "Expediter points left plate right plate same protein different sauce swirl.",
+            "Left plate and right plate wait same protein different sauce swirl.",
             "Allergen sticker half peeled both say nut free cross ink.",
-            "Caller ID family name front house line rings once kitchen line.",
+            "Printed modifier slip curls on the rail; handwriting disagrees with the screen.",
           ],
         },
         {
           description:
-            "Customer modification mid-rail shout vegan swap; butter foam already film on his pan edge.",
+            "A rail ticket shows vegan swap in red pen; butter foam already films his pan edge.",
           cliffhangers: [
             "Clean pan hook empty hook beside has slight warp shadow.",
-            "Manager gesture slice continue versus restart pan silent mouth shape.",
+            "Timer on the wall and phone disagree by ninety seconds.",
             "Steam fogs pass window moment ticket face wrong table number last digit.",
           ],
         },
@@ -939,38 +940,38 @@ export const CLIP_SUGGESTIONS_BY_SLUG: Record<string, CharacterClipSuggestions> 
           cliffhangers: [
             "Label says HE only washer front load sign contradicted sharpie.",
             "Timer on phone overlaps gym class alarm same vibration pattern.",
-            "Exit door window reflects hallway two people with keys not his floor.",
+            "Exit door window reflects two key shapes hanging on the board; neither label matches his floor.",
           ],
         },
       ]),
-      loc("Night street basketball half-court, single floodlight", [
+      loc("Night street basketball half-court, single floodlight, court empty", [
         {
           description:
-            "Pickup tied argument last possession; ball rests on his toe at arc,arguments overlap two fouls claimed.",
+            "Ball rests on his toe at the arc; chalk marks show a disputed possession arrow rubbed half away.",
           cliffhangers: [
-            "Phone camera flash accidental from sideline blind half court.",
+            "Phone camera timer reflects off the backboard; he has not tapped record.",
             "Chain net tangled ball wedge above rim shadow pulsing wind.",
-            "Watch beep shift timer conflicts pickup win by two tradition call.",
+            "Watch beep shift timer conflicts with the painted win-by-two note on the pole.",
           ],
         },
         {
           description:
-            "Offered sub in next game water bottle trade brand unfamiliar cap seal ring broken unease.",
+            "An unfamiliar water bottle sits on the curb; cap seal ring cracked, label half peeled.",
           cliffhangers: [
             "Bottle condensation handwriting sharpie initials not his crew.",
-            "Second team jersey same number different font arguing eligibility.",
-            "Car headlights swing gate open silhouette driver wave unclear invite.",
+            "Two jerseys hang on the fence, same number, different font on the back.",
+            "Gate light swings; his shadow crosses the center line alone.",
           ],
         },
       ]),
       loc("Music venue merch table after show, folding crates", [
         {
           description:
-            "Last shirt size debate two buyers one shirt; he holds plastic between them prices taped fresh and old overlapping.",
+            "One shirt left on the table; two price stickers overlap fresh tape and old ink on the plastic wrap.",
           cliffhangers: [
             "Artist signature variant real on one tag sticker only.",
             "Square reader says sold out inventory app shows quantity one.",
-            "Security earpiece crackle crowd surge back tunnel not visible.",
+            "Security radio on the crate crackles once; tunnel sign behind is unreadable.",
           ],
         },
         {
@@ -1015,10 +1016,10 @@ export const CLIP_SUGGESTIONS_BY_SLUG: Record<string, CharacterClipSuggestions> 
         },
         {
           description:
-            "Someone drops wallet; he toe-stops slide without picking ID corner visible not his photo.",
+            "A wallet lies on the tiles; he toe-stops the slide without picking it up, ID corner visible not his photo.",
           cliffhangers: [
-            "Owner approaches from stairs elevator same instant distance tie.",
-            "Second wallet pattern match mistake table lost found sign contradictory.",
+            "Lost-and-found sign lists two different pickup desks on the platform.",
+            "Second wallet pattern on the poster matches by mistake; arrow points both ways.",
             "Train door chime first car last car announcement overlap syllable.",
           ],
         },
@@ -1026,20 +1027,20 @@ export const CLIP_SUGGESTIONS_BY_SLUG: Record<string, CharacterClipSuggestions> 
       loc("Community meeting hall folding chairs, coffee urn hiss", [
         {
           description:
-            "Neighbors debate zoning slide two maps faint boundary ink; he holds paper cup steam unread label decaf regular.",
+            "Two zoning maps lean on the easel with faint boundary ink; he holds a paper cup, steam rising, decaf label unread.",
           cliffhangers: [
-            "Microphone screech feedback chair row half stands sit gesture mixed.",
+            "Microphone on the stand hums once; empty chairs face the blank screen.",
             "Clipboard signup email field smudged last letter domain guess.",
             "Exit sign LED flicker sync coffee urn valve hiss beat off phase.",
           ],
         },
         {
           description:
-            "Sticky name tag curls; pen offers blue black identical barrels cap confusion polite delay.",
+            "Sticky name tag curls on his lapel; two pens wait in the cup — blue and black caps identical.",
           cliffhangers: [
             "Name printed wrong one letter his common misspelling corrected or own.",
             "Donation jar two slots one labeled storm fund other unclear sharpie.",
-            "Child tugs his sleeve parent unknown three faces toward refreshment table.",
+            "Refreshment table flyer curls; two arrows point to different room numbers.",
           ],
         },
       ]),
@@ -1064,7 +1065,7 @@ export const CLIP_SUGGESTIONS_BY_SLUG: Record<string, CharacterClipSuggestions> 
           cliffhangers: [
             "Tip screen percent jump if card before cash decision thumb pad hover.",
             "Straight razor strop sound behind not his station peripheral trust test.",
-            "Walk-in kid wants same lineup photo book page torn corner.",
+            "Photo book page torn corner shows a lineup that matches today's waitlist slip.",
           ],
         },
       ]),
@@ -1088,23 +1089,23 @@ export const CLIP_SUGGESTIONS_BY_SLUG: Record<string, CharacterClipSuggestions> 
           ],
         },
       ]),
-      loc("Basketball court sidelines, weekend tournament", [
+      loc("School gym storage closet, wire racks and game balls", [
         {
           description:
-            "Team tie last seconds; coach gestures substitution him versus cooling starter knee wrap loose.",
+            "Two game balls sit on the shelf with the same number sharpied; clipboard lists one slot for tonight.",
           cliffhangers: [
-            "Scoreboard operator wrong bonus light on free throw incomplete explanation gesture.",
-            "Ref whistle mouth unclear jump ball alternate possession arrow board delayed.",
-            "Phone bet app notification lock screen visible friend shoulder glance.",
+            "Pressure gauge on the rack reads borderline; needle hovers between green and yellow.",
+            "Whistle on hook swings once; neither ball has been lifted yet.",
+            "Phone lock screen shows a bet notification; thumb hovers above dismiss.",
           ],
         },
         {
           description:
-            "Half-court shot contest volunteer hat; ping pong ball draw number his jersey conflict already playing next.",
+            "Volunteer hat on a crate holds folded entry slips; ping pong ball shows a number that matches his jersey.",
           cliffhangers: [
             "Sponsor banner prize fine print season ticket not cash thumb hover signature.",
-            "Crowd wave phone flash pattern causes rim glare blind release timing.",
-            "Ankle brace vendor tent same brand two prices event weekend only ambiguity.",
+            "Rim glare from the high window blinds the far backboard for one second.",
+            "Two ankle-brace boxes share a brand; price stickers disagree.",
           ],
         },
       ]),
@@ -1233,22 +1234,22 @@ export const CLIP_SUGGESTIONS_BY_SLUG: Record<string, CharacterClipSuggestions> 
           ],
         },
       ]),
-      loc("Cat café window booth, cushions and low tables", [
+      loc("Quiet café window booth, cushions and low tables", [
         {
           description:
-            "A cat stretches on the cushion beside her; the treat jar clicks at the counter, her hand on her bag strap not pocket.",
+            "The treat jar clicks at the counter; her hand rests on her bag strap, menu open to the third row of drinks.",
           cliffhangers: [
-            "Second cat blinks from neighboring stool eye level tail still mistimed blink.",
+            "Steam wand hisses behind the bar; two cups wait with nearly identical latte art.",
             "Menu board third row drink names blur steam wand hiss incomplete order syllable.",
-            "Window reflection overlays passerby silhouette halo rainy umbrella color merge hers.",
+            "Window reflection overlays rainy umbrella color bleeding into the glass.",
           ],
         },
         {
           description:
-            "Headphones slide to neck; staff asks for her order while twelve drinks listed, eyes stuck on the third row.",
+            "Headphones slide to neck; twelve drinks listed on the board, her eyes stuck on the third row.",
           cliffhangers: [
-            "Cat paw taps her sleeve thread loop loose button risk snag pause.",
             "Loyalty stamp card one empty slot pen offered two colors caps identical barrels.",
+            "Thread loop on her sleeve catches on the cushion button; she has not pulled free.",
             "Phone camera accidental open selfie mode ceiling light ring harsh pupil shrink.",
           ],
         },
@@ -1280,14 +1281,14 @@ export const CLIP_SUGGESTIONS_BY_SLUG: Record<string, CharacterClipSuggestions> 
           cliffhangers: [
             "Map QR printed skew lines middle building two entrances unmarked accessible icon.",
             "Friend silhouette wave distance ambiguous which fork path tree shadow split.",
-            "Pigeon flock lift wing noise masks footstep behind bench not accounted yet.",
+            "Wind lifts a flyer corner; footsteps echo from the path behind the bench.",
           ],
         },
         {
           description:
-            "Someone holds door from inside; she steps aside mid-threshold, both feet in shadow strip.",
+            "Automatic doors part; she pauses mid-threshold, both feet in the shadow strip.",
           cliffhangers: [
-            "Automatic door sensor reopens bounce heel almost clip slow beep.",
+            "Door sensor reopens bounce heel almost clip slow beep.",
             "Umbrella drip line crosses her shoe choice jump or soak millisecond.",
             "ID lanyard swing catches bench bolt heart charm spin glint distract.",
           ],
@@ -1299,7 +1300,7 @@ export const CLIP_SUGGESTIONS_BY_SLUG: Record<string, CharacterClipSuggestions> 
             "Bakery tongs touch melon bun then cream puff; steam fogs glass between her breath and pastry.",
           cliffhangers: [
             "Price flip card behind fog digit seven partly ice crystal obscured.",
-            "Second customer reflection hand same tong moment polite yield micro bow freeze.",
+            "Her reflection and the tongs overlap in the fogged glass; neither pastry lifted yet.",
             "Freezer motor surge light flicker aisle one not two synchronized.",
           ],
         },
@@ -1309,7 +1310,7 @@ export const CLIP_SUGGESTIONS_BY_SLUG: Record<string, CharacterClipSuggestions> 
           cliffhangers: [
             "Receipt printer out of paper sound silence manager key gesture unclear direction.",
             "Gachapon machine near exit rare color visible through plastic envy lock quarter pocket.",
-            "Entry bell rings child voice excites same dessert namedifferent flavor seasonal.",
+            "Entry bell rings; seasonal dessert tag on the door disagrees with the cooler card.",
           ],
         },
       ]),
@@ -1320,7 +1321,7 @@ export const CLIP_SUGGESTIONS_BY_SLUG: Record<string, CharacterClipSuggestions> 
           cliffhangers: [
             "Someone else's sock static-clings her sweater shoulder unnoticed in mirror blind spot.",
             "Folding diagram sign corner peeled step three missing illustration guess.",
-            "Exit door window reflects two people with keys not her floor ambiguous wave.",
+            "Exit door window reflects the key board; two tags blur alike in the glass.",
           ],
         },
         {
@@ -1336,7 +1337,7 @@ export const CLIP_SUGGESTIONS_BY_SLUG: Record<string, CharacterClipSuggestions> 
       loc("Craft fair handmade table, cloth canopy and jars", [
         {
           description:
-            "Two enamel pins same cat pose different glaze; vendor says one-of-a-kind each; she compares backs under shade.",
+            "Two enamel pins same mascot pose different glaze; handwritten tags both say one-of-a-kind.",
           cliffhangers: [
             "Sunbeam moves cloud shadow line halfway pin surface glitter variance.",
             "Vendor cousin taps shoulder restock box identical pins bulk contradiction whisper.",
@@ -1349,7 +1350,7 @@ export const CLIP_SUGGESTIONS_BY_SLUG: Record<string, CharacterClipSuggestions> 
           cliffhangers: [
             "Canopy guy line stake foot trip mud print size not hers approaching.",
             "Rain patter begin one panel dry rhythm uneven percussion nerve tick.",
-            "Crowd applause distant stage obscures vendor question repeat polite lean in.",
+            "Distant bass thump from the main stage muffles the price the vendor just said.",
           ],
         },
       ]),
@@ -1358,16 +1359,16 @@ export const CLIP_SUGGESTIONS_BY_SLUG: Record<string, CharacterClipSuggestions> 
           description:
             "Misting cycle starts; she lowers phone camera without snapping, droplets bead on orchid leaves beside path.",
           cliffhangers: [
-            "Sign says do not touch petal visitor kid finger millimeter shy rule conflict empathy.",
-            "Glass roof shadow bird silhouette two wing beats sync mist nozzle hiss offbeat.",
+            "Sign says do not touch; her finger hovers a millimeter from the petal without contact.",
+            "Glass roof shadow crosses the mist nozzle hiss; timing drifts half a beat off the cycle.",
             "Map kiosk rotate arrow delayed GPS compass app disagree north feather tilt.",
           ],
         },
         {
           description:
-            "Butterfly lands her shoulder bag strap; second species flickers peripheral same family pattern uncertainty.",
+            "A loose leaf lands on her shoulder bag strap; humidity curls the corner of her sketchpad clip.",
           cliffhangers: [
-            "Guide volunteer offers macro lens loan return time fifteen versus twenty conflicting whisper.",
+            "Loaner lens card on the stand shows fifteen versus twenty minute return windows.",
             "Humidity curls drawing paper corner sketchpad clip loose wind tunnel vent surprise.",
             "Exit arch frame sun flare lens ghost orb photo skepticism rational fear cute.",
           ],

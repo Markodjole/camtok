@@ -36,6 +36,16 @@ export function AddPrediction({
     }>
   >([]);
   const [availableOptionVariables, setAvailableOptionVariables] = useState<string[]>([]);
+  /** From clip author's LLM plan: prediction_starters + outcomes (shown immediately after post). */
+  const [clipAuthorSuggestions, setClipAuthorSuggestions] = useState<
+    Array<{
+      rawText: string;
+      yesProbability: number;
+      noProbability: number;
+      yesOdds: number;
+      noOdds: number;
+    }>
+  >([]);
   /** Fallback suggestions from character betting_signals (shown even if video-analysis is pending/empty). */
   const [bettingSignalSuggestions, setBettingSignalSuggestions] = useState<
     Array<{
@@ -102,6 +112,76 @@ export function AddPrediction({
     () => new Set(existingPredictions.map((p) => canonicalSuggestionKey(p)).filter(Boolean)),
     [existingPredictions],
   );
+
+  function outcomeToPredictionLabel(characterName: string, outcome: string): string {
+    const o = outcome.trim();
+    const name = characterName.trim();
+    if (!o) return "";
+    if (!name) return o;
+    if (o.toLowerCase().includes(name.toLowerCase())) return o;
+    return `${name} ${o.charAt(0).toLowerCase()}${o.slice(1)}`;
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const clip = await getClipById(clipNodeId);
+        if (!clip || cancelled) {
+          if (!cancelled) setClipAuthorSuggestions([]);
+          return;
+        }
+        const llm = (clip as Record<string, unknown>).llm_generation_json as Record<string, unknown> | null;
+        if (!llm) {
+          if (!cancelled) setClipAuthorSuggestions([]);
+          return;
+        }
+        const charName = typeof llm.character_name === "string" ? llm.character_name.trim() : "";
+        const byKey = new Map<
+          string,
+          {
+            rawText: string;
+            yesProbability: number;
+            noProbability: number;
+            yesOdds: number;
+            noOdds: number;
+          }
+        >();
+
+        const starters = Array.isArray(llm.prediction_starters) ? llm.prediction_starters : [];
+        for (const s of starters) {
+          if (!s || typeof s !== "object") continue;
+          const rec = s as Record<string, unknown>;
+          const label = String(rec.label ?? "").trim();
+          if (!label) continue;
+          const k = canonicalSuggestionKey(label);
+          if (!k || existingPredictionKeys.has(k)) continue;
+          let h = Number(rec.opening_yes_hint);
+          if (!Number.isFinite(h)) h = 0.5;
+          const sug = toSuggestion(label, h);
+          byKey.set(k, sug);
+        }
+
+        const outcomes = Array.isArray(llm.outcomes)
+          ? (llm.outcomes as unknown[]).map((x) => String(x).trim()).filter(Boolean)
+          : [];
+        for (const o of outcomes) {
+          const label = outcomeToPredictionLabel(charName, o);
+          if (!label) continue;
+          const k = canonicalSuggestionKey(label);
+          if (!k || existingPredictionKeys.has(k) || byKey.has(k)) continue;
+          byKey.set(k, toSuggestion(label, 0.52));
+        }
+
+        if (!cancelled) setClipAuthorSuggestions(Array.from(byKey.values()).slice(0, 10));
+      } catch {
+        if (!cancelled) setClipAuthorSuggestions([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [clipNodeId, existingPredictionKeys]);
 
   useEffect(() => {
     let cancelled = false;
@@ -354,16 +434,24 @@ export function AddPrediction({
       string,
       { rawText: string; yesProbability: number; noProbability: number; yesOdds: number; noOdds: number }
     >();
-    for (const s of [...suggestedPredictions, ...bettingSignalSuggestions]) {
-      const key = canonicalSuggestionKey(s.rawText);
-      if (!key || existingPredictionKeys.has(key)) continue;
-      const prev = byKey.get(key);
-      if (!prev || s.yesProbability > prev.yesProbability) {
-        byKey.set(key, s);
+    function mergeIn(list: typeof clipAuthorSuggestions, authorTier: boolean) {
+      for (const s of list) {
+        const key = canonicalSuggestionKey(s.rawText);
+        if (!key || existingPredictionKeys.has(key)) continue;
+        const prev = byKey.get(key);
+        if (!prev) {
+          byKey.set(key, s);
+          continue;
+        }
+        if (authorTier) continue;
+        if (s.yesProbability > prev.yesProbability) byKey.set(key, s);
       }
     }
+    mergeIn(clipAuthorSuggestions, true);
+    mergeIn(suggestedPredictions, false);
+    mergeIn(bettingSignalSuggestions, false);
     return Array.from(byKey.values());
-  }, [suggestedPredictions, bettingSignalSuggestions, existingPredictionKeys]);
+  }, [suggestedPredictions, bettingSignalSuggestions, clipAuthorSuggestions, existingPredictionKeys]);
   const typedCanonical = useMemo(() => canonicalSuggestionKey(text), [text]);
   const matchingSuggestions = useMemo(() => {
     if (!typedCanonical) return suggestions;
@@ -408,7 +496,7 @@ export function AddPrediction({
             {suggestionsLoading && matchingSuggestions.length === 0 ? (
               <div className="px-2 py-2 text-xs text-muted-foreground">
                 {awaitingVideoAnalysis
-                  ? "Analyzing video… showing betting-signal suggestions as fallback while analysis completes."
+                  ? "Analyzing video… clip author + character suggestions below; full video-based options when ready."
                   : "Loading options…"}
               </div>
             ) : suggestionsError && matchingSuggestions.length === 0 ? (

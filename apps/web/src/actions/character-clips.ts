@@ -8,13 +8,35 @@ import { join } from "path";
 import { falLongJobOptions, getFalClient } from "@/lib/fal/server";
 import { createServerClient, createServiceClient } from "@/lib/supabase/server";
 import { getCharacterById } from "./characters";
+import { seedPredictionStartersForClip } from "./predictions";
+import {
+  characterClipLlmConfigured,
+  completeCharacterClipJson,
+  mergeNegativePromptLayers,
+} from "@/lib/llm/character-clip-json";
 import {
   downloadToUint8Array,
   uploadBytesToMedia,
   trimVideoAt,
   analyzeVideoForResolution,
 } from "./image-pattern-clips";
-import type { BaseScene, MultiScene, EnhancedPlot } from "./image-pattern-clips";
+import type { BaseScene, MultiScene, EnhancedPlot, PredictionStarter } from "./image-pattern-clips";
+
+function parsePredictionStarters(raw: unknown): PredictionStarter[] {
+  if (!Array.isArray(raw)) return [];
+  const out: PredictionStarter[] = [];
+  for (const item of raw.slice(0, 6)) {
+    if (!item || typeof item !== "object") continue;
+    const rec = item as Record<string, unknown>;
+    const label = String(rec.label ?? "").trim();
+    if (!label || label.length > 300) continue;
+    let h = Number(rec.opening_yes_hint);
+    if (!Number.isFinite(h)) h = 0.5;
+    h = Math.max(0.12, Math.min(0.88, h));
+    out.push({ label, opening_yes_hint: h });
+  }
+  return out.slice(0, 3);
+}
 import {
   characterToPromptContext,
   characterToKlingIdentity,
@@ -275,6 +297,7 @@ RULES:
 3. BEHAVIORAL RED FLAGS are actions this character would NEVER do: ${redFlags}
 4. Location: keep if plausible; if outside comfort zone, show behavior that fits their profile (caution, withdrawal, controlled unease — not a random new personality).
 5. Only canonical story resolutions can change traits over time. Creation input cannot rewrite who they are.
+6. **SIMPLE VIDEO CAST:** If the user asks for crowds, teams, several people moving, animals/pets, or complex multi-character choreography, rewrite **location + plot** so only ${character.name} moves meaningfully, plus **at most one** static background person or **none**. Keep the same dilemma (two options) using **props, UI, doors, products** instead of extra actors.
 
 Return JSON:
 {
@@ -330,23 +353,12 @@ async function buildCharacterMultiScenePrompt(
   userPlotChange: string,
   options?: { mood?: string; camera?: string },
 ): Promise<EnhancedPlot | null> {
-  const apiKey = process.env.LLM_API_KEY;
-  if (!apiKey || process.env.LLM_PROVIDER !== "openai") return null;
-
-  const { default: OpenAI } = await import("openai");
-  const client = new OpenAI({ apiKey });
+  if (!characterClipLlmConfigured()) return null;
 
   const characterContext = characterToPromptContext(character);
   const klingIdentity = characterToKlingIdentity(character);
 
-  const res = await client.chat.completions.create({
-    model: process.env.LLM_MODEL_IMAGE_PATTERNS || process.env.LLM_MODEL || "gpt-4o-mini",
-    response_format: { type: "json_object" },
-    temperature: 0.4,
-    messages: [
-      {
-        role: "system",
-        content: `You create 3-scene video prompts for Kling AI image-to-video. The video stars a specific CHARACTER and starts from their reference image.
+  const systemPrompt = `You create 3-scene video prompts for Kling AI image-to-video. The video stars a specific CHARACTER and starts from their reference image.
 
 ===== CHARACTER PROFILE =====
 ${characterContext}
@@ -383,6 +395,12 @@ PERSONALITY DRIVERS:
 - Decision style: ${character.personality.decision_style}
 - Under pressure: ${character.personality.under_pressure}
 
+===== SIMPLE CAST & STAGING (MANDATORY — AI VIDEO FAILS ON CROWDS) =====
+- **One focal mover only: ${character.name}.** All important motion and emotional beats belong to them.
+- **Other people: at most ONE extra person in the whole clip,** and they must be **static or one tiny beat** (e.g. a cashier handing a cup, back turned). Prefer **zero** other people — use **objects, doors, products, colored controls (no words)** as the dilemma instead.
+- **FORBIDDEN:** crowds, queues of people, teams, coaches, kids + elders + dogs together, animals/pets, parades, funerals with groups, stadiums, choreographed multi-person action, "two people both move", arguing pairs, "group approaches", audience waves, pickup games with multiple players visible.
+- If the user's plot asks for any of the above, **rewrite to a solo or solo-plus-one-static staging** while keeping the same **choice** (tip jar vs no tip, two buttons, two products, two doors — ${character.name} alone with props).
+
 ===== BASE IMAGE =====
 - Subject: ${baseScene.subject}
 - State: ${baseScene.subject_state}
@@ -393,7 +411,7 @@ PERSONALITY DRIVERS:
 ===== YOUR #1 GOAL =====
 Create ONE CONTINUOUS, NATURAL piece of motion that flows smoothly across all 3 scenes.
 The 3 scenes are NOT 3 separate shots — they are 3 segments of ONE UNBROKEN TAKE.
-Think of it as writing movement choreography for a single 6-second clip.
+Think of it as choreography for a single **8–10 second** take at **normal, real-life pace** — not trailer energy, not "late for the train" unless the user or mood explicitly demands urgency.
 
 ===== CRITICAL: START IMAGE IS A CHARACTER REFERENCE ONLY =====
 The start image is a REFERENCE PHOTO of the character — it shows what they LOOK LIKE.
@@ -410,7 +428,20 @@ Kling uses the start image to identify the character's appearance, then generate
 from your text prompt. You control the ENVIRONMENT through your text.
 
 NEVER start with "The camera captures..." or "The scene shows..." — describe MOTION.
-Each scene prompt describes what CHANGES / MOVES during that 2-second window.
+Each scene prompt describes what CHANGES / MOVES during **that scene's duration** (2–4 seconds per segment as you set in JSON). Match the amount of motion to the time: **fewer, slower beats** beat cramming many actions into a short segment.
+
+===== ON-SCREEN TEXT (AVOID — MODELS RENDER GIBBERISH) =====
+- **Do NOT** ask for readable letters, numbers, subtitles, phone UI text, receipts with words, branded logos with spelling, or sign typography. Video models almost always produce **blur, nonsense glyphs, or wrong characters** and confuse viewers.
+- Describe choices with **position, color, shape, material, size** only: e.g. "thumb between the **left green-glowing square tile** and the **right red-glowing square tile** on the glass panel", "hand on **brass** door handle versus **painted white** door", "**tall narrow** bottle versus **short wide** bottle", "upper slot versus lower slot".
+- **Forbidden in scene prompts:** quoted words on objects, "sign says…", "screen reads…", "text shows…", "labeled…", "receipt says…", unless the user explicitly needs speech (subtitles are separate).
+- **prediction_starters** and **outcomes** are for the betting app only — they are **not** instructions to paint text into the video.
+
+===== TWO-OPTION FRAMING (TWO CARS, TWO PRODUCTS, TWO DOORS) =====
+When the user plot is a **choice between A and B** (car lot, two shoes, two doors, two buttons):
+- **Scene 1 — establish space:** ${character.name} stands **between** the two options OR **closer to one** with the other **still clearly visible in frame** (e.g. **left**: low glossy black sedan silhouette; **right**: taller matte blue SUV silhouette). **Never** mention price stickers, windshield text, or any readable labels — only color, height, shape, reflectivity.
+- **Scene 2 — compare (use full time):** **One** slow beat: head turn, gaze shift, or a small step so the viewer **reads both options** in sequence. No new characters or props. **Prefer total_duration_seconds = 10** with **scene_2_duration = 4** for any two-option plot so this beat is not rushed.
+- **Scene 3 — cliffhanger:** **Freeze** with **hand, foot, or torso** in the **gap** between the two options; **both** options **still in frame**. No touch, no pick, no outcome.
+- **Logical continuity:** Scene 2 must **continue** from Scene 1’s body position and facing — no teleporting; if they face the sedan first, the SUV must be the **other** side without swapping sides between scenes.
 
 ===== MOVEMENT PRINCIPLES FOR NATURAL VIDEO =====
 
@@ -443,46 +474,63 @@ ABSOLUTELY FORBIDDEN unless user explicitly asks for speech.
 No murmurs, "hmm", grunts, sighs, whispers, or ANY sound.
 
 ===== MOVEMENT FIDELITY & PACING =====
-- Never use time-lapse, sped-up, or hyperactive motion; each gesture must read clearly on screen at normal speed.
-- MAX 1-2 ACTIONS PER 2-SECOND SCENE. Kling needs time to render each action.
-  If the user asks for 5 things, spread them across all 3 scenes or cut the less important ones.
-  BAD: "He picks up shoes, stands up, tests side steps, swaps to second pair, stands tall" (5 actions in 2s!)
-  GOOD: "He slips on the white sneakers and stands up slowly, flexing his feet on the polished store floor." (1-2 actions)
+- Never use time-lapse, sped-up, or hyperactive motion; each gesture must read clearly on screen at **calm, everyday speed**.
+- **Default tempo is unhurried.** Prefer words like slowly, gradually, pauses, takes a beat, unhurried — not quickly, rapidly, briskly, rushes, snatches, dashes, frantically, without pausing — unless the user's plot or Mood explicitly requires urgency (or this character's profile is clearly high-energy, and even then keep each segment readable).
+- **Fewer happenings > busy clips.** If the user's plot implies many steps, **omit or merge** steps so each scene has at most **one main physical beat** (two only in a 3–4 second segment, and they must be simple and sequential, not a flurry).
+- Per segment caps (strict): **2s → at most ONE clear motion or hold.** **3s → one motion, or two very simple linked motions.** **4s → at most two beats.** Never chain 3+ distinct actions in one scene string.
+- If the user asks for many things, **drop** lower-priority beats or **lengthen** total_duration_seconds to 10s with longer scene_2 — do not accelerate.
+  BAD: "He picks up shoes, stands up, tests side steps, swaps to second pair, stands tall" (too many beats too fast)
+  GOOD: "He lifts one sneaker from the shelf, turns it slowly under the display lights, then sets it back — still deciding." (one focused beat)
 - Include movement implied by the user's situation, but ALWAYS executed in this character's physical and emotional style (profile-driven), never as a generic action hero or a different personality.
 - Do NOT invent extra body movements unless they are this character's TYPICAL GESTURES.
 - "deciding" / "contemplating" = ${character.name}'s typical thinking gesture, not generic pondering.
-- Movement speed and energy MUST match: ${character.personality.physical_behavior?.energy_level ?? character.personality.temperament}
+- Movement speed and energy MUST match: ${character.personality.physical_behavior?.energy_level ?? character.personality.temperament} — interpret "high" as **decisive or alert**, not **frantic**.
 
 ===== MOOD & CAMERA (if provided) =====
 The user may specify a Mood and/or Camera style. If provided, use them:
-- Mood affects PACING: "tense" = slower movements, held pauses. "energetic" = quicker actions. "calm" = gentle, unhurried. "playful" = lighter, bouncier movement. "dramatic" = deliberate, weighted.
+- Mood affects PACING: "tense" = slower movements, held pauses. "energetic" = **lively but legible**, not frantic. "calm" = gentle, unhurried. "playful" = lighter movement, clear beats. "dramatic" = deliberate, **slow**, weighted.
 - Camera options: "follow" = camera tracks the subject. "static" = camera locked, only subject moves. "closeup" = tight framing on hands/face. "pov" = first-person view. "orbit" = slow circular movement around subject.
 - If not provided, choose what fits the action and character personality naturally.
 
 ===== SCENE STRUCTURE =====
 You MUST decide the total duration: 6, 8, or 10 seconds. Return "total_duration_seconds" in JSON.
-Prefer 8 or 10 seconds total so motion is readable; use 6s only for the simplest single-beat setup.
-- Simple setup (1 action + cliffhanger): 6s → 3 scenes × 2s
-- Medium setup (2 actions + cliffhanger): 8s → scene_1=3s, scene_2=3s, scene_3=2s
-- Complex setup (3+ actions + cliffhanger): 10s → scene_1=3s, scene_2=4s, scene_3=3s
+**Prefer 10 seconds** total so motion can stay slow and clear. Use **8s** for a simple arc. **Avoid 6s** — it encourages cramped, hurried motion; use it only when the entire clip is literally one slow approach or hold plus a short freeze.
+- **Two-option choice plots (two cars, two products, etc.): REQUIRED 10s** with **scene_1=3, scene_2=4, scene_3=3** (or 3+4+3) so viewers can see both options and the compare beat.
+- Simple (one slow beat + cliffhanger): **8s** → e.g. scene_1=3s, scene_2=3s, scene_3=2s (or 3+2+3)
+- Medium (non-binary): **10s** → e.g. scene_1=3s, scene_2=4s, scene_3=3s
+- When in doubt, choose **10s** and give scene_2 the longest duration so the middle can **breathe**.
 Set each scene's "duration" field accordingly.
 
-- Scene 1: ESTABLISH & BEGIN. Do NOT start with "In [location]…" — the location is sent separately to the image composer. Open with ${character.name} and the first motion in that place (e.g. "${character.name} pauses at the shelf, hand hovering…").
-- Scene 2: The action DEVELOPS. The main beat unfolds. This is the heart. Let movements breathe — do not rush.
+- Scene 1: ESTABLISH & BEGIN. Do NOT start with "In [location]…" — the location is sent separately to the image composer. Open with ${character.name} and **one** unhurried motion in that place (e.g. "${character.name} pauses at the shelf, hand hovering…").
+- Scene 2: The action DEVELOPS. The main beat unfolds. This is the heart. **Let movements breathe** — linger, pause, no rush.
 - Scene 3: CLIFFHANGER. Movement slows to stillness. ${character.name} holds position facing a clear choice/dilemma. The viewer MUST see what the options are (two items, two paths, a decision point). Camera may drift slowly. No resolution.
 - This is Part 1 of a two-part video. NEVER show the outcome or resolution. The clip MUST end with a visible dilemma.
 
+===== FUN, CLEAR STORY (NOT VAGUE) =====
+- This is **short-form entertainment**: a tiny relatable situation + a sharp cliffhanger. Avoid abstract mood ("something shifts within them") — show **props, money, doors, two products, bill folder, tip jar** so a stranger scrolling understands in one glance — **without** relying on readable on-screen text (see ON-SCREEN TEXT above).
+- **Name ${character.name}** in "viewer_hook" and in each "prediction_starters" label so it is never ambiguous who the clip is about.
+- "enhanced_plot": 2–3 sentences — witty or vivid, **what is happening and why it matters**, ending in the unresolved choice (no resolution).
+
+===== BETTABLE ENDING (CRITICAL) =====
+- "viewer_hook": ONE sentence — the **obvious logline** for humans: who + where + what tension. Example: "${character.name} sits at the diner counter with the bill folder — deciding whether to tip the waitress or walk."
+- "scene_summary": ONE punchy sentence: the **visible fork** / what viewers could bet on (can be shorter than viewer_hook; must still name the dilemma clearly).
+- "outcomes": exactly 3 SHORT parallel labels (3–10 words) — concrete resolutions, **verb-first or action-first** so they map to video Part 2. GOOD: "Leaves a big tip", "Leaves a tiny tip", "Walks out without tipping". BAD: "Undecided energy", "Something happens".
+- "prediction_starters": exactly **3 objects**, one per outcome, for the betting app. Each "label" is a **full natural sentence** a user could post as a prediction (YES = that happens next). Must include **${character.name}** and be unambiguous. Each "opening_yes_hint" is your estimated probability that outcome happens (0.15–0.85), three values should **not** be identical — reflect who this character is.
+  Example labels: "${character.name} leaves a generous tip on the check.", "${character.name} leaves only a small tip.", "${character.name} pays but walks out without tipping."
+- "scene_3" MUST distinguish both (or all) visible options using **color, side, shape, material** — not words on signs. Example: "…thumb between the **left green-lit panel** and **right red-lit panel** on the kiosk, neither pressed, hold."
+
 ===== NEGATIVE PROMPT =====
-Include: "outcome revealed, result shown, action completed, decision finished, sudden jump, jerky motion, fast motion, time-lapse, sped up, face morphing, wrong identity, talking, speaking, murmuring, whispering"
+Include: "outcome revealed, result shown, action completed, decision finished, sudden jump, jerky motion, fast motion, rushed pacing, frantic hurried movement, crowd, large group, multiple people moving, team sports, animals, pets, birds, illegible text, gibberish letters, blurry typography, subtitles, on-screen text, watermark logo text, random letters, time-lapse, sped up, face morphing, wrong identity, talking, speaking, murmuring, whispering"
 Do NOT put items from the user's plot in the negative prompt.
 
 ===== OUTPUT FORMAT =====
 Return JSON:
 {
-  "scene_summary": "one sentence describing the full clip",
+  "viewer_hook": "one obvious sentence: who + where + what choice (include ${character.name})",
+  "scene_summary": "one punchy sentence: the visible dilemma / what viewers could bet on",
   "mood": "the emotional tone",
   "feasibility_notes": "brief note on any adaptations you made and why",
-  "enhanced_plot": "your cinematic version of the user's plot (1-2 sentences)",
+  "enhanced_plot": "2-3 sentences: fun, specific, ends on unresolved choice",
   "total_duration_seconds": 6 | 8 | 10,
   "scene_1": "scene 1 prompt (40-60 words, action + environment grounding)",
   "scene_1_duration": "2" | "3",
@@ -491,24 +539,32 @@ Return JSON:
   "scene_3": "scene 3 prompt (40-60 words, cliffhanger + visible dilemma + camera)",
   "scene_3_duration": "2" | "3",
   "negative_prompt": "things to avoid (do NOT include objects the user requested)",
-  "outcomes": ["outcome A", "outcome B", "outcome C"],
+  "outcomes": ["short resolution A", "short resolution B", "short resolution C"],
+  "prediction_starters": [
+    { "label": "full YES sentence including ${character.name}", "opening_yes_hint": 0.45 },
+    { "label": "…", "opening_yes_hint": 0.35 },
+    { "label": "…", "opening_yes_hint": 0.2 }
+  ],
   "spoken_dialogue": "If the user's plot includes speech (quoted words, 'says', 'whispers', etc.), write the subtitle line (max 120 chars). Otherwise empty string."
-}`,
-      },
-      {
-        role: "user",
-        content: [
-          `Action: "${userPlotChange}"`,
-          options?.mood ? `Mood: ${options.mood}` : null,
-          options?.camera ? `Camera: ${options.camera}` : null,
-        ]
-          .filter(Boolean)
-          .join("\n"),
-      },
-    ],
-  });
+}`;
 
-  const raw = res.choices[0]?.message?.content;
+  const userPayload = [
+    `Action: "${userPlotChange}"`,
+    `Make the clip obvious to someone who has never seen ${character.name} before — concrete props, clear fork, fun micro-story.`,
+    `Cast: ${character.name} is the only person who moves; at most one static background person or none; no crowds, teams, or animals.`,
+    `If the action is choosing between two things, follow TWO-OPTION FRAMING: both visible, 10s with 4s on scene 2, no readable text on cars or signs.`,
+    options?.mood ? `Mood: ${options.mood}` : null,
+    options?.camera ? `Camera: ${options.camera}` : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const raw = await completeCharacterClipJson({
+    system: systemPrompt,
+    user: userPayload,
+    temperature: 0.4,
+    maxTokens: 8192,
+  });
   if (!raw) return null;
 
   try {
@@ -520,20 +576,28 @@ Return JSON:
       });
     }
     const hardNegative =
-      "outcome revealed, result shown, action completed, decision finished, sudden jump, jerky motion, fast motion, time-lapse, sped up, motion blur streaks, face morphing, wrong facial identity, inconsistent character appearance, talking, speaking, murmuring, whispering";
+      "outcome revealed, result shown, action completed, decision finished, sudden jump, jerky motion, fast motion, rushed pacing, frantic hurried movement, crowd, large group, multiple people moving, team sports, animals, pets, illegible text, gibberish letters, blurry typography, subtitles, on-screen text, watermark logo text, random letters, time-lapse, sped up, motion blur streaks, face morphing, wrong facial identity, inconsistent character appearance, talking, speaking, murmuring, whispering";
     const spoken =
       typeof parsed.spoken_dialogue === "string"
         ? parsed.spoken_dialogue.trim().slice(0, 120)
         : "";
+    const viewerHook = typeof parsed.viewer_hook === "string" ? parsed.viewer_hook.trim() : "";
+    const enhancedPlot = typeof parsed.enhanced_plot === "string" ? parsed.enhanced_plot.trim() : "";
+    const summaryFromLlm =
+      typeof parsed.scene_summary === "string" ? parsed.scene_summary.trim() : "";
+    const starters = parsePredictionStarters(parsed.prediction_starters);
     return {
-      scene_summary: parsed.scene_summary || userPlotChange,
+      scene_summary: summaryFromLlm || viewerHook || userPlotChange,
+      viewer_hook: viewerHook || undefined,
+      enhanced_plot: enhancedPlot || undefined,
+      prediction_starters: starters.length > 0 ? starters : undefined,
       scenes: [
         { prompt: parsed.scene_1, duration: String(parsed.scene_1_duration || "2") },
         { prompt: parsed.scene_2, duration: String(parsed.scene_2_duration || "2") },
         { prompt: parsed.scene_3, duration: String(parsed.scene_3_duration || "2") },
       ],
-      negative_prompt: `${parsed.negative_prompt || ""}, ${hardNegative}`.replace(/^,\s*/, ""),
-      outcomes: parsed.outcomes || [],
+      negative_prompt: mergeNegativePromptLayers(parsed.negative_prompt || "", hardNegative),
+      outcomes: Array.isArray(parsed.outcomes) ? parsed.outcomes : [],
       spoken_dialogue: spoken,
       total_duration_seconds: parsed.total_duration_seconds,
     };
@@ -554,19 +618,25 @@ function buildFallbackScenes(
   const identity = characterToKlingIdentity(character);
   return {
     scene_summary: `${character.name} — ${userPlotChange}`,
+    viewer_hook: `${character.name} — ${userPlotChange}`,
+    enhanced_plot: undefined,
+    prediction_starters: undefined,
     spoken_dialogue: "",
     scenes: [
       {
         prompt: `${identity}. ${userPlotChange}. The action begins slowly in the setting (${baseScene.environment.slice(0, 120)}).`,
         duration: "3",
       },
-      { prompt: `Continuing smoothly at a calm pace. The moment develops with clear, readable motion.`, duration: "3" },
-      { prompt: `Movement slows to stillness. Camera drifts in slowly. No resolution.`, duration: "2" },
+      {
+        prompt: `Continuing smoothly at a calm, unhurried pace. One clear beat develops — no rush, readable motion.`,
+        duration: "4",
+      },
+      { prompt: `Movement slows to stillness. Camera drifts in slowly. No resolution.`, duration: "3" },
     ],
     negative_prompt:
-      "outcome revealed, result shown, action completed, decision finished, sudden jump, jerky motion, fast motion, time-lapse, sped up, talking, speaking",
+      "outcome revealed, result shown, action completed, decision finished, sudden jump, jerky motion, fast motion, rushed pacing, frantic hurried movement, crowd, large group, multiple people moving, team sports, animals, pets, time-lapse, sped up, talking, speaking",
     outcomes: [],
-    total_duration_seconds: 8,
+    total_duration_seconds: 10,
   };
 }
 
@@ -600,6 +670,8 @@ async function composeSceneFrame(opts: {
     `Use the reference image as the same real person: preserve face, hair, outfit, body shape, and skin tone. One coherent person only.`,
     `Full-length figure: entire body from head to feet must be visible, both legs complete, feet on the ground, correct anatomy. Do not crop at the waist or thighs. No missing or fused legs.`,
     `Replace only the backdrop and context with this setting: ${env}.`,
+    `Keep the frame simple: this person is the only subject that matters. No crowds, no teams, no animals. At most one vague background figure, still or facing away — prefer empty background props only.`,
+    `Do not add readable text, signage letters, phone UI text, or logos with words — they render as gibberish; use plain objects and color blocks only.`,
     `Scene beat (pose and situation—do not invent a new identity): ${actionLine}`,
     `${camera}. Lighting matches the setting. Mirror reflections, if any, must be soft and partial—never a second full face or duplicate body.`,
     `Avoid random floor powder, debris clouds, or chalk explosions; keep the floor readable and the person's legs clearly visible.`,
@@ -742,7 +814,7 @@ async function runCharacterGeneration(opts: {
         })),
         shot_type: "customize",
         negative_prompt: enhanced.negative_prompt,
-        duration: String(Math.min(10, Math.max(5, enhanced.total_duration_seconds || 8))),
+        duration: String(Math.min(10, Math.max(5, enhanced.total_duration_seconds || 10))),
         generate_audio: true,
       },
       logs: true,
@@ -811,7 +883,7 @@ async function runCharacterGeneration(opts: {
         jobId,
         videoStoragePath: videoPath,
         imageStoragePath,
-        sceneSummary: enhanced.scene_summary,
+        sceneSummary: enhanced.viewer_hook?.trim() || enhanced.scene_summary,
         llmGeneration: { ...enhanced, base_scene: baseScene, character_id: character.id },
         characterId: character.id,
       },
@@ -859,7 +931,7 @@ async function runCharacterGeneration(opts: {
           videoStoragePath: null as string | null,
           falVideoUrl: falRecoverVideoUrl,
           imageStoragePath,
-          sceneSummary: enhanced.scene_summary,
+          sceneSummary: enhanced.viewer_hook?.trim() || enhanced.scene_summary,
           llmGeneration: mergedLlm as any,
           characterId: character.id,
         },
@@ -964,7 +1036,7 @@ async function runCharacterGenerationMock(opts: {
         jobId,
         videoStoragePath: videoPath,
         imageStoragePath,
-        sceneSummary: enhanced.scene_summary,
+        sceneSummary: enhanced.viewer_hook?.trim() || enhanced.scene_summary,
         llmGeneration: {
           ...enhanced,
           base_scene: baseScene,
@@ -1274,8 +1346,23 @@ export async function publishCharacterDraft(input: {
       .then((m) => m.analyzeClipVideo(String((clipNode as any).id)))
       .catch(() => {});
 
+    const starters = Array.isArray((input.llmGeneration as Record<string, unknown> | null)?.prediction_starters)
+      ? ((input.llmGeneration as Record<string, unknown>).prediction_starters as Array<{
+          label?: unknown;
+          opening_yes_hint?: unknown;
+        }>)
+      : [];
+    const seed = await seedPredictionStartersForClip({
+      clipNodeId: String((clipNode as any).id),
+      userId: user.id,
+      starters,
+    });
+    if (seed.created > 0) {
+      logLine(input.jobId, "prediction_starters_seeded", { created: seed.created, skipped: seed.skipped });
+    }
+
     revalidatePath("/feed");
-    return { data: { clipId: (clipNode as any).id } };
+    return { data: { clipId: (clipNode as any).id, predictionsSeeded: seed.created } };
   } catch (e: any) {
     const message = e?.message || "Publish failed";
     console.error("[publishCharacterDraft] unexpected error", e);
