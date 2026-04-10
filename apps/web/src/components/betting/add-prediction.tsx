@@ -2,6 +2,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { getClipById } from "@/actions/clips";
+import { getCharacterById } from "@/actions/characters";
 import { submitPrediction } from "@/actions/predictions";
 import { getClipContinuationContext, getVideoAnalysisStatus } from "@/actions/video-analysis";
 import type { ContinuationContext } from "@/video-intelligence/types";
@@ -34,6 +36,16 @@ export function AddPrediction({
     }>
   >([]);
   const [availableOptionVariables, setAvailableOptionVariables] = useState<string[]>([]);
+  /** Fallback suggestions from character betting_signals (shown even if video-analysis is pending/empty). */
+  const [bettingSignalSuggestions, setBettingSignalSuggestions] = useState<
+    Array<{
+      rawText: string;
+      yesProbability: number;
+      noProbability: number;
+      yesOdds: number;
+      noOdds: number;
+    }>
+  >([]);
   /** True while polling for stored video analysis (server-side pipeline can take 1–2+ minutes). */
   const [awaitingVideoAnalysis, setAwaitingVideoAnalysis] = useState(false);
   /** Gave up polling without ever getting stored analysis (often env/timeout — check Vercel logs + video_analyses row). */
@@ -54,6 +66,18 @@ export function AddPrediction({
     const clamped = clamp01(p);
     const centered = 0.5 + (clamped - 0.5) * 0.28;
     return clamp01(centered);
+  }
+
+  function toSuggestion(rawText: string, probability = 0.56) {
+    const yesProbability = calibrateProbability(probability);
+    const noProbability = clamp01(1 - yesProbability);
+    return {
+      rawText,
+      yesProbability,
+      noProbability,
+      yesOdds: probToOdds(yesProbability),
+      noOdds: probToOdds(noProbability),
+    };
   }
 
   function canonicalSuggestionKey(rawText: string) {
@@ -78,6 +102,68 @@ export function AddPrediction({
     () => new Set(existingPredictions.map((p) => canonicalSuggestionKey(p)).filter(Boolean)),
     [existingPredictions],
   );
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const clip = await getClipById(clipNodeId);
+        const characterId = (clip as { character_id?: string | null } | null)?.character_id;
+        if (!characterId) {
+          if (!cancelled) setBettingSignalSuggestions([]);
+          return;
+        }
+        const { character } = await getCharacterById(characterId);
+        if (!character || cancelled) return;
+
+        const signals = character.betting_signals ?? ({} as Record<string, unknown>);
+        const quickRead = Array.isArray(signals.quick_read) ? (signals.quick_read as string[]) : [];
+        const exploitable = Array.isArray(signals.exploitable_tendencies)
+          ? (signals.exploitable_tendencies as string[])
+          : [];
+        const choicePatterns =
+          typeof signals.choice_patterns === "object" && signals.choice_patterns
+            ? (signals.choice_patterns as Record<string, number>)
+            : {};
+
+        const lines: string[] = [];
+        for (const q of quickRead.slice(0, 4)) {
+          lines.push(`${character.name} follows this tendency now: ${q}`);
+        }
+        for (const t of exploitable.slice(0, 3)) {
+          lines.push(`${character.name} shows this tell next: ${t}`);
+        }
+        const sortedChoices = Object.entries(choicePatterns)
+          .filter(([, v]) => typeof v === "number")
+          .sort((a, b) => Number(b[1]) - Number(a[1]))
+          .slice(0, 3)
+          .map(([k]) => k.replace(/_/g, " "));
+        for (const key of sortedChoices) {
+          lines.push(`${character.name} chooses ${key} in the next beat`);
+        }
+
+        const seen = new Set<string>();
+        const built = lines
+          .map((raw) => raw.trim())
+          .filter(Boolean)
+          .filter((raw) => {
+            const k = canonicalSuggestionKey(raw);
+            if (!k || existingPredictionKeys.has(k) || seen.has(k)) return false;
+            seen.add(k);
+            return true;
+          })
+          .slice(0, 8)
+          .map((raw) => toSuggestion(raw, 0.58));
+
+        if (!cancelled) setBettingSignalSuggestions(built);
+      } catch {
+        if (!cancelled) setBettingSignalSuggestions([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [clipNodeId, existingPredictionKeys]);
 
   useEffect(() => {
     let cancelled = false;
@@ -263,7 +349,21 @@ export function AddPrediction({
     setLoading(false);
   }
 
-  const suggestions = useMemo(() => suggestedPredictions, [suggestedPredictions]);
+  const suggestions = useMemo(() => {
+    const byKey = new Map<
+      string,
+      { rawText: string; yesProbability: number; noProbability: number; yesOdds: number; noOdds: number }
+    >();
+    for (const s of [...suggestedPredictions, ...bettingSignalSuggestions]) {
+      const key = canonicalSuggestionKey(s.rawText);
+      if (!key || existingPredictionKeys.has(key)) continue;
+      const prev = byKey.get(key);
+      if (!prev || s.yesProbability > prev.yesProbability) {
+        byKey.set(key, s);
+      }
+    }
+    return Array.from(byKey.values());
+  }, [suggestedPredictions, bettingSignalSuggestions, existingPredictionKeys]);
   const typedCanonical = useMemo(() => canonicalSuggestionKey(text), [text]);
   const matchingSuggestions = useMemo(() => {
     if (!typedCanonical) return suggestions;
@@ -305,13 +405,13 @@ export function AddPrediction({
 
         {inputFocused ? (
           <div className="absolute bottom-full left-0 right-0 mb-2 max-h-64 overflow-y-auto rounded-xl border border-border bg-card/95 backdrop-blur-sm shadow-xl z-20 p-2">
-            {suggestionsLoading ? (
+            {suggestionsLoading && matchingSuggestions.length === 0 ? (
               <div className="px-2 py-2 text-xs text-muted-foreground">
                 {awaitingVideoAnalysis
-                  ? "Analyzing video… AI suggestions appear when analysis finishes (often 1–2 min)."
+                  ? "Analyzing video… showing betting-signal suggestions as fallback while analysis completes."
                   : "Loading options…"}
               </div>
-            ) : suggestionsError ? (
+            ) : suggestionsError && matchingSuggestions.length === 0 ? (
               <div className="px-2 py-2 text-xs text-destructive">
                 {suggestionsError}
               </div>

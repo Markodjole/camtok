@@ -62,10 +62,6 @@ body {
   height: 100dvh;
 }
 
-#orientation-lock {
-  display: none;
-}
-
 @keyframes slideUp {
   from {
     opacity: 0;
@@ -84,41 +80,3 @@ body {
   }
 }
 
-@media (orientation: landscape) {
-  #app-root {
-    display: none;
-  }
-
-  #orientation-lock {
-    position: fixed;
-    inset: 0;
-    z-index: 9999;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 24px;
-    background: rgba(0, 0, 0, 0.96);
-  }
-
-  .orientation-lock__card {
-    width: min(520px, 100%);
-    border: 1px solid hsl(var(--border));
-    border-radius: 14px;
-    background: hsl(var(--card));
-    padding: 18px 16px;
-    text-align: center;
-  }
-
-  .orientation-lock__title {
-    margin: 0;
-    font-size: 18px;
-    font-weight: 600;
-    color: hsl(var(--foreground));
-  }
-
-  .orientation-lock__text {
-    margin: 6px 0 0;
-    font-size: 13px;
-    color: hsl(var(--muted-foreground));
-  }
-}

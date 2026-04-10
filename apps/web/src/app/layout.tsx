@@ -27,8 +27,6 @@ export const viewport: Viewport = {
   maximumScale: 1,
   userScalable: false,
   interactiveWidget: "resizes-content",
-  // Hint supported mobile browsers to prefer portrait.
-  // We still enforce portrait via CSS blocker below.
   viewportFit: "cover",
   themeColor: "#0d0d0d",
 };
@@ -43,14 +41,6 @@ export default function RootLayout({
       <body className={inter.className}>
         <div id="app-root">
           <Providers>{children}</Providers>
-        </div>
-        <div id="orientation-lock" role="alert" aria-live="polite">
-          <div className="orientation-lock__card">
-            <p className="orientation-lock__title">Rotate to portrait</p>
-            <p className="orientation-lock__text">
-              This app is locked to vertical view.
-            </p>
-          </div>
         </div>
       </body>
     </html>
