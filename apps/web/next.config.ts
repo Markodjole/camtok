@@ -1,6 +1,9 @@
 import type { NextConfig } from "next";
+import path from "path";
 
 const nextConfig: NextConfig = {
+  // pnpm uses symlinks; without this, Vercel packages symlinks instead of real files.
+  outputFileTracingRoot: path.resolve(__dirname, "../.."),
   /** Native binary: keep resolvable at runtime on Vercel (do not bundle into webpack). */
   serverExternalPackages: ["ffmpeg-static"],
   /**
