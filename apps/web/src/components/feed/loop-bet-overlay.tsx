@@ -185,6 +185,7 @@ export function LoopBetOverlay({ clipId, onExpandedChange, openAllSignal = 0 }: 
 
       ) : detailMarket ? (
         /* ── Detail view: same card style, just all comments shown ── */
+        
         <div
           className="pointer-events-auto absolute inset-0 z-30"
           onClick={closeDetail}
