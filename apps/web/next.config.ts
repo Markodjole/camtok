@@ -1,20 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /** Native binary: keep resolvable at runtime on Vercel (do not bundle into webpack). */
   serverExternalPackages: ["ffmpeg-static"],
-  /**
-   * Vercel file tracing does not follow the static import target reliably; include the real
-   * binary plus package entrypoints. Avoid broad glob includes on huge dependency trees — that
-   * exceeds the 250MB unzipped serverless limit.
-   */
-  outputFileTracingIncludes: {
-    "/*": [
-      "./node_modules/ffmpeg-static/ffmpeg",
-      "./node_modules/ffmpeg-static/index.js",
-      "./node_modules/ffmpeg-static/package.json",
-    ],
-  },
   transpilePackages: [
     "@bettok/types",
     "@bettok/core",
