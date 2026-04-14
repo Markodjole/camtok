@@ -1,6 +1,12 @@
 import type { NextConfig } from "next";
+import path from "path";
+
+/** Monorepo root (Vercel Root Directory = apps/web → `next build` cwd is apps/web). */
+const outputFileTracingRoot = path.resolve(process.cwd(), "../..");
 
 const nextConfig: NextConfig = {
+  /** Lets NFT resolve workspace deps + hoisted pnpm store paths; avoids broken / oversized traces on Vercel. */
+  outputFileTracingRoot,
   /** Native binary: keep resolvable at runtime on Vercel (do not bundle into webpack). */
   serverExternalPackages: ["ffmpeg-static"],
   /**

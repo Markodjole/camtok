@@ -1,5 +1,5 @@
 {
   "framework": "nextjs",
   "installCommand": "cd ../.. && pnpm install --frozen-lockfile",
-  "buildCommand": "cd ../.. && pnpm exec turbo build --filter=@bettok/web"
+  "buildCommand": "cd ../.. && NODE_OPTIONS='--max-old-space-size=8192' pnpm exec turbo run build --filter=@bettok/web"
 }
