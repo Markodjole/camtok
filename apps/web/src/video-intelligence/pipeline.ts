@@ -18,6 +18,8 @@ import type {
   VideoAnalysisStatus,
 } from "./types";
 import { log } from "./utils";
+import { getCharacterById } from "@/actions/characters";
+import { characterToPromptContext } from "@/lib/characters/types";
 
 // ─── Pipeline entry: analyze a clip ─────────────────────────────────────────
 
@@ -92,15 +94,28 @@ async function runPipeline(analysisId: string, clipNodeId: string) {
   }
 
   try {
-    // Step 0: Get video bytes from storage
+    // Step 0: Get video bytes from storage + optional character profile
     const { data: clip } = await serviceClient
       .from("clip_nodes")
-      .select("video_storage_path")
+      .select("video_storage_path, character_id")
       .eq("id", clipNodeId)
       .single();
 
     if (!clip?.video_storage_path) {
       return fail("No video_storage_path on clip");
+    }
+
+    let characterProfile: string | null = null;
+    if (clip.character_id) {
+      try {
+        const { character } = await getCharacterById(String(clip.character_id));
+        if (character) {
+          characterProfile = characterToPromptContext(character);
+          log("pipeline", "character_loaded", { name: character.name });
+        }
+      } catch {
+        log("pipeline", "character_load_failed", { characterId: clip.character_id });
+      }
     }
 
     const { data: videoBlob } = await serviceClient.storage
@@ -146,10 +161,11 @@ async function runPipeline(analysisId: string, clipNodeId: string) {
 
     // Step 3: Temporal extraction (actions, beats, intents, derived features)
     await setStatus("extracting_temporal");
-    const temporal = await extractTemporalFeatures(observed, {
-      transcript: audioAsr.transcript,
-      language: audioAsr.language,
-    });
+    const temporal = await extractTemporalFeatures(
+      observed,
+      { transcript: audioAsr.transcript, language: audioAsr.language },
+      characterProfile,
+    );
 
     const mergedObserved = {
       ...observed,
@@ -167,6 +183,57 @@ async function runPipeline(analysisId: string, clipNodeId: string) {
       ...temporal.warnings,
     ];
 
+    // Whisper transcript is ground truth for spoken dialogue — never let the
+    // temporal LLM hallucinate a translation or fabricate speech in another language.
+    const whisper = audioAsr.transcript?.trim() || null;
+    if (whisper) {
+      temporal.derived.spokenDialogue = whisper;
+    }
+
+    // Auto-populate empty continuity anchors from observed data so downstream
+    // continuation always has something to anchor against.
+    const anchors = temporal.derived.continuityAnchors;
+    if (anchors.characterAppearance.length === 0) {
+      anchors.characterAppearance = observed.characters.map((c) => {
+        const parts: string[] = [c.label];
+        if (c.ageGroup && c.ageGroup !== "unknown") parts.push(c.ageGroup.replace(/_/g, " "));
+        if (c.hairDescription) parts.push(c.hairDescription);
+        if (c.clothingTop) parts.push(c.clothingTop);
+        if (c.clothingBottom) parts.push(c.clothingBottom);
+        return parts.join(", ");
+      });
+    }
+    if (anchors.wardrobe.length === 0) {
+      anchors.wardrobe = observed.characters.flatMap((c) => {
+        const items: string[] = [];
+        if (c.clothingTop) items.push(c.clothingTop);
+        if (c.clothingBottom) items.push(c.clothingBottom);
+        if (c.accessories?.length) items.push(...c.accessories);
+        return items;
+      });
+    }
+    if (anchors.environment.length === 0) {
+      const env = observed.environment;
+      anchors.environment = [
+        env.locationType,
+        env.indoorOutdoor,
+        env.lighting,
+        ...(env.settingTags ?? []),
+      ].filter((v): v is string => !!v && v !== "unknown");
+    }
+    if (anchors.objectStates.length === 0) {
+      anchors.objectStates = observed.objects
+        .filter((o) => o.state)
+        .map((o) => `${o.label}: ${o.state}`);
+    }
+    if (anchors.cameraStyle.length === 0 && observed.camera) {
+      anchors.cameraStyle = [
+        observed.camera.shotType,
+        observed.camera.cameraAngle,
+        observed.camera.cameraMotion,
+      ].filter((v): v is string => !!v && v !== "unknown");
+    }
+
     const analysis: VideoAnalysis = {
       version: 1,
       clipNodeId,
@@ -180,8 +247,6 @@ async function runPipeline(analysisId: string, clipNodeId: string) {
       analyzedAt: new Date().toISOString(),
     };
 
-    // Prefer Whisper transcript when present; else temporal one-liner from vision+LLM
-    const whisper = audioAsr.transcript?.trim() || null;
     const fromTemporal = temporal.derived.spokenDialogue?.trim() || null;
     const transcriptToStore = whisper
       ? whisper.slice(0, 500)

@@ -35,6 +35,7 @@ interface TemporalResult {
 export async function extractTemporalFeatures(
   observed: ObservedFacts,
   audio?: TemporalAudioContext | null,
+  characterProfile?: string | null,
 ): Promise<TemporalResult> {
   const apiKey = process.env.LLM_API_KEY;
   if (!apiKey || process.env.LLM_PROVIDER !== "openai") {
@@ -49,6 +50,7 @@ export async function extractTemporalFeatures(
     observedLength: observedJson.length,
     model: TEMPORAL_MODEL,
     hasAudioAsr: !!audio?.transcript?.trim(),
+    hasCharacterProfile: !!characterProfile,
   });
 
   const res = await client.chat.completions.create({
@@ -58,7 +60,7 @@ export async function extractTemporalFeatures(
     temperature: 0.15,
     messages: [
       { role: "system", content: TEMPORAL_EXTRACTION_SYSTEM },
-      { role: "user", content: buildTemporalUserMessage(observedJson, audio) },
+      { role: "user", content: buildTemporalUserMessage(observedJson, audio, characterProfile) },
     ],
   });
 

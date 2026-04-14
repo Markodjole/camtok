@@ -90,9 +90,15 @@ export const TEMPORAL_EXTRACTION_SYSTEM = `You are a temporal video understandin
 
 Given the per-frame observations (JSON) from a short video clip, analyze the temporal structure and return JSON with these fields.
 
-When the user message includes an "AUDIO (automatic speech recognition)" section, treat that transcript as ground truth for spoken language. Reconcile it with any visual "dialogueLines" from observations (prefer audio wording for what was said; use visuals for who is on screen and physical state). Let speech influence mainStory, unresolvedQuestions, availableOptions, nextStepCandidates, and spokenDialogue.
+When the user message includes an "AUDIO (automatic speech recognition)" section:
+- The transcript is GROUND TRUTH for what was said. Do NOT translate it, do NOT rewrite it in another language, do NOT fabricate speech.
+- "spokenDialogue" MUST be the EXACT Whisper transcript text (copy it verbatim). If no audio section is provided, set spokenDialogue to null.
+- Reconcile speech with visual "dialogueLines" (prefer audio wording; use visuals for who is on screen and physical state).
+- Let speech influence mainStory, unresolvedQuestions, availableOptions, and nextStepCandidates.
 
 YOUR #1 JOB: produce useful "availableOptions" and "nextStepCandidates". These are what the prediction/continuation system consumes. If you return empty arrays here, the entire pipeline fails. Always generate them.
+
+When the user message includes a "CHARACTER PROFILE" section, use that character's personality, preferences, risk appetite, and behavioral tendencies to make nextStepCandidates and availableOptions character-specific. The character profile is the source of truth for WHO this person is — their predictions should feel personal, not generic.
 
 ═══ EXTRACT ═══
 
@@ -150,12 +156,13 @@ YOUR #1 JOB: produce useful "availableOptions" and "nextStepCandidates". These a
 
 8. "unresolvedQuestions" — array of things not yet decided/revealed
 
-9. "continuityAnchors" — what MUST stay the same for continuation:
-   - characterAppearance: array of descriptions
-   - wardrobe: array
-   - environment: array
-   - objectStates: array
-   - cameraStyle: array
+9. "continuityAnchors" — MANDATORY, NEVER empty. What MUST stay the same if a continuation video is generated from this clip. Fill EVERY sub-array:
+   - characterAppearance: array — one entry per character with their full description (e.g. "young adult male, short dark hair, beige t-shirt, dark shorts, average build")
+   - wardrobe: array — every clothing item and accessory visible (e.g. "beige t-shirt", "dark shorts", "headphones")
+   - environment: array — setting details that must persist (e.g. "indoor office", "wooden desk", "artificial lighting", "computer monitor on")
+   - objectStates: array — current state of every important object (e.g. "drawer: closed", "phone: idle on blue stand", "monitor: on")
+   - cameraStyle: array — shot type, angle, motion (e.g. "medium shot", "side angle", "static camera")
+   If you leave any sub-array empty, the continuation video will have visual inconsistencies.
 
 10. "nextStepCandidates" — MANDATORY, NEVER empty. The 3-6 most logical next actions/events:
     - candidateId: "next_1", etc.
@@ -177,7 +184,7 @@ YOUR #1 JOB: produce useful "availableOptions" and "nextStepCandidates". These a
     h) Use NATURAL language — how would a viewer describe what happens next? Not robotic template phrases.
     i) ALWAYS include at least 3 candidates. Rank by probability.
 
-11. "spokenDialogue" — ONE short subtitle line if characters appear to be speaking. null if no speech implied.
+11. "spokenDialogue" — If an AUDIO transcript section was provided, copy it VERBATIM here (same language, same words). Do NOT translate or invent speech in a different language. If no audio section, set null. NEVER fabricate dialogue in a language not heard in the audio.
 
 12. "score" — quality assessment:
     - entityConsistency: 0-1 (are entities stable across frames?)
@@ -208,13 +215,18 @@ export type TemporalAudioContext = {
 export function buildTemporalUserMessage(
   observedJson: string,
   audio?: TemporalAudioContext | null,
+  characterProfile?: string | null,
 ): string {
   const asr = audio?.transcript?.trim();
   const audioBlock = asr
-    ? `\n\n=== AUDIO (automatic speech recognition, Whisper) ===\nLanguage (hint): ${audio?.language ?? "unknown"}\nTranscript (verbatim):\n"""${asr}"""\n\nUse this with the visual JSON above. Speech can reveal commitments, questions, names, and stakes that are not obvious from pixels alone.\n`
+    ? `\n\n=== AUDIO (automatic speech recognition, Whisper) ===\nLanguage (hint): ${audio?.language ?? "unknown"}\nTranscript (verbatim):\n"""${asr}"""\n\nUse this with the visual JSON above. Speech can reveal commitments, questions, names, and stakes that are not obvious from pixels alone. "spokenDialogue" MUST be exactly this transcript text.\n`
     : "";
 
-  return `Here are the per-frame observations from a short video clip:\n\n${observedJson}${audioBlock}\n\nAnalyze the temporal structure, derive intents, options, and continuation context.
+  const characterBlock = characterProfile
+    ? `\n\n=== CHARACTER PROFILE (from database — use for intent prediction) ===\n${characterProfile}\n\nUse this profile to predict what the character would MOST LIKELY do next. Their personality, preferences, risk appetite, and past behavior should strongly influence nextStepCandidates and availableOptions. For example, if the character is "impulsive", weight sudden actions higher. If they "love technology", they're more likely to interact with gadgets.\n`
+    : "";
+
+  return `Here are the per-frame observations from a short video clip:\n\n${observedJson}${audioBlock}${characterBlock}\n\nAnalyze the temporal structure, derive intents, options, and continuation context.
 
 CRITICAL REMINDERS:
 - "availableOptions" MUST NOT be empty. Think about what the character can realistically DO given the current state of the scene and objects.
