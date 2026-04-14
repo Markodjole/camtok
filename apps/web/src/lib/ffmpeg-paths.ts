@@ -1,14 +1,5 @@
-import { chmodSync, existsSync } from "fs";
-import { join } from "path";
-
-/**
- * Resolve the ffmpeg binary at runtime.
- *
- * Priority:
- *  1. FFMPEG_BIN env var
- *  2. apps/web/bin/ffmpeg  (copied at build time by scripts/copy-ffmpeg.mjs — real file, no symlink)
- *  3. ffmpeg on PATH (local dev fallback)
- */
+import { chmodSync, existsSync, readdirSync } from "fs";
+import { join, resolve } from "path";
 
 const chmodOnce = new Set<string>();
 
@@ -30,11 +21,35 @@ function findFfmpeg(): string {
     return env;
   }
 
-  // Built by scripts/copy-ffmpeg.mjs → real file in the project, auto-traced by Next.js NFT.
-  const local = join(process.cwd(), "bin", "ffmpeg");
-  if (existsSync(local)) {
-    ensureExecutable(local);
-    return local;
+  const candidates = [
+    join(process.cwd(), "bin", "ffmpeg"),
+    join(process.cwd(), ".next", "server", "bin", "ffmpeg"),
+    resolve(__dirname, "..", "..", "bin", "ffmpeg"),
+    resolve(__dirname, "..", "..", "..", "bin", "ffmpeg"),
+    resolve(__dirname, "..", "..", "..", "..", "bin", "ffmpeg"),
+    "/var/task/bin/ffmpeg",
+    "/var/task/.next/standalone/bin/ffmpeg",
+  ];
+
+  for (const p of candidates) {
+    if (existsSync(p)) {
+      ensureExecutable(p);
+      console.log(`[ffmpeg-paths] found binary at: ${p}`);
+      return p;
+    }
+  }
+
+  console.error(
+    `[ffmpeg-paths] binary not found. cwd=${process.cwd()} __dirname=${__dirname} candidates=${JSON.stringify(candidates)}`,
+  );
+  try {
+    console.error(`[ffmpeg-paths] cwd listing: ${readdirSync(process.cwd()).join(", ")}`);
+    const binDir = join(process.cwd(), "bin");
+    if (existsSync(binDir)) {
+      console.error(`[ffmpeg-paths] bin/ listing: ${readdirSync(binDir).join(", ")}`);
+    }
+  } catch {
+    /* ignore */
   }
 
   return "ffmpeg";
