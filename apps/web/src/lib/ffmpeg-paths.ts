@@ -1,13 +1,13 @@
 import { chmodSync, existsSync } from "fs";
-import ffmpegBinary from "ffmpeg-static";
+import { join } from "path";
 
 /**
- * Bundled ffmpeg (linux x64 on Vercel). Static import + `outputFileTracingIncludes`
- * ensure Vercel copies the binary into the serverless bundle (dynamic `require` is not traced).
+ * Resolve the ffmpeg binary at runtime.
  *
- * Override (optional): `FFMPEG_BIN` — full path to ffmpeg.
- *
- * The binary may lose the executable bit in the deploy archive; we chmod once before first exec.
+ * Priority:
+ *  1. FFMPEG_BIN env var
+ *  2. apps/web/bin/ffmpeg  (copied at build time by scripts/copy-ffmpeg.mjs — real file, no symlink)
+ *  3. ffmpeg on PATH (local dev fallback)
  */
 
 const chmodOnce = new Set<string>();
@@ -23,23 +23,27 @@ function ensureExecutable(binPath: string) {
   }
 }
 
-function bundledFfmpegPath(): string | null {
+function findFfmpeg(): string {
   const env = process.env.FFMPEG_BIN?.trim();
   if (env && existsSync(env)) {
     ensureExecutable(env);
     return env;
   }
-  if (typeof ffmpegBinary === "string" && ffmpegBinary.length > 0 && existsSync(ffmpegBinary)) {
-    ensureExecutable(ffmpegBinary);
-    return ffmpegBinary;
+
+  // Built by scripts/copy-ffmpeg.mjs → real file in the project, auto-traced by Next.js NFT.
+  const local = join(process.cwd(), "bin", "ffmpeg");
+  if (existsSync(local)) {
+    ensureExecutable(local);
+    return local;
   }
-  return null;
+
+  return "ffmpeg";
 }
 
-let ffmpegResolved: string | undefined;
+let resolved: string | undefined;
 
 export function getFfmpegBinaryPath(): string {
-  if (ffmpegResolved) return ffmpegResolved;
-  ffmpegResolved = bundledFfmpegPath() || "ffmpeg";
-  return ffmpegResolved;
+  if (resolved) return resolved;
+  resolved = findFfmpeg();
+  return resolved;
 }

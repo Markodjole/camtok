@@ -11,3 +11,4 @@ coverage/
 .vercel
 supabase/.temp/
 scripts/pattern-images/
+apps/web/bin/
