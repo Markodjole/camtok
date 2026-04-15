@@ -17,6 +17,7 @@ import { getContinuationContext } from "@/video-intelligence/pipeline";
 import type { ContinuationContext } from "@/video-intelligence/types";
 import { settleClipNode } from "@/actions/settlement";
 import { recordCharacterTraitEvent, getCharacterById } from "@/actions/characters";
+import type { CharacterWithImages } from "@/lib/characters/types";
 import { characterToPromptContext, characterToKlingIdentity } from "@/lib/characters/types";
 import {
   clusterCandidateLabels,
@@ -315,6 +316,7 @@ interface PipelineResult {
     videoModel: string;
   };
   videoStoragePath?: string;
+  videoModelUsed?: string;
   error?: string;
 }
 
@@ -338,10 +340,12 @@ async function runContinuationPipeline(
   // Step 1b: Fetch character data if associated
   let characterContext: string | null = null;
   let characterIdentity: string | null = null;
+  let characterData: CharacterWithImages | null = null;
   if (clipNode.character_id) {
     try {
       const { character: charData } = await getCharacterById(String(clipNode.character_id));
       if (charData) {
+        characterData = charData;
         characterContext = characterToPromptContext(charData);
         characterIdentity = characterToKlingIdentity(charData);
         console.log(`[continuation] Loaded character: ${charData.name}`);
@@ -627,10 +631,11 @@ async function runContinuationPipeline(
 
   // Step 4: Generate the continuation video
   let videoStoragePath: string | undefined;
+  let videoModelUsed = "fal-ai/kling-video/v3/pro/image-to-video";
 
   if (isFalAvailable && continuation.video_prompt) {
     try {
-      videoStoragePath = await generateContinuationVideo(
+      const videoResult = await generateContinuationVideo(
         clipNodeId,
         clipNode,
         continuation.video_prompt,
@@ -638,7 +643,10 @@ async function runContinuationPipeline(
         ctx,
         continuation.video_duration_seconds,
         characterIdentity,
+        characterData,
       );
+      videoStoragePath = videoResult.storagePath;
+      videoModelUsed = videoResult.modelUsed;
     } catch (err) {
       console.error("[continuation] Video generation failed:", (err as Error)?.message);
     }
@@ -650,9 +658,10 @@ async function runContinuationPipeline(
       seed,
       proofs: selection.proofs,
       selected: selection.selected,
-      videoModel: "fal-ai/kling-video/v3/pro/image-to-video",
+      videoModel: videoModelUsed,
     } : undefined,
     videoStoragePath,
+    videoModelUsed,
   };
 }
 
@@ -1132,7 +1141,8 @@ async function generateContinuationVideo(
   ctx: ContinuationContext | null,
   durationSeconds?: number,
   dbCharacterIdentity?: string | null,
-): Promise<string> {
+  characterData?: CharacterWithImages | null,
+): Promise<{ storagePath: string; modelUsed: string }> {
   const supabase = await createServiceClient();
   const { getFalClient, falLongJobOptions } = await import("@/lib/fal/server");
   const fal = getFalClient();
@@ -1226,21 +1236,54 @@ async function generateContinuationVideo(
   console.log("[continuation] Generating video with Kling I2V");
   console.log("[continuation] Prompt:", prompt.slice(0, 200));
 
-  const video = await fal.subscribe("fal-ai/kling-video/v3/pro/image-to-video", {
-    ...falLongJobOptions,
-    input: {
-      start_image_url: startImageUrl,
-      prompt,
-      negative_prompt: `${negativePrompt || "blurry, low quality, text overlay, watermark"}, different person, different clothes, costume change, different hair, shorter hair, longer hair, haircut, shaved head, hairstyle change, different outfit, wardrobe change, distorted face`,
-      duration: String(Math.min(10, Math.max(5, durationSeconds ?? 7))),
-      generate_audio: true,
-    },
-    logs: true,
-    onQueueUpdate: (u: unknown) => {
-      const status = (u as Record<string, unknown>)?.status ?? "unknown";
-      console.log(`[continuation] video.queue: ${status}`);
-    },
-  });
+  const duration = String(Math.min(10, Math.max(5, durationSeconds ?? 7)));
+  const baseInput = {
+    start_image_url: startImageUrl,
+    prompt,
+    negative_prompt: `${negativePrompt || "blurry, low quality, text overlay, watermark"}, different person, different clothes, costume change, different hair, shorter hair, longer hair, haircut, shaved head, hairstyle change, different outfit, wardrobe change, distorted face`,
+    duration,
+    generate_audio: true,
+  };
+
+  let modelUsed = "fal-ai/kling-video/v3/pro/image-to-video";
+  let video: unknown;
+
+  const element = await buildCharacterElementInput(supabase, fal, characterData ?? null);
+  if (element) {
+    const referencePrompt = prompt.includes("@Element1") ? prompt : `@Element1 ${prompt}`;
+    try {
+      modelUsed = "fal-ai/kling-video/o3/pro/reference-to-video";
+      video = await fal.subscribe(modelUsed, {
+        ...falLongJobOptions,
+        input: {
+          ...baseInput,
+          prompt: referencePrompt,
+          elements: [element],
+        },
+        logs: true,
+        onQueueUpdate: (u: unknown) => {
+          const status = (u as Record<string, unknown>)?.status ?? "unknown";
+          console.log(`[continuation] video.queue (${modelUsed}): ${status}`);
+        },
+      });
+      console.log("[continuation] Used character element reference-to-video flow");
+    } catch (err) {
+      console.error("[continuation] reference-to-video failed, falling back to image-to-video:", (err as Error)?.message);
+      modelUsed = "fal-ai/kling-video/v3/pro/image-to-video";
+    }
+  }
+
+  if (!video) {
+    video = await fal.subscribe(modelUsed, {
+      ...falLongJobOptions,
+      input: baseInput,
+      logs: true,
+      onQueueUpdate: (u: unknown) => {
+        const status = (u as Record<string, unknown>)?.status ?? "unknown";
+        console.log(`[continuation] video.queue (${modelUsed}): ${status}`);
+      },
+    });
+  }
 
   const falResult = video as Record<string, unknown>;
   const videoUrlCandidates = [
@@ -1272,5 +1315,68 @@ async function generateContinuationVideo(
   }
 
   console.log("[continuation] Video uploaded:", storagePath);
-  return storagePath;
+  return { storagePath, modelUsed };
+}
+
+function storagePathToMime(path: string): string {
+  const p = path.toLowerCase();
+  if (p.endsWith(".jpg") || p.endsWith(".jpeg")) return "image/jpeg";
+  if (p.endsWith(".webp")) return "image/webp";
+  return "image/png";
+}
+
+async function buildCharacterElementInput(
+  supabase: Awaited<ReturnType<typeof createServiceClient>>,
+  fal: Awaited<ReturnType<typeof import("@/lib/fal/server")["getFalClient"]>>,
+  character: CharacterWithImages | null,
+): Promise<{ frontal_image_url: string; reference_image_urls?: string[] } | null> {
+  if (!character?.reference_images?.length) {
+    console.log("[continuation][element] No reference images for character");
+    return null;
+  }
+
+  const sorted = [...character.reference_images].sort((a, b) => {
+    if (a.is_primary && !b.is_primary) return -1;
+    if (!a.is_primary && b.is_primary) return 1;
+    return a.sort_order - b.sort_order;
+  });
+
+  const picked = sorted.slice(0, 4);
+  console.log(`[continuation][element] Building element for "${character.name}" from ${picked.length} reference images`);
+
+  const results = await Promise.allSettled(
+    picked.map(async (img) => {
+      const { data } = await supabase.storage.from("media").download(img.image_storage_path);
+      if (!data) throw new Error(`No data for ${img.image_storage_path}`);
+      const bytes = new Uint8Array(await data.arrayBuffer());
+      const blob = new Blob([bytes], { type: storagePathToMime(img.image_storage_path) });
+      return fal.storage.upload(blob);
+    }),
+  );
+
+  const uploaded: string[] = [];
+  for (let i = 0; i < results.length; i++) {
+    const r = results[i];
+    if (r.status === "fulfilled") {
+      uploaded.push(r.value as string);
+    } else {
+      console.error(`[continuation][element] Failed to upload image ${i}:`, r.reason?.message ?? r.reason);
+    }
+  }
+
+  if (uploaded.length === 0) {
+    console.warn("[continuation][element] All reference image uploads failed");
+    return null;
+  }
+
+  const extra = uploaded.slice(1);
+  console.log(`[continuation][element] Uploaded ${uploaded.length} images (1 frontal + ${extra.length} reference)`);
+
+  const element: { frontal_image_url: string; reference_image_urls?: string[] } = {
+    frontal_image_url: uploaded[0],
+  };
+  if (extra.length > 0) {
+    element.reference_image_urls = extra;
+  }
+  return element;
 }
