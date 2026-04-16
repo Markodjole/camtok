@@ -1239,6 +1239,7 @@ function CreatePageClient() {
               {/* Mode tabs */}
               {!previewImageUrl && !selectedCharacter && (
                 <div className="flex rounded-lg border border-border bg-muted/40 p-1">
+                  
                   <button
                     type="button"
                     onClick={() => setMode("character")}
