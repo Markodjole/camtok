@@ -32,6 +32,9 @@ importers:
       '@bettok/fair-selection':
         specifier: workspace:*
         version: link:../../packages/fair-selection
+      '@bettok/live':
+        specifier: workspace:*
+        version: link:../../packages/live
       '@bettok/story-engine':
         specifier: workspace:*
         version: link:../../packages/story-engine
@@ -219,6 +222,28 @@ importers:
       typescript:
         specifier: ^5.6.0
         version: 5.9.3
+
+  packages/live:
+    dependencies:
+      '@bettok/core':
+        specifier: workspace:*
+        version: link:../core
+      '@bettok/types':
+        specifier: workspace:*
+        version: link:../types
+      zod:
+        specifier: ^3.23.0
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.15
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@22.19.15)
 
   packages/media:
     devDependencies:

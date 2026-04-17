@@ -13,6 +13,7 @@
     "@bettok/core": "workspace:*",
     "@bettok/db": "workspace:*",
     "@bettok/fair-selection": "workspace:*",
+    "@bettok/live": "workspace:*",
     "@bettok/story-engine": "workspace:*",
     "@bettok/types": "workspace:*",
     "@bettok/ui": "workspace:*",

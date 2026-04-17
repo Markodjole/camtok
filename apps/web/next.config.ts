@@ -10,6 +10,7 @@ const nextConfig: NextConfig = {
     "@bettok/db",
     "@bettok/wallet",
     "@bettok/betting",
+    "@bettok/live",
     "@bettok/story-engine",
     "@bettok/ui",
   ],
