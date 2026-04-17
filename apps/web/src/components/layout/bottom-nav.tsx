@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import {
-  Flame,
+  Radio,
   Plus,
   Wallet,
   Users,
@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 
 const navItems = [
-  { href: "/feed", label: "Feed", icon: Flame },
+  { href: "/live", label: "Live", icon: Radio },
   { href: "/bets", label: "Bets", icon: Wallet },
   { href: "/create", label: "Create", icon: Plus, accent: true },
   { href: "/characters", label: "Characters", icon: Users },

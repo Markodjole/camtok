@@ -3,7 +3,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import { useEffect, useMemo, useState } from "react";
-import { BarChart3, ChevronRight, Sparkles } from "lucide-react";
+import { BarChart3, ChevronRight, Radio, Sparkles } from "lucide-react";
 import { AppShell } from "@/components/layout/app-shell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -103,8 +103,11 @@ function CharacterCard({ c }: { c: CharacterRow }) {
             </div>
 
             <div className="flex gap-2">
-              <Button asChild size="sm" className="h-7 text-[11px]">
-                <Link href={createHref}>Create with {c.name}</Link>
+              <Button asChild size="sm" className="h-7 gap-1 text-[11px]">
+                <Link href={`/live/go/${c.id}`}>
+                  <Radio className="h-3 w-3" />
+                  Go live
+                </Link>
               </Button>
               <Button asChild size="sm" variant="ghost" className="h-7 text-[11px]">
                 <Link href={profileHref}>View stats</Link>

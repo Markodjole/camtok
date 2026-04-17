@@ -23,7 +23,7 @@ export default async function Home() {
   }
 
   if (user) {
-    redirect("/feed");
+    redirect("/live");
   }
 
   redirect("/auth/login");
