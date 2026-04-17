@@ -79,7 +79,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         ) : null}
       </div>
 
-      <LiveVideoPlayer />
+      <LiveVideoPlayer liveSessionId={room.liveSessionId} />
 
       <div className="p-4">
         {room.currentMarket ? (

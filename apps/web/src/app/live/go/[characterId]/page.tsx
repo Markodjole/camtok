@@ -19,11 +19,11 @@ export default async function GoLivePage({
 
   const { data: character } = await supabase
     .from("characters")
-    .select("id, name, owner_user_id")
+    .select("id, name, creator_user_id")
     .eq("id", characterId)
     .maybeSingle();
   if (!character) notFound();
-  const isOwner = (character as { owner_user_id: string | null }).owner_user_id === user.id;
+  const isOwner = (character as { creator_user_id: string | null }).creator_user_id === user.id;
   const allowDevBypass = process.env.NODE_ENV !== "production";
   if (!isOwner && !allowDevBypass) {
     redirect("/characters");

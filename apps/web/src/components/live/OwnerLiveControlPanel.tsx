@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { startLiveSession, endLiveSession } from "@/actions/live-sessions";
 import type { TransportMode } from "@bettok/live";
 import { LiveVideoPlayer } from "./LiveVideoPlayer";
+import { startBroadcasterP2p } from "./liveP2pBroadcast";
 
 export function OwnerLiveControlPanel({
   characterId,
@@ -33,6 +34,7 @@ export function OwnerLiveControlPanel({
     }>
   >([]);
   const router = useRouter();
+  const p2pCleanupRef = useRef<(() => void) | undefined>(undefined);
 
   async function goLive() {
     setStarting(true);
@@ -117,6 +119,8 @@ export function OwnerLiveControlPanel({
   }
 
   function cleanup() {
+    p2pCleanupRef.current?.();
+    p2pCleanupRef.current = undefined;
     if (watchIdRef.current !== null) {
       navigator.geolocation.clearWatch(watchIdRef.current);
       watchIdRef.current = null;
@@ -138,6 +142,23 @@ export function OwnerLiveControlPanel({
   }
 
   useEffect(() => () => cleanup(), []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!sessionId || !stream) return;
+    let active = true;
+    void startBroadcasterP2p(sessionId, stream).then((fn) => {
+      if (active) {
+        p2pCleanupRef.current = fn;
+      } else {
+        fn();
+      }
+    });
+    return () => {
+      active = false;
+      p2pCleanupRef.current?.();
+      p2pCleanupRef.current = undefined;
+    };
+  }, [sessionId, stream]);
 
   return (
     <div className="mx-auto max-w-md space-y-4 p-4">

@@ -24,6 +24,20 @@ fi
 echo "==> Applying any pending migrations to local DB"
 supabase migration up --local || true
 
+echo "==> Starting local coturn TURN server (WebRTC relay)"
+bash "$ROOT_DIR/scripts/coturn.sh" || echo "    coturn start failed (continuing without local TURN)"
+
+detect_ip() {
+  if command -v ipconfig >/dev/null 2>&1; then
+    local ip
+    ip=$(ipconfig getifaddr en0 2>/dev/null || true)
+    if [ -z "${ip}" ]; then ip=$(ipconfig getifaddr en1 2>/dev/null || true); fi
+    if [ -n "${ip}" ]; then echo "$ip"; return; fi
+  fi
+  hostname -I 2>/dev/null | awk '{print $1}' || echo "127.0.0.1"
+}
+LOCAL_IP=$(detect_ip)
+
 if [ ! -f "apps/web/.env.local" ]; then
   echo "==> Writing apps/web/.env.local from local Supabase credentials"
   API_URL=$(supabase status -o json 2>/dev/null | jq -r '.API_URL' || echo "http://127.0.0.1:54331")
@@ -36,8 +50,21 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=${ANON}
 SUPABASE_SERVICE_ROLE_KEY=${SERVICE}
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 LIVE_STREAM_SECRET=${LIVE_SECRET}
+NEXT_PUBLIC_TURN_URL=turn:${LOCAL_IP}:3478
+NEXT_PUBLIC_TURN_USERNAME=camtok
+NEXT_PUBLIC_TURN_CREDENTIAL=camtok
 EOF
   echo "    wrote apps/web/.env.local"
+else
+  echo "==> Ensuring TURN env vars are set in apps/web/.env.local"
+  if ! grep -q '^NEXT_PUBLIC_TURN_URL=' apps/web/.env.local; then
+    {
+      echo "NEXT_PUBLIC_TURN_URL=turn:${LOCAL_IP}:3478"
+      echo "NEXT_PUBLIC_TURN_USERNAME=camtok"
+      echo "NEXT_PUBLIC_TURN_CREDENTIAL=camtok"
+    } >> apps/web/.env.local
+    echo "    appended TURN vars (URL=turn:${LOCAL_IP}:3478)"
+  fi
 fi
 
 echo "==> Starting Next.js dev server on http://localhost:3000"

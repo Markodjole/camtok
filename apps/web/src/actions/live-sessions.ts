@@ -10,6 +10,33 @@ import {
   type HeartbeatInput,
 } from "@bettok/live";
 
+/** No heartbeat for this long ⇒ treat as crashed tab / abandoned; allow new session. */
+const STALE_SESSION_MS = 2 * 60 * 1000;
+
+async function forceEndLiveSession(
+  service: Awaited<ReturnType<typeof createServiceClient>>,
+  sessionId: string,
+) {
+  const { data: row } = await service
+    .from("character_live_sessions")
+    .select("current_room_id")
+    .eq("id", sessionId)
+    .maybeSingle();
+  await service
+    .from("character_live_sessions")
+    .update({ status: "ended", session_ended_at: new Date().toISOString() })
+    .eq("id", sessionId);
+  const roomId = (row as { current_room_id: string | null } | null)?.current_room_id;
+  if (roomId) {
+    await service.from("live_rooms").update({ phase: "idle" }).eq("id", roomId);
+    await service.from("live_room_events").insert({
+      room_id: roomId,
+      event_type: "session_ended",
+      payload: { sessionId, reason: "replaced_or_stale" },
+    });
+  }
+}
+
 export async function startLiveSession(input: StartSessionInput) {
   unstable_noStore();
 
@@ -22,12 +49,12 @@ export async function startLiveSession(input: StartSessionInput) {
 
   const { data: character } = await supabase
     .from("characters")
-    .select("id, owner_user_id, name")
+    .select("id, creator_user_id, name")
     .eq("id", parsed.data.characterId)
     .maybeSingle();
 
   if (!character) return { error: "Character not found" };
-  if ((character as { owner_user_id: string | null }).owner_user_id !== user.id) {
+  if ((character as { creator_user_id: string | null }).creator_user_id !== user.id) {
     return { error: "Not your character" };
   }
 
@@ -40,13 +67,41 @@ export async function startLiveSession(input: StartSessionInput) {
 
   const { data: existing } = await service
     .from("character_live_sessions")
-    .select("id, status")
+    .select("id, status, owner_user_id, current_room_id, last_heartbeat_at")
     .eq("character_id", parsed.data.characterId)
     .in("status", ["starting", "live", "paused"])
     .maybeSingle();
 
   if (existing) {
-    return { error: "Character is already live" };
+    const ex = existing as {
+      id: string;
+      owner_user_id: string;
+      current_room_id: string | null;
+      last_heartbeat_at: string | null;
+    };
+    if (ex.owner_user_id !== user.id) {
+      return { error: "Character is already live" };
+    }
+
+    const lastBeat = ex.last_heartbeat_at ? new Date(ex.last_heartbeat_at).getTime() : 0;
+    const isStale = Date.now() - lastBeat > STALE_SESSION_MS;
+
+    if (isStale || !ex.current_room_id) {
+      await forceEndLiveSession(service, ex.id);
+    } else {
+      await service
+        .from("character_live_sessions")
+        .update({
+          transport_mode: parsed.data.transportMode,
+          current_status_text: parsed.data.statusText ?? null,
+          current_intent_label: parsed.data.intentLabel ?? null,
+          last_heartbeat_at: new Date().toISOString(),
+          status: "live",
+        })
+        .eq("id", ex.id);
+
+      return { sessionId: ex.id, roomId: ex.current_room_id };
+    }
   }
 
   const { data: session, error: insertError } = await service

@@ -18,7 +18,7 @@ export default async function GoLiveIndexPage() {
   const { data: characters } = await supabase
     .from("characters")
     .select("id, name")
-    .eq("owner_user_id", user.id)
+    .eq("creator_user_id", user.id)
     .order("created_at", { ascending: false })
     .limit(50);
   let devCharacters: Array<{ id: string; name: string }> = [];
