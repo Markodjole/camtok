@@ -1,7 +1,7 @@
 -- Image patterns: pre-made starting images users can pick for quick video generation
 
 CREATE TABLE IF NOT EXISTS image_patterns (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   slug TEXT NOT NULL UNIQUE,
   title TEXT NOT NULL,
   description TEXT,

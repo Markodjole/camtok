@@ -1,7 +1,7 @@
 -- ─── Video analysis: structured extraction from clip videos ─────────────────
 
 CREATE TABLE IF NOT EXISTS video_analyses (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   clip_node_id UUID NOT NULL REFERENCES clip_nodes(id) ON DELETE CASCADE,
   status TEXT NOT NULL DEFAULT 'queued'
     CHECK (status IN ('queued','sampling_frames','extracting_vision','extracting_temporal','deriving_features','stored','failed')),

@@ -82,7 +82,7 @@ CREATE INDEX idx_profiles_username ON profiles(username);
 -- ─── Wallets ────────────────────────────────────────────
 
 CREATE TABLE wallets (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID UNIQUE NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   balance NUMERIC(12, 2) NOT NULL DEFAULT 0,
   total_deposited NUMERIC(12, 2) NOT NULL DEFAULT 0,
@@ -93,7 +93,7 @@ CREATE TABLE wallets (
 );
 
 CREATE TABLE wallet_transactions (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   wallet_id UUID NOT NULL REFERENCES wallets(id),
   type wallet_tx_type NOT NULL,
   amount NUMERIC(12, 2) NOT NULL,
@@ -110,7 +110,7 @@ CREATE INDEX idx_wallet_tx_created ON wallet_transactions(created_at DESC);
 CREATE INDEX idx_wallet_tx_ref ON wallet_transactions(reference_type, reference_id);
 
 CREATE TABLE wallet_holds (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   wallet_id UUID NOT NULL REFERENCES wallets(id),
   bet_id UUID NOT NULL,
   amount NUMERIC(12, 2) NOT NULL CHECK (amount > 0),
@@ -125,7 +125,7 @@ CREATE INDEX idx_wallet_holds_status ON wallet_holds(status) WHERE status = 'act
 -- ─── Stories & Clips ────────────────────────────────────
 
 CREATE TABLE stories (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   title TEXT NOT NULL CHECK (char_length(title) >= 1 AND char_length(title) <= 200),
   description TEXT CHECK (char_length(description) <= 1000),
   genre TEXT,
@@ -142,7 +142,7 @@ CREATE TABLE stories (
 CREATE INDEX idx_stories_creator ON stories(creator_user_id);
 
 CREATE TABLE clip_nodes (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   story_id UUID NOT NULL REFERENCES stories(id),
   parent_clip_node_id UUID REFERENCES clip_nodes(id),
   depth INTEGER NOT NULL DEFAULT 0,
@@ -175,7 +175,7 @@ ALTER TABLE stories ADD CONSTRAINT fk_root_clip
   FOREIGN KEY (root_clip_node_id) REFERENCES clip_nodes(id);
 
 CREATE TABLE clip_context_snapshots (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   clip_node_id UUID NOT NULL REFERENCES clip_nodes(id),
   context_json JSONB NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -184,7 +184,7 @@ CREATE TABLE clip_context_snapshots (
 -- ─── Prediction Markets ─────────────────────────────────
 
 CREATE TABLE prediction_markets (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   clip_node_id UUID NOT NULL REFERENCES clip_nodes(id),
   raw_creator_input TEXT NOT NULL,
   canonical_text TEXT NOT NULL,
@@ -202,7 +202,7 @@ CREATE INDEX idx_pm_clip ON prediction_markets(clip_node_id);
 CREATE INDEX idx_pm_status ON prediction_markets(status);
 
 CREATE TABLE market_sides (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   prediction_market_id UUID NOT NULL REFERENCES prediction_markets(id),
   side_key market_side_key NOT NULL,
   current_odds_decimal NUMERIC(8, 2) NOT NULL DEFAULT 2.00,
@@ -218,7 +218,7 @@ CREATE INDEX idx_ms_market ON market_sides(prediction_market_id);
 -- ─── Bets ───────────────────────────────────────────────
 
 CREATE TABLE bets (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES auth.users(id),
   clip_node_id UUID NOT NULL REFERENCES clip_nodes(id),
   prediction_market_id UUID NOT NULL REFERENCES prediction_markets(id),
@@ -242,7 +242,7 @@ CREATE INDEX idx_bets_status ON bets(status);
 -- ─── Odds Snapshots ─────────────────────────────────────
 
 CREATE TABLE odds_snapshots (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   prediction_market_id UUID NOT NULL REFERENCES prediction_markets(id),
   clip_node_id UUID NOT NULL REFERENCES clip_nodes(id),
   probability_yes NUMERIC(5, 4) NOT NULL,
@@ -267,7 +267,7 @@ CREATE INDEX idx_odds_market ON odds_snapshots(prediction_market_id);
 -- ─── Continuation Jobs ──────────────────────────────────
 
 CREATE TABLE continuation_jobs (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   clip_node_id UUID NOT NULL REFERENCES clip_nodes(id),
   status continuation_job_status NOT NULL DEFAULT 'queued',
   continuation_summary TEXT,
@@ -291,7 +291,7 @@ CREATE INDEX idx_cont_jobs_status ON continuation_jobs(status);
 -- ─── Settlement ─────────────────────────────────────────
 
 CREATE TABLE settlement_results (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   clip_node_id UUID NOT NULL REFERENCES clip_nodes(id),
   continuation_clip_node_id UUID NOT NULL REFERENCES clip_nodes(id),
   algorithm_version TEXT NOT NULL,
@@ -303,7 +303,7 @@ CREATE TABLE settlement_results (
 CREATE INDEX idx_settlement_clip ON settlement_results(clip_node_id);
 
 CREATE TABLE settlement_side_results (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   settlement_result_id UUID NOT NULL REFERENCES settlement_results(id),
   prediction_market_id UUID NOT NULL REFERENCES prediction_markets(id),
   yes_correctness NUMERIC(5, 4) NOT NULL,
@@ -323,7 +323,7 @@ CREATE INDEX idx_ssr_market ON settlement_side_results(prediction_market_id);
 -- ─── LLM Runs ──────────────────────────────────────────
 
 CREATE TABLE llm_runs (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   provider TEXT NOT NULL,
   model TEXT NOT NULL,
   purpose llm_purpose NOT NULL,
@@ -342,7 +342,7 @@ CREATE INDEX idx_llm_runs_purpose ON llm_runs(purpose);
 CREATE INDEX idx_llm_runs_created ON llm_runs(created_at DESC);
 
 CREATE TABLE llm_prompt_versions (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name TEXT NOT NULL,
   version TEXT NOT NULL,
   content TEXT NOT NULL,
@@ -353,7 +353,7 @@ CREATE TABLE llm_prompt_versions (
 -- ─── Notifications ──────────────────────────────────────
 
 CREATE TABLE notifications (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES auth.users(id),
   type notification_type NOT NULL,
   title TEXT NOT NULL,
@@ -372,7 +372,7 @@ CREATE INDEX idx_notifications_created ON notifications(created_at DESC);
 -- ─── Reports ────────────────────────────────────────────
 
 CREATE TABLE reports (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   reporter_user_id UUID NOT NULL REFERENCES auth.users(id),
   target_type report_target_type NOT NULL,
   target_id UUID NOT NULL,

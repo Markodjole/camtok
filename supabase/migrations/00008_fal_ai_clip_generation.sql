@@ -1,7 +1,7 @@
 -- fal.ai clip generation: blueprints + generation jobs + clip metadata
 
 CREATE TABLE IF NOT EXISTS clip_blueprints (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   slug TEXT NOT NULL UNIQUE,
   label TEXT NOT NULL,
   category TEXT NOT NULL,
@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS clip_blueprints (
 );
 
 CREATE TABLE IF NOT EXISTS clip_generation_jobs (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES auth.users(id),
   blueprint_id UUID REFERENCES clip_blueprints(id),
   clip_node_id UUID REFERENCES clip_nodes(id),
