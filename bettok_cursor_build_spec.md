@@ -2,6 +2,7 @@
 # BetTok / StoryBet — Cursor Build Specification
 
 
+
 ## Purpose
 Build a mobile-first short-video betting app where users watch a paused clip, read or submit story predictions about what happens next, place money on existing predictions or their counters, and later receive the actual continuation plus bet settlement. The feed behaves like TikTok: vertical clips, fast interaction, infinite scrolling, and repeat loops. Every resolved continuation can itself become the starting point for another continuation, creating an endless branching stream of clips.
 
