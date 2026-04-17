@@ -87,12 +87,45 @@ actions/live-settlement.ts      lockMarket / revealAndSettleMarket
 - **Car / other vehicle** — system markets disabled by default; hard
   restrictions on anything that could encourage unsafe driving behavior
 
-## Running locally
+## Environments (mirror: localhost <-> production)
+
+CamTok runs with the same topology in both environments: Next.js app +
+Supabase. Only the endpoints differ.
+
+| Surface              | Localhost                              | Production                                 |
+| -------------------- | -------------------------------------- | ------------------------------------------ |
+| Next.js              | `http://localhost:3000` (`pnpm dev`)   | `https://camtok-web.vercel.app` (Vercel)   |
+| Supabase             | Docker stack (`supabase start`, :5433x)| `tqsuhldwswkoqmwxinne.supabase.co`         |
+| Migrations           | `supabase migration up --local`        | `supabase db push` (linked project)        |
+| Env file             | `apps/web/.env.local`                  | Vercel project env vars                    |
+| Live stream secret   | Generated per machine                  | Set once in Vercel (`LIVE_STREAM_SECRET`)  |
+
+### Localhost
 
 ```bash
 pnpm install
-pnpm exec turbo build --filter=@bettok/web
+pnpm camtok:dev          # starts local Supabase + writes .env.local + runs next dev
+```
+
+Or the long form:
+
+```bash
+supabase start
+pnpm db:migrate:local
 pnpm --filter @bettok/web dev
 ```
 
-Set `LIVE_STREAM_SECRET` for issuing broadcaster/viewer tokens.
+### Production
+
+1. Push schema: `pnpm db:migrate` (runs `supabase db push` against the
+   linked project `tqsuhldwswkoqmwxinne`).
+2. Sync env vars to Vercel (one time or when values change):
+   ```bash
+   pnpm vercel:env:push                   # all vars from apps/web/environment.txt
+   pnpm vercel:env:push LIVE_STREAM_SECRET # a specific key
+   ```
+3. Deploy: Vercel auto-deploys on push to `main`, or run `vercel --prod`
+   inside `apps/web`.
+
+`LIVE_STREAM_SECRET` must be the SAME value across all scopes (prod,
+preview, development). Generate with `openssl rand -hex 32`.

@@ -1,4 +1,6 @@
 # Ports 54331+ to avoid conflict with other Supabase projects on default 54321–54330
+project_id = "camtok"
+
 [api]
 port = 54331
 schemas = ["public"]

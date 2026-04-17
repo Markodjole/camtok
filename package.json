@@ -8,8 +8,13 @@
     "lint": "turbo lint",
     "test": "turbo test",
     "db:migrate": "supabase db push",
+    "db:migrate:local": "supabase migration up --local",
     "db:reset": "supabase db reset",
     "db:seed": "tsx supabase/seed/index.ts",
+    "supabase:start": "supabase start",
+    "supabase:stop": "supabase stop",
+    "camtok:dev": "bash scripts/dev.sh",
+    "vercel:env:push": "bash scripts/vercel-env-push.sh",
     "format": "prettier --write \"**/*.{ts,tsx,md,json}\""
   },
   

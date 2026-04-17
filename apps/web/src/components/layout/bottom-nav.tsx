@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import {
   Radio,
-  Plus,
+  Video,
   Wallet,
   Users,
   User,
@@ -14,7 +14,7 @@ import {
 const navItems = [
   { href: "/live", label: "Live", icon: Radio },
   { href: "/bets", label: "Bets", icon: Wallet },
-  { href: "/create", label: "Create", icon: Plus, accent: true },
+  { href: "/live/go", label: "Go Live", icon: Video, accent: true },
   { href: "/characters", label: "Characters", icon: Users },
   { href: "/profile", label: "Profile", icon: User },
 ];
