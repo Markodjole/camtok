@@ -14,6 +14,7 @@ export default function SignupPage() {
   const [password, setPassword] = useState("");
   const [username, setUsername] = useState("");
   const [loading, setLoading] = useState(false);
+  const [pendingConfirmationEmail, setPendingConfirmationEmail] = useState<string | null>(null);
   const router = useRouter();
   const { toast } = useToast();
 
@@ -45,6 +46,7 @@ export default function SignupPage() {
     }
 
     if (!data.session) {
+      setPendingConfirmationEmail(email);
       toast({
         title: "Check your email",
         description: "We sent a confirmation link. Open it to activate your account.",
@@ -62,6 +64,38 @@ export default function SignupPage() {
 
     router.push("/feed");
     router.refresh();
+  }
+
+  async function resendConfirmationEmail() {
+    const resendEmail = pendingConfirmationEmail ?? email;
+    if (!resendEmail) return;
+
+    setLoading(true);
+    const supabase = createBrowserClient();
+    const { error } = await supabase.auth.resend({
+      type: "signup",
+      email: resendEmail,
+      options: {
+        emailRedirectTo: `${window.location.origin}/auth/callback?next=/feed`,
+      },
+    });
+
+    if (error) {
+      toast({
+        title: "Could not resend confirmation",
+        description: error.message,
+        variant: "destructive",
+      });
+      setLoading(false);
+      return;
+    }
+
+    toast({
+      title: "Confirmation sent",
+      description: `We sent another confirmation email to ${resendEmail}.`,
+      variant: "success",
+    });
+    setLoading(false);
   }
 
   async function signUpWithGoogle() {
@@ -171,6 +205,19 @@ export default function SignupPage() {
               Sign in
             </Link>
           </p>
+          {pendingConfirmationEmail ? (
+            <div className="mt-3 text-center text-sm text-muted-foreground">
+              Not seeing the email?{" "}
+              <button
+                type="button"
+                className="text-primary hover:underline"
+                onClick={() => void resendConfirmationEmail()}
+                disabled={loading}
+              >
+                Resend confirmation
+              </button>
+            </div>
+          ) : null}
         </CardContent>
       </Card>
     </div>
