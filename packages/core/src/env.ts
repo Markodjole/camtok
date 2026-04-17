@@ -1,5 +1,16 @@
 import { z } from "zod";
 
+function resolveAppUrl(rawAppUrl?: string): string {
+  if (rawAppUrl && rawAppUrl.trim().length > 0) {
+    return rawAppUrl;
+  }
+  const vercelUrl = process.env.VERCEL_URL;
+  if (vercelUrl && vercelUrl.trim().length > 0) {
+    return `https://${vercelUrl}`;
+  }
+  return "http://localhost:3000";
+}
+
 const envSchema = z.object({
   NEXT_PUBLIC_SUPABASE_URL: z.string().url(),
   NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().min(1),
@@ -10,7 +21,7 @@ const envSchema = z.object({
   LLM_MODEL: z.string().default("claude-3-5-sonnet-20241022"),
   MEDIA_PROVIDER: z.enum(["mock", "seedance", "replicate"]).default("mock"),
   MEDIA_API_KEY: z.string().optional(),
-  NEXT_PUBLIC_APP_URL: z.string().url().default("http://localhost:3000"),
+  NEXT_PUBLIC_APP_URL: z.string().url().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;
@@ -34,6 +45,6 @@ export function getPublicEnv() {
   return {
     supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
     supabaseAnonKey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    appUrl: process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000",
+    appUrl: resolveAppUrl(process.env.NEXT_PUBLIC_APP_URL),
   };
 }
