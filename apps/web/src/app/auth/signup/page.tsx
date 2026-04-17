@@ -22,10 +22,11 @@ export default function SignupPage() {
     setLoading(true);
 
     const supabase = createBrowserClient();
-    const { error } = await supabase.auth.signUp({
+    const { data, error } = await supabase.auth.signUp({
       email,
       password,
       options: {
+        emailRedirectTo: `${window.location.origin}/auth/callback?next=/feed`,
         data: {
           username,
           display_name: username,
@@ -38,6 +39,16 @@ export default function SignupPage() {
         title: "Signup failed",
         description: error.message,
         variant: "destructive",
+      });
+      setLoading(false);
+      return;
+    }
+
+    if (!data.session) {
+      toast({
+        title: "Check your email",
+        description: "We sent a confirmation link. Open it to activate your account.",
+        variant: "success",
       });
       setLoading(false);
       return;
