@@ -19,15 +19,17 @@ CREATE TABLE IF NOT EXISTS video_frame_options (
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_frame_options_clip ON video_frame_options(clip_node_id);
-CREATE INDEX idx_frame_options_clip_selected ON video_frame_options(clip_node_id) WHERE is_selected = TRUE;
+CREATE INDEX IF NOT EXISTS idx_frame_options_clip ON video_frame_options(clip_node_id);
+CREATE INDEX IF NOT EXISTS idx_frame_options_clip_selected ON video_frame_options(clip_node_id) WHERE is_selected = TRUE;
 
 ALTER TABLE video_frame_options ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Anyone can read frame options" ON video_frame_options;
 CREATE POLICY "Anyone can read frame options"
   ON video_frame_options FOR SELECT
   USING (TRUE);
 
+DROP POLICY IF EXISTS "Clip creator can manage frame options" ON video_frame_options;
 CREATE POLICY "Clip creator can manage frame options"
   ON video_frame_options FOR ALL
   USING (

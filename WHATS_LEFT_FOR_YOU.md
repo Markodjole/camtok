@@ -1,81 +1,72 @@
 # What’s left for you to do
 
-Everything that can be done in code is done. The app **builds successfully** and is ready to deploy. You only need to do these steps (they require your accounts and cannot be automated):
+Status after this automated pass:
+
+- [x] **Supabase project created & linked** — `bettok` (ref: `jiecaxoziolwefitdfqg`, region: West EU / Ireland).
+- [x] **Migrations applied** — all 37 migrations `00001`…`00037` are now in sync with the remote DB (`supabase migration list` shows matching Local/Remote columns).
+- [x] **Local env configured** — `apps/web/.env.local` is in place.
+- [x] **Repo pushed to GitHub** — `https://github.com/Markodjole/camtok.git`, branch `main` tracks `origin/main`.
+- [x] **Production build verified** — `pnpm exec turbo build --filter=@bettok/web` succeeds locally (9 tasks successful).
+
+What still requires **your** accounts (cannot be automated without your credentials):
 
 ---
 
-## 1. Create a Supabase project (free)
+## 1. Verify the Storage `media` bucket policies
 
-1. Go to **[supabase.com](https://supabase.com)** and sign in.
-2. Click **New project** → choose org, name, password, region → **Create**.
-3. Wait until the project is ready (green).
-4. Open **Settings → API** and copy:
-   - **Project URL** → you’ll use as `NEXT_PUBLIC_SUPABASE_URL`
-   - **anon public** key → `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-   - **service_role** key → `SUPABASE_SERVICE_ROLE_KEY`
-5. Open **SQL Editor**. Run the migrations in order:
-   - Copy/paste the contents of `supabase/migrations/00001_initial_schema.sql` → Run.
-   - Then `00002_storage_media_bucket.sql` → Run.
-   - Then `00003_...`, `00004_...`, `00005_...` in order.
-6. In **Storage**: ensure the `media` bucket exists (migration 00002 creates it). If you need to allow uploads: **Policies** → add a policy so **authenticated** users can **INSERT** into `media` with path like `clips/{user_id}/*`.
+The `media` bucket is created by migration `00002`. If uploads fail on the live app, open **Supabase → Storage → Policies** and confirm authenticated users can **INSERT** into `media` with path like `clips/{user_id}/*`.
 
 ---
 
-## 2. Push the repo to GitHub
+## 2. Deploy on Vercel
 
-In a terminal, from the project folder:
+The Vercel CLI is installed but not logged in on this machine. Either:
+
+**Option A — via dashboard (recommended):**
+
+1. Go to **[vercel.com](https://vercel.com)** → **Add New… → Project**.
+2. Import `Markodjole/camtok`.
+3. **Root Directory:** leave as repo root. The included `vercel.json` already sets:
+   - Framework: `nextjs`
+   - Install: `pnpm install`
+   - Build: `pnpm exec turbo build --filter=@bettok/web`
+   - Output: `apps/web/.next`
+4. Add **Environment Variables** (copy from your local `apps/web/.env.local`):
+   - `NEXT_PUBLIC_SUPABASE_URL` → `https://jiecaxoziolwefitdfqg.supabase.co`
+   - `NEXT_PUBLIC_SUPABASE_ANON_KEY` → (anon key from Supabase → Settings → API)
+   - `SUPABASE_SERVICE_ROLE_KEY` → (service_role key from Supabase → Settings → API)
+   - Plus any Fal AI / other keys present in `.env.local`.
+5. **Deploy**, then copy the resulting URL.
+
+**Option B — via CLI:**
 
 ```bash
-cd /Users/markodjordjevic/projects/creators
-git init
-git add .
-git commit -m "Initial commit"
+vercel login
+vercel link
+vercel --prod
 ```
 
-Then on **[github.com](https://github.com)** create a **new repository** (no README, no .gitignore). Copy its URL and run:
-
-```bash
-git remote add origin https://github.com/YOUR_USERNAME/YOUR_REPO_NAME.git
-git branch -M main
-git push -u origin main
-```
-
-(Replace `YOUR_USERNAME` and `YOUR_REPO_NAME` with your repo.)
+(Then add env vars via `vercel env add` or the dashboard.)
 
 ---
 
-## 3. Deploy on Vercel
+## 3. Set Supabase auth URLs
 
-1. Go to **[vercel.com](https://vercel.com)** and sign in (e.g. with GitHub).
-2. **Add New… → Project** → import the GitHub repo you just pushed.
-3. Before deploying, set:
-   - **Root Directory:** click **Edit** → choose **apps/web** → **Continue**.
-   - **Environment Variables** → Add these three (use the values from step 1):
-     - `NEXT_PUBLIC_SUPABASE_URL`
-     - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-     - `SUPABASE_SERVICE_ROLE_KEY`
-4. Click **Deploy**. Wait for the build to finish.
-5. Copy your app URL (e.g. `https://bettok-xxx.vercel.app`).
+Dashboard-only step. After you have the Vercel URL:
 
----
-
-## 4. Set Supabase auth URLs (so login works on the live app)
-
-1. In the **Supabase** dashboard → **Authentication** → **URL Configuration**.
-2. Set **Site URL** to your Vercel URL (e.g. `https://bettok-xxx.vercel.app`).
-3. Under **Redirect URLs**, add:
-   - `https://your-actual-app.vercel.app/**`
-   - `https://your-actual-app.vercel.app/auth/callback`
+1. Supabase dashboard → **Authentication → URL Configuration**.
+2. **Site URL:** `https://<your-vercel-url>`
+3. **Redirect URLs:** add
+   - `https://<your-vercel-url>/**`
+   - `https://<your-vercel-url>/auth/callback`
 4. Save.
 
 ---
 
-## 5. Open on your phone
+## 4. Open on your phone
 
-On your phone’s browser, go to your Vercel URL (e.g. `https://bettok-xxx.vercel.app`). You can add it to the home screen for an app-like shortcut.
+Navigate to your Vercel URL in mobile Safari/Chrome; add to home screen for an app-like shortcut.
 
 ---
 
-**Summary:** Supabase project + run migrations → push to GitHub → deploy on Vercel (root `apps/web`, 3 env vars) → set auth URLs in Supabase → open the Vercel URL on your phone.
-
-For more detail (e.g. build commands), see **DEPLOY.md**.
+For build-command reference see **DEPLOY.md**.
