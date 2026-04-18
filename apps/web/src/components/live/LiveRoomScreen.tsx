@@ -1,20 +1,19 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { LiveFeedRow } from "@/actions/live-feed";
+import dynamic from "next/dynamic";
+import type { LiveFeedRow, RoutePoint } from "@/actions/live-feed";
 import { LiveVideoPlayer } from "./LiveVideoPlayer";
+import { DirectionalBetPad } from "./DirectionalBetPad";
 import { useCountdown } from "./useCountdown";
 import { transportEmoji } from "./transportEmoji";
 
-type MarketOption = {
-  id: string;
-  label: string;
-  shortLabel?: string;
-  displayOrder: number;
-};
+const LiveMap = dynamic(() => import("./LiveMap").then((m) => m.LiveMap), { ssr: false });
 
 export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [room, setRoom] = useState<LiveFeedRow>(initialRoom);
+  const [routePoints, setRoutePoints] = useState<RoutePoint[]>(initialRoom.routePoints ?? []);
+  const [betAmount, setBetAmount] = useState(10);
   const [placingOptionId, setPlacingOptionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -23,21 +22,31 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       try {
         const [stateRes] = await Promise.all([
           fetch(`/api/live/rooms/${initialRoom.roomId}/state`, { cache: "no-store" }),
-          fetch(`/api/live/rooms/${initialRoom.roomId}/tick`, {
-            cache: "no-store",
-            method: "POST",
-          }),
+          fetch(`/api/live/rooms/${initialRoom.roomId}/tick`, { cache: "no-store", method: "POST" }),
         ]);
         if (stateRes.ok) {
           const json = (await stateRes.json()) as { room: LiveFeedRow | null };
           if (json.room) setRoom(json.room);
         }
-      } catch {
-        // transient
-      }
+      } catch { /* transient */ }
     }, 2000);
     return () => clearInterval(id);
   }, [initialRoom.roomId]);
+
+  useEffect(() => {
+    const fetchPoints = async () => {
+      try {
+        const res = await fetch(`/api/live/sessions/${room.liveSessionId}/route-points`, { cache: "no-store" });
+        if (res.ok) {
+          const json = (await res.json()) as { points: RoutePoint[] };
+          setRoutePoints(json.points);
+        }
+      } catch { /* transient */ }
+    };
+    fetchPoints();
+    const id = setInterval(fetchPoints, 3000);
+    return () => clearInterval(id);
+  }, [room.liveSessionId]);
 
   async function placeBet(optionId: string) {
     if (!room.currentMarket) return;
@@ -47,11 +56,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       const res = await fetch(`/api/live/rooms/${room.roomId}/bet`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          marketId: room.currentMarket.id,
-          optionId,
-          stakeAmount: 10,
-        }),
+        body: JSON.stringify({ marketId: room.currentMarket.id, optionId, stakeAmount: betAmount }),
       });
       if (!res.ok) {
         const j = (await res.json().catch(() => ({}))) as { error?: string };
@@ -62,86 +67,104 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     }
   }
 
+  const currentMarket = room.currentMarket;
+  const isLocked = currentMarket ? new Date(currentMarket.locksAt) <= new Date() : true;
+
   return (
-    <div className="mx-auto flex max-w-md flex-col">
-      <div className="sticky top-0 z-10 border-b border-border bg-background/90 px-4 py-3 backdrop-blur">
-        <div className="flex items-center gap-2 text-sm">
-          <span className="rounded bg-red-500/20 px-2 py-0.5 text-[11px] font-semibold text-red-400">
-            LIVE
-          </span>
-          <span className="font-semibold">{room.characterName}</span>
-          <span className="text-muted-foreground">
-            {transportEmoji(room.transportMode)} {room.transportMode.replace("_", " ")}
-          </span>
-        </div>
-        {room.statusText ? (
-          <div className="mt-0.5 text-xs text-muted-foreground">{room.statusText}</div>
-        ) : null}
+    <div className="relative h-[100dvh] w-full overflow-hidden bg-black">
+
+      {/* ── Video — absolute fill ─────────────────────────── */}
+      <div className="absolute inset-0 z-0">
+        <LiveVideoPlayer liveSessionId={room.liveSessionId} className="h-full w-full" />
       </div>
 
-      <LiveVideoPlayer liveSessionId={room.liveSessionId} />
+      {/* ── Top gradient scrim ───────────────────────────── */}
+      <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-28 bg-gradient-to-b from-black/75 to-transparent" />
 
-      <div className="p-4">
-        {room.currentMarket ? (
-          <MarketCard
-            marketTitle={room.currentMarket.title}
-            options={room.currentMarket.options}
-            locksAt={room.currentMarket.locksAt}
-            placingOptionId={placingOptionId}
-            onPickOption={placeBet}
-          />
-        ) : (
-          <div className="rounded-lg border border-border p-4 text-sm text-muted-foreground">
-            Waiting for next market…
+      {/* ── Top bar — LIVE · name · mode · $amount stepper ── */}
+      <div className="absolute inset-x-0 top-0 z-20 flex items-center gap-2 px-4 py-3 text-sm">
+        <span className="rounded bg-red-500/30 px-2 py-0.5 text-[11px] font-bold text-red-400 tracking-wide">
+          LIVE
+        </span>
+        <span className="font-semibold text-white drop-shadow">{room.characterName}</span>
+        <span className="text-white/55 drop-shadow text-xs">
+          {transportEmoji(room.transportMode)} {room.transportMode.replace("_", " ")}
+        </span>
+
+        {/* Bet amount stepper — right side of top bar */}
+        <div className="ml-auto flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setBetAmount((n) => Math.max(1, n - 5))}
+            className="flex h-6 w-6 items-center justify-center rounded-full bg-white/15 text-sm font-bold text-white backdrop-blur active:bg-white/30"
+          >
+            −
+          </button>
+          <span className="min-w-[2.8rem] text-center text-sm font-semibold text-white drop-shadow">
+            ${betAmount}
+          </span>
+          <button
+            type="button"
+            onClick={() => setBetAmount((n) => n + 5)}
+            className="flex h-6 w-6 items-center justify-center rounded-full bg-white/15 text-sm font-bold text-white backdrop-blur active:bg-white/30"
+          >
+            +
+          </button>
+        </div>
+      </div>
+
+      {/* ── Map overlay — ~40 % of screen, upper-right below top bar ── */}
+      <div
+        className="absolute z-10 overflow-hidden rounded-2xl border border-white/15 shadow-2xl"
+        style={{ top: 60, right: 12, width: "42vw", height: "42vw", maxWidth: 200, maxHeight: 200, opacity: 0.70 }}
+      >
+        <LiveMap routePoints={routePoints} className="h-full w-full" interactive={false} />
+        {routePoints.length === 0 && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black/60 text-[9px] text-white/40">
+            Waiting for GPS…
           </div>
         )}
-        {error ? (
-          <div className="mt-2 text-xs text-red-400">{error}</div>
-        ) : null}
+      </div>
+
+      {/* ── Bottom gradient scrim ────────────────────────── */}
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-[58%] bg-gradient-to-t from-black/85 via-black/40 to-transparent" />
+
+      {/* ── D-pad overlay — bottom-center, semi-transparent ── */}
+      <div className="absolute inset-x-0 bottom-0 z-20 flex flex-col items-center pb-10 pt-3 px-4">
+        {/* Market label just above the pad */}
+        {currentMarket ? (
+          <div className="mb-2 flex w-full max-w-xs items-start justify-between gap-2">
+            <p className="text-xs font-semibold text-white/90 leading-snug drop-shadow">
+              {currentMarket.title}
+            </p>
+            <MarketTimer locksAt={currentMarket.locksAt} />
+          </div>
+        ) : (
+          <p className="mb-2 text-xs text-white/30">Waiting for next decision…</p>
+        )}
+
+        {/* The pad itself */}
+        <DirectionalBetPad
+          options={currentMarket?.options ?? []}
+          betAmount={betAmount}
+          onBet={async (optionId) => { await placeBet(optionId); }}
+          locked={isLocked || !currentMarket || !!placingOptionId}
+        />
+
+        {error && <div className="mt-1 text-center text-xs text-red-400">{error}</div>}
       </div>
     </div>
   );
 }
 
-function MarketCard({
-  marketTitle,
-  options,
-  locksAt,
-  placingOptionId,
-  onPickOption,
-}: {
-  marketTitle: string;
-  options: MarketOption[];
-  locksAt: string;
-  placingOptionId: string | null;
-  onPickOption: (optionId: string) => void;
-}) {
+function MarketTimer({ locksAt }: { locksAt: string }) {
   const { secondsLeft, label } = useCountdown(locksAt);
-  const isLocked = secondsLeft <= 0;
+  const locked = secondsLeft <= 0;
   return (
-    <div className="rounded-lg border border-border p-4">
-      <div className="flex items-center justify-between">
-        <div className="text-sm font-semibold">{marketTitle}</div>
-        <div className={`text-xs ${isLocked ? "text-red-400" : "text-muted-foreground"}`}>
-          {isLocked ? "locked" : `closes in ${label}`}
-        </div>
-      </div>
-      <div className="mt-3 grid grid-cols-1 gap-2">
-        {options.map((o) => (
-          <button
-            key={o.id}
-            type="button"
-            disabled={isLocked || placingOptionId === o.id}
-            onClick={() => onPickOption(o.id)}
-            className="flex items-center justify-between rounded-md border border-border bg-card px-3 py-2 text-left text-sm transition hover:border-primary disabled:opacity-50"
-          >
-            <span>{o.label}</span>
-            <span className="text-xs text-muted-foreground">
-              {placingOptionId === o.id ? "placing…" : "10 pts"}
-            </span>
-          </button>
-        ))}
-      </div>
-    </div>
+    <span className={`shrink-0 text-xs font-semibold ${
+      locked ? "text-red-400" : secondsLeft < 10 ? "text-amber-400" : "text-white/45"
+    }`}>
+      {locked ? "locked" : label}
+    </span>
   );
 }

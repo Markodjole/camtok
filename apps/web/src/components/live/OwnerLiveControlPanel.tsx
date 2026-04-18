@@ -2,10 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import dynamic from "next/dynamic";
 import { startLiveSession, endLiveSession } from "@/actions/live-sessions";
 import type { TransportMode } from "@bettok/live";
+import type { RoutePoint } from "@/actions/live-feed";
 import { LiveVideoPlayer } from "./LiveVideoPlayer";
 import { startBroadcasterP2p } from "./liveP2pBroadcast";
+
+const LiveMap = dynamic(() => import("./LiveMap").then((m) => m.LiveMap), { ssr: false });
 
 export function OwnerLiveControlPanel({
   characterId,
@@ -20,6 +24,7 @@ export function OwnerLiveControlPanel({
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
+  const [routePoints, setRoutePoints] = useState<RoutePoint[]>([]);
   const watchIdRef = useRef<number | null>(null);
   const heartbeatRef = useRef<NodeJS.Timeout | null>(null);
   const tickRef = useRef<NodeJS.Timeout | null>(null);
@@ -75,6 +80,12 @@ export function OwnerLiveControlPanel({
     if ("geolocation" in navigator) {
       watchIdRef.current = navigator.geolocation.watchPosition(
         (pos) => {
+          const point: RoutePoint = {
+            lat: pos.coords.latitude,
+            lng: pos.coords.longitude,
+            heading: pos.coords.heading ?? undefined,
+          };
+          setRoutePoints((prev) => [...prev.slice(-199), point]);
           pendingLocationsRef.current.push({
             recordedAt: new Date(pos.timestamp).toISOString(),
             lat: pos.coords.latitude,
@@ -167,6 +178,24 @@ export function OwnerLiveControlPanel({
       {sessionId ? (
         <div className="space-y-3">
           <LiveVideoPlayer localStream={stream} />
+
+          {/* Map showing broadcaster's own route */}
+          <div className="overflow-hidden rounded-xl border border-white/10">
+            <div className="bg-white/5 px-3 py-1.5 text-[11px] font-medium text-white/40">
+              Your route
+            </div>
+            <LiveMap
+              routePoints={routePoints}
+              className="h-40 w-full"
+              interactive
+            />
+            {routePoints.length === 0 && (
+              <div className="flex h-10 items-center justify-center text-[11px] text-white/30">
+                Waiting for GPS signal…
+              </div>
+            )}
+          </div>
+
           <div className="rounded-md border border-border p-3 text-sm">
             <div className="font-medium">You are live.</div>
             <div className="mt-1 text-xs text-muted-foreground">

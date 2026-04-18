@@ -3,6 +3,8 @@
 import { unstable_noStore } from "next/cache";
 import { createServiceClient } from "@/lib/supabase/server";
 
+export type RoutePoint = { lat: number; lng: number; heading?: number };
+
 export type LiveFeedRow = {
   roomId: string;
   liveSessionId: string;
@@ -29,6 +31,7 @@ export type LiveFeedRow = {
   } | null;
   sessionStartedAt: string;
   lastHeartbeatAt: string | null;
+  routePoints: RoutePoint[];
 };
 
 export async function getLiveFeed(): Promise<{ items: LiveFeedRow[] }> {
@@ -70,6 +73,7 @@ export async function getLiveFeed(): Promise<{ items: LiveFeedRow[] }> {
       : null,
     sessionStartedAt: r.session_started_at as string,
     lastHeartbeatAt: (r.last_heartbeat_at as string | null) ?? null,
+    routePoints: [],
   }));
 
   return { items };
@@ -90,6 +94,31 @@ export async function getLiveRoomDetail(roomId: string): Promise<{
   if (!data) return { room: null };
 
   const items = await getLiveFeed();
-  const match = items.items.find((r) => r.roomId === roomId) ?? null;
-  return { room: match };
+  const match = items.items.find((r) => r.roomId === roomId);
+  if (!match) return { room: null };
+
+  // Fetch the last 100 GPS points for the map.
+  const sessionId = data.live_session_id as string;
+  const { data: snapshots } = await service
+    .from("live_route_snapshots")
+    .select("normalized_lat,normalized_lng,raw_lat,raw_lng,heading_deg")
+    .eq("live_session_id", sessionId)
+    .order("recorded_at", { ascending: false })
+    .limit(100);
+
+  const routePoints: RoutePoint[] = ((snapshots ?? []) as Array<{
+    normalized_lat: number | null;
+    normalized_lng: number | null;
+    raw_lat: number;
+    raw_lng: number;
+    heading_deg: number | null;
+  }>)
+    .map((s) => ({
+      lat: s.normalized_lat ?? s.raw_lat,
+      lng: s.normalized_lng ?? s.raw_lng,
+      heading: s.heading_deg ?? undefined,
+    }))
+    .reverse(); // oldest→newest for path drawing
+
+  return { room: { ...match, routePoints } };
 }

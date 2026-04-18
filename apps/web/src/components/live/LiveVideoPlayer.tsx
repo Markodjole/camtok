@@ -45,35 +45,30 @@ export function LiveVideoPlayer({
     }
 
     let cancelled = false;
-    let cleanup: (() => void) | undefined;
+    // Holds the cleanup fn once startViewerP2p resolves. If the effect is torn down
+    // before the promise resolves (React StrictMode double-mount), cleanup is called
+    // immediately when it becomes available.
+    const cleanupRef = { fn: undefined as (() => void) | undefined };
 
-    void (async () => {
-      try {
-        cleanup = await startViewerP2p(
-          liveSessionId,
-          (stream) => {
-            if (!cancelled) {
-              setRemoteStream(stream);
-              setSignalError(null);
-            }
-          },
-          (msg) => {
-            if (!cancelled) setSignalError(msg);
-          },
-          (line) => {
-            if (!cancelled) pushDebug(line);
-          },
-        );
-      } catch (e) {
-        if (!cancelled) {
-          setSignalError(e instanceof Error ? e.message : "Could not connect");
-        }
+    startViewerP2p(
+      liveSessionId,
+      (stream) => { if (!cancelled) { setRemoteStream(stream); setSignalError(null); } },
+      (msg) => { if (!cancelled) setSignalError(msg); },
+      (line) => { if (!cancelled) pushDebug(line); },
+    ).then((cleanup) => {
+      if (cancelled) {
+        cleanup(); // effect already torn down — immediately dispose
+      } else {
+        cleanupRef.fn = cleanup;
       }
-    })();
+    }).catch((e) => {
+      if (!cancelled) setSignalError(e instanceof Error ? e.message : "Could not connect");
+    });
 
     return () => {
       cancelled = true;
-      cleanup?.();
+      cleanupRef.fn?.();
+      cleanupRef.fn = undefined;
       setRemoteStream(null);
     };
   }, [liveSessionId, localStream]);
@@ -90,7 +85,7 @@ export function LiveVideoPlayer({
   const viewerConnecting = !localStream && liveSessionId && !remoteStream && !signalError;
 
   return (
-    <div className={`relative aspect-[9/16] w-full overflow-hidden bg-black ${className ?? ""}`}>
+    <div className={`relative overflow-hidden bg-black ${className ?? "aspect-[9/16] w-full"}`}>
       <video ref={ref} playsInline autoPlay className="h-full w-full object-cover" />
       {viewerConnecting ? (
         <div className="absolute inset-0 flex items-center justify-center bg-black/60 text-xs text-muted-foreground">
