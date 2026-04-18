@@ -38,6 +38,13 @@ max_frequency = "1m0s"
 otp_length = 8
 otp_expiry = 3600
 
+# Hosted + local: forces the verify link to use {{ .ConfirmationURL }} (includes
+# redirect_to from signUp). Dashboard templates that only use {{ .SiteURL }} send
+# users to whatever Site URL is set — never do that for confirmation.
+[auth.email.template.confirmation]
+subject = "Confirm your BetTok account"
+content_path = "./supabase/templates/confirmation.html"
+
 [auth.mfa.totp]
 enroll_enabled = true
 verify_enabled = true
