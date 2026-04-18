@@ -1,7 +1,6 @@
 import { notFound, redirect } from "next/navigation";
 import { createServerClient } from "@/lib/supabase/server";
 import { OwnerLiveControlPanel } from "@/components/live/OwnerLiveControlPanel";
-import { AppShell } from "@/components/layout/app-shell";
 
 export const dynamic = "force-dynamic";
 
@@ -29,11 +28,5 @@ export default async function GoLivePage({
     redirect("/characters");
   }
 
-  return (
-    <AppShell>
-      <div className="h-full overflow-y-auto">
-        <OwnerLiveControlPanel characterId={characterId} />
-      </div>
-    </AppShell>
-  );
+  return <OwnerLiveControlPanel characterId={characterId} />;
 }

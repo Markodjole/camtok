@@ -1,40 +1,59 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { RoutePoint } from "@/actions/live-feed";
 
-interface LiveMapProps {
+export interface LiveMapProps {
   routePoints: RoutePoint[];
-  /** Extra CSS classes — used to size and position the map */
   className?: string;
-  /** Show zoom/drag controls. Default false (overlay mode) */
   interactive?: boolean;
+  /** 0-1, OSM base */
+  tileOpacity?: number;
+  mapCaption?: string;
+  audienceRole?: "streamer" | "viewer";
+  showCourseArrow?: boolean;
 }
 
-/**
- * Leaflet map rendered inside a plain div.
- * Uses a dynamic import so leaflet's window-dependent code never runs on the server.
- * The map auto-pans to the latest GPS point whenever `routePoints` changes.
- */
-export function LiveMap({ routePoints, className, interactive = false }: LiveMapProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  // Keep stable references that effects can read without re-running.
+const C = {
+  streamer: { line: "#22c55e", lineOp: 0.5, fill: "#4ade80", r: 7 },
+  viewer: { line: "#a78bfa", lineOp: 0.4, fill: "#fb7185", r: 6 },
+};
+
+function headingDivIcon(L: { divIcon: (o: object) => import("leaflet").DivIcon }, deg: number, streamer: boolean) {
+  const m = streamer ? 24 : 19;
+  const c = streamer ? "#4ade80" : "#c4b5fd";
+  const html = `<div style="width:52px;height:52px;display:flex;align-items:center;justify-content:center;transform:rotate(${deg}deg)">
+    <div style="width:0;height:0;border-left:${m * 0.35}px solid transparent;border-right:${m * 0.35}px solid transparent;
+      border-bottom:${m * 0.8}px solid ${c};filter:drop-shadow(0 0 2px #000)"></div></div>`;
+  return L.divIcon({ html, className: "camtok-h", iconSize: [52, 52], iconAnchor: [26, 26] });
+}
+
+export function LiveMap({
+  routePoints,
+  className = "",
+  interactive = false,
+  tileOpacity = 0.36,
+  mapCaption,
+  audienceRole = "viewer",
+  showCourseArrow = true,
+}: LiveMapProps) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<import("leaflet").Map | null>(null);
-  const polylineRef = useRef<import("leaflet").Polyline | null>(null);
-  const markerRef = useRef<import("leaflet").CircleMarker | null>(null);
-  const headingMarkerRef = useRef<import("leaflet").Marker | null>(null);
+  const layerRef = useRef<import("leaflet").TileLayer | null>(null);
+  const plRef = useRef<import("leaflet").Polyline | null>(null);
+  const dotRef = useRef<import("leaflet").CircleMarker | null>(null);
+  const arRef = useRef<import("leaflet").Marker | null>(null);
+  const [mapReady, setMapReady] = useState(0);
+  const streamer = audienceRole === "streamer";
+  const col = streamer ? C.streamer : C.viewer;
 
-  // Init map once.
   useEffect(() => {
-    if (!containerRef.current) return;
-
-    let cancelled = false;
-    let map: import("leaflet").Map | null = null;
-
-    void (async () => {
+    const el = containerRef.current;
+    if (!el) return;
+    let done = false;
+    (async () => {
       const L = (await import("leaflet")).default;
-
-      // Inject leaflet CSS once.
+      if (done) return;
       if (!document.getElementById("leaflet-css")) {
         const link = document.createElement("link");
         link.id = "leaflet-css";
@@ -42,17 +61,9 @@ export function LiveMap({ routePoints, className, interactive = false }: LiveMap
         link.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
         document.head.appendChild(link);
       }
-
-      if (cancelled || !containerRef.current) return;
-
-      const center: [number, number] =
-        routePoints.length > 0
-          ? [routePoints[routePoints.length - 1].lat, routePoints[routePoints.length - 1].lng]
-          : [48.8566, 2.3522]; // Paris fallback
-
-      map = L.map(containerRef.current, {
-        center,
-        zoom: 17,
+      const m = L.map(el, {
+        center: [0, 0],
+        zoom: 2,
         zoomControl: interactive,
         dragging: interactive,
         scrollWheelZoom: false,
@@ -62,82 +73,89 @@ export function LiveMap({ routePoints, className, interactive = false }: LiveMap
         keyboard: false,
         attributionControl: false,
       });
-
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        maxZoom: 19,
-      }).addTo(map);
-
-      // Path polyline.
-      const latlngs: [number, number][] = routePoints.map((p) => [p.lat, p.lng]);
-      polylineRef.current = L.polyline(latlngs, {
-        color: "#6366f1",
-        weight: 4,
-        opacity: 0.85,
-      }).addTo(map);
-
-      // Current position dot.
-      if (routePoints.length > 0) {
-        const last = routePoints[routePoints.length - 1];
-        markerRef.current = L.circleMarker([last.lat, last.lng], {
-          radius: 8,
-          fillColor: "#ef4444",
-          color: "#fff",
-          weight: 2,
-          fillOpacity: 1,
-        }).addTo(map);
-      }
-
-      mapRef.current = map;
+      const t = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, opacity: 0.4 });
+      t.addTo(m);
+      layerRef.current = t;
+      mapRef.current = m;
+      setMapReady((n) => n + 1);
     })();
-
     return () => {
-      cancelled = true;
-      map?.remove();
+      done = true;
+      plRef.current = null;
+      dotRef.current = null;
+      arRef.current = null;
+      mapRef.current?.remove();
       mapRef.current = null;
-      polylineRef.current = null;
-      markerRef.current = null;
-      headingMarkerRef.current = null;
+      layerRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [interactive]);
 
-  // Update path + re-pan whenever routePoints change.
   useEffect(() => {
-    const map = mapRef.current;
-    if (!map || routePoints.length === 0) return;
+    layerRef.current?.setOpacity(tileOpacity);
+  }, [tileOpacity]);
 
-    void (async () => {
+  useEffect(() => {
+    const m = mapRef.current;
+    if (!m) return;
+    (async () => {
       const L = (await import("leaflet")).default;
+      if (routePoints.length === 0) {
+        if (arRef.current) { m.removeLayer(arRef.current); arRef.current = null; }
+        if (plRef.current) { m.removeLayer(plRef.current); plRef.current = null; }
+        if (dotRef.current) { m.removeLayer(dotRef.current); dotRef.current = null; }
+        return;
+      }
+      const last = routePoints[routePoints.length - 1]!;
+      const pos: [number, number] = [last.lat, last.lng];
       const latlngs: [number, number][] = routePoints.map((p) => [p.lat, p.lng]);
 
-      if (polylineRef.current) {
-        polylineRef.current.setLatLngs(latlngs);
-      }
-
-      const last = routePoints[routePoints.length - 1];
-      const pos: [number, number] = [last.lat, last.lng];
-
-      if (markerRef.current) {
-        markerRef.current.setLatLng(pos);
+      if (plRef.current) {
+        plRef.current.setLatLngs(latlngs);
+        plRef.current.setStyle({ color: col.line, weight: 3, opacity: col.lineOp });
       } else {
-        markerRef.current = L.circleMarker(pos, {
-          radius: 8,
-          fillColor: "#ef4444",
-          color: "#fff",
-          weight: 2,
-          fillOpacity: 1,
-        }).addTo(map);
+        plRef.current = L.polyline(latlngs, { color: col.line, weight: 3, opacity: col.lineOp }).addTo(m);
       }
-
-      map.panTo(pos, { animate: true, duration: 0.5 });
+      if (dotRef.current) {
+        dotRef.current.setLatLng(pos);
+        dotRef.current.setStyle({ fillColor: col.fill, color: "rgba(255,255,255,0.85)", fillOpacity: 0.92, weight: 1, radius: col.r });
+      } else {
+        dotRef.current = L.circleMarker(pos, {
+          radius: col.r,
+          fillColor: col.fill,
+          color: "rgba(255,255,255,0.85)",
+          weight: 1,
+          fillOpacity: 0.92,
+        }).addTo(m);
+      }
+      if (arRef.current) { m.removeLayer(arRef.current); arRef.current = null; }
+      if (showCourseArrow && last.heading != null) {
+        arRef.current = L.marker(pos, {
+          icon: headingDivIcon(L, last.heading, streamer),
+          interactive: false,
+          zIndexOffset: 500,
+        }).addTo(m);
+      }
+      m.setView(pos, 17, { animate: true, duration: 0.4 });
     })();
-  }, [routePoints]);
+  }, [routePoints, col, streamer, showCourseArrow, col.line, col.lineOp, col.fill, col.r, mapReady]);
 
   return (
-    <div
-      ref={containerRef}
-      className={className}
-      style={{ background: "#1a1a2e" }}
-    />
+    <div className="relative h-full w-full" style={{ background: "rgba(10,10,20,0.4)" }}>
+      <div
+        ref={containerRef}
+        className={className}
+        style={{ height: "100%", width: "100%", minHeight: 0, opacity: 0.9 }}
+      />
+      {mapCaption && (
+        <div className="pointer-events-none absolute bottom-0 left-0 right-0 z-[2000] p-1.5">
+          <p
+            className="text-center text-[8px] font-medium leading-tight [text-shadow:0_0_3px_#000,0_0_5px_#000]"
+            style={{ color: "rgba(255,255,255,0.9)" }}
+          >
+            {mapCaption}
+          </p>
+        </div>
+      )}
+    </div>
   );
 }

@@ -7,6 +7,9 @@ import { LiveVideoPlayer } from "./LiveVideoPlayer";
 import { DirectionalBetPad } from "./DirectionalBetPad";
 import { useCountdown } from "./useCountdown";
 import { transportEmoji } from "./transportEmoji";
+import { BetPlacedPill, LiveEventToasts, useBetPill } from "./LiveEventToasts";
+import { TopBar } from "@/components/layout/top-bar";
+import { BottomNav } from "@/components/layout/bottom-nav";
 
 const LiveMap = dynamic(() => import("./LiveMap").then((m) => m.LiveMap), { ssr: false });
 
@@ -16,6 +19,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [betAmount, setBetAmount] = useState(10);
   const [placingOptionId, setPlacingOptionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const { betPill, flash } = useBetPill();
 
   useEffect(() => {
     const id = setInterval(async () => {
@@ -58,7 +62,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ marketId: room.currentMarket.id, optionId, stakeAmount: betAmount }),
       });
-      if (!res.ok) {
+      if (res.ok) {
+        flash(betAmount);
+      } else {
         const j = (await res.json().catch(() => ({}))) as { error?: string };
         setError(j.error ?? "Bet failed");
       }
@@ -72,17 +78,20 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
   return (
     <div className="relative h-[100dvh] w-full overflow-hidden bg-black">
-
+      <TopBar />
+      <BottomNav />
+      <LiveEventToasts roomId={room.roomId} role="viewer" />
+      <BetPlacedPill text={betPill} />
       {/* ── Video — absolute fill ─────────────────────────── */}
       <div className="absolute inset-0 z-0">
         <LiveVideoPlayer liveSessionId={room.liveSessionId} className="h-full w-full" />
       </div>
 
       {/* ── Top gradient scrim ───────────────────────────── */}
-      <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-28 bg-gradient-to-b from-black/75 to-transparent" />
+      <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-36 bg-gradient-to-b from-black/75 to-transparent" />
 
-      {/* ── Top bar — LIVE · name · mode · $amount stepper ── */}
-      <div className="absolute inset-x-0 top-0 z-20 flex items-center gap-2 px-4 py-3 text-sm">
+      {/* ── Top bar — LIVE · name · mode · $amount stepper (sits below app TopBar) ── */}
+      <div className="absolute inset-x-0 top-12 z-20 flex items-center gap-2 px-4 py-3 text-sm">
         <span className="rounded bg-red-500/30 px-2 py-0.5 text-[11px] font-bold text-red-400 tracking-wide">
           LIVE
         </span>
@@ -113,12 +122,19 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         </div>
       </div>
 
-      {/* ── Map overlay — ~40 % of screen, upper-right below top bar ── */}
+      {/* ── Map overlay — upper-right, below both bars ── */}
       <div
-        className="absolute z-10 overflow-hidden rounded-2xl border border-white/15 shadow-2xl"
-        style={{ top: 60, right: 12, width: "42vw", height: "42vw", maxWidth: 200, maxHeight: 200, opacity: 0.70 }}
+        className="absolute z-10 overflow-hidden rounded-2xl border border-white/20 shadow-2xl backdrop-blur-sm"
+        style={{ top: 108, right: 12, width: "42vw", height: "42vw", maxWidth: 200, maxHeight: 200, opacity: 0.5 }}
       >
-        <LiveMap routePoints={routePoints} className="h-full w-full" interactive={false} />
+        <LiveMap
+          routePoints={routePoints}
+          className="h-full w-full"
+          interactive={false}
+          audienceRole="viewer"
+          tileOpacity={0.3}
+          mapCaption={currentMarket?.title}
+        />
         {routePoints.length === 0 && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/60 text-[9px] text-white/40">
             Waiting for GPS…
@@ -129,8 +145,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       {/* ── Bottom gradient scrim ────────────────────────── */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-[58%] bg-gradient-to-t from-black/85 via-black/40 to-transparent" />
 
-      {/* ── D-pad overlay — bottom-center, semi-transparent ── */}
-      <div className="absolute inset-x-0 bottom-0 z-20 flex flex-col items-center pb-10 pt-3 px-4">
+      {/* ── D-pad overlay — bottom-center, above BottomNav ── */}
+      <div className="absolute inset-x-0 bottom-0 z-20 flex flex-col items-center pb-20 pt-3 px-4">
         {/* Market label just above the pad */}
         {currentMarket ? (
           <div className="mb-2 flex w-full max-w-xs items-start justify-between gap-2">

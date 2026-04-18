@@ -3,7 +3,14 @@
 import { unstable_noStore } from "next/cache";
 import { createServiceClient } from "@/lib/supabase/server";
 
-export type RoutePoint = { lat: number; lng: number; heading?: number };
+export type RoutePoint = {
+  lat: number;
+  lng: number;
+  /** compass heading, degrees (0 = north) */
+  heading?: number;
+  /** movement speed, m/s (streamer’s device only when available) */
+  speedMps?: number;
+};
 
 export type LiveFeedRow = {
   roomId: string;
@@ -101,7 +108,7 @@ export async function getLiveRoomDetail(roomId: string): Promise<{
   const sessionId = data.live_session_id as string;
   const { data: snapshots } = await service
     .from("live_route_snapshots")
-    .select("normalized_lat,normalized_lng,raw_lat,raw_lng,heading_deg")
+    .select("normalized_lat,normalized_lng,raw_lat,raw_lng,heading_deg,speed_mps")
     .eq("live_session_id", sessionId)
     .order("recorded_at", { ascending: false })
     .limit(100);
@@ -112,11 +119,13 @@ export async function getLiveRoomDetail(roomId: string): Promise<{
     raw_lat: number;
     raw_lng: number;
     heading_deg: number | null;
+    speed_mps: number | null;
   }>)
     .map((s) => ({
       lat: s.normalized_lat ?? s.raw_lat,
       lng: s.normalized_lng ?? s.raw_lng,
       heading: s.heading_deg ?? undefined,
+      speedMps: s.speed_mps != null ? Number(s.speed_mps) : undefined,
     }))
     .reverse(); // oldest→newest for path drawing
 

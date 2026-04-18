@@ -14,7 +14,7 @@ export async function GET(
 
   const { data } = await service
     .from("live_route_snapshots")
-    .select("normalized_lat,normalized_lng,raw_lat,raw_lng,heading_deg")
+    .select("normalized_lat,normalized_lng,raw_lat,raw_lng,heading_deg,speed_mps")
     .eq("live_session_id", sessionId)
     .order("recorded_at", { ascending: false })
     .limit(200);
@@ -25,11 +25,13 @@ export async function GET(
     raw_lat: number;
     raw_lng: number;
     heading_deg: number | null;
+    speed_mps: number | null;
   }>)
     .map((s) => ({
       lat: s.normalized_lat ?? s.raw_lat,
       lng: s.normalized_lng ?? s.raw_lng,
       heading: s.heading_deg ?? undefined,
+      speedMps: s.speed_mps != null ? Number(s.speed_mps) : undefined,
     }))
     .reverse();
 

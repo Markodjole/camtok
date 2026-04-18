@@ -142,6 +142,13 @@ export async function placeLiveBet(input: PlaceLiveBetInput) {
     .update({ balance_demo: balance - parsed.data.stakeAmount })
     .eq("user_id", user.id);
 
+  await service.from("live_room_events").insert({
+    room_id: (market as { room_id: string }).room_id,
+    market_id: parsed.data.marketId,
+    event_type: "bet_placed",
+    payload: { optionId: parsed.data.optionId, stakeAmount: parsed.data.stakeAmount },
+  });
+
   const { data: currentMarket } = await service
     .from("live_betting_markets")
     .select("total_bet_amount, participant_count")

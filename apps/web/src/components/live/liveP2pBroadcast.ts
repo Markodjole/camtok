@@ -3,15 +3,6 @@ import { createBrowserClient } from "@/lib/supabase/client";
 
 const EVENT = "webrtc";
 
-/**
- * ICE servers: STUN + optional TURN.
- * Set NEXT_PUBLIC_TURN_URL / USERNAME / CREDENTIAL to use your own TURN server.
- * Without TURN, Chrome↔Safari on localhost will NOT work because:
- *   - Chrome emits mDNS (.local) host candidates that Safari cannot resolve.
- *   - Chrome does NOT emit loopback (127.0.0.1) candidates.
- *   - STUN reflexive addresses are the same WAN IP, so pairs fail on loopback.
- * Run `scripts/coturn.sh` for a local TURN and set NEXT_PUBLIC_ICE_RELAY_ONLY=1 in .env.local.
- */
 function buildIceServers(): RTCIceServer[] {
   const servers: RTCIceServer[] = [
     { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] },
@@ -39,23 +30,22 @@ export function webrtcChannelName(liveSessionId: string) {
   return `live-webrtc:${liveSessionId}`;
 }
 
-/**
- * Signaling messages — all ICE is embedded in SDP (gather-complete approach).
- * No separate ice-* messages needed; this avoids ordering issues on Supabase Realtime.
- */
-type SignalPayload =
-  | { type: "viewer-ready" }
-  | { type: "offer"; sdp: string }
-  | { type: "answer"; sdp: string };
+type BcPayload = Record<string, unknown> & {
+  type: string;
+  sdp?: string;
+  offerUfrag?: string;
+  forOfferUfrag?: string;
+  candidate?: RTCIceCandidateInit;
+};
 
-function parseSignalPayload(raw: unknown): SignalPayload | null {
+function parseRawPayload(raw: unknown): BcPayload | null {
   if (raw == null || typeof raw !== "object") return null;
   const o = raw as Record<string, unknown>;
   const inner = o.payload;
   if (inner && typeof inner === "object" && "type" in inner) {
-    return inner as SignalPayload;
+    return inner as BcPayload;
   }
-  if ("type" in o) return o as SignalPayload;
+  if ("type" in o) return o as BcPayload;
   return null;
 }
 
@@ -70,30 +60,19 @@ function waitSubscribed(ch: RealtimeChannel) {
   });
 }
 
-/**
- * Wait for ICE gathering to finish (all candidates collected, including TURN relay).
- * Falls back after `timeoutMs` so we never stall indefinitely.
- */
-function waitForGatheringComplete(pc: RTCPeerConnection, timeoutMs = 6000): Promise<void> {
-  return new Promise((resolve) => {
-    if (pc.iceGatheringState === "complete") {
-      resolve();
-      return;
-    }
-    const done = () => { clearTimeout(timer); resolve(); };
-    const onchange = () => { if (pc.iceGatheringState === "complete") done(); };
-    pc.addEventListener("icegatheringstatechange", onchange);
-    const timer = setTimeout(() => {
-      pc.removeEventListener("icegatheringstatechange", onchange);
-      resolve();
-    }, timeoutMs);
-  });
+function iceUfrag(sdp: string) {
+  const m = /a=ice-ufrag:([^\s\r\n]+)/.exec(sdp);
+  if (m) return m[1]!;
+  let h = 0;
+  for (let i = 0; i < Math.min(sdp.length, 500); i++) h = (h * 33 + sdp.charCodeAt(i)) | 0;
+  return `h${(h >>> 0).toString(16)}`;
 }
 
 /**
- * Broadcaster: publishes camera/mic to viewers that signal readiness.
- * Uses gather-complete signaling: waits for all ICE candidates to be gathered
- * before sending the offer, so the SDP is self-contained (no trickle-ICE).
+ * Broadcaster: trickle ICE.
+ * - Sends offer immediately after setLocalDescription (no gather-wait).
+ * - Streams local ICE candidates via "bc-candidate" broadcast events.
+ * - Buffers & applies remote ICE candidates from "vc-candidate" events.
  */
 export async function startBroadcasterP2p(
   liveSessionId: string,
@@ -104,128 +83,180 @@ export async function startBroadcasterP2p(
     onDebug?.(line);
     if (typeof window !== "undefined") console.log("[camtok-broadcast]", line);
   };
-
   const iceConfig = buildIceConfig();
   debug(
     `ICE policy=${iceConfig.iceTransportPolicy ?? "all"} servers=${iceConfig.iceServers?.length ?? 0}`,
   );
-
   const supabase = createBrowserClient();
   const ch = supabase.channel(webrtcChannelName(liveSessionId), {
-    config: { broadcast: { ack: false } },
+    config: { broadcast: { ack: false, self: false } },
   });
-
   let pc: RTCPeerConnection | null = null;
   let offerRetryTimer: ReturnType<typeof setInterval> | null = null;
   let lastOffer: string | null = null;
-  // Block new viewer-ready only while actively gathering (TURN alloc in progress).
-  // After offer is sent, always allow fresh offer on next viewer-ready (stale allocs).
-  let isGathering = false;
+  let lastOfferUfrag: string | null = null;
+  let isNegotiating = false;
+  // Buffer vc-candidates that arrive before setRemoteDescription(answer)
+  const vcBuf = new Map<string, RTCIceCandidateInit[]>();
 
-  const send = (payload: SignalPayload) => {
+  const send = (payload: BcPayload) =>
     void ch.send({ type: "broadcast", event: EVENT, payload });
-  };
 
-  const clearRetry = () => {
+  const clearOfferResend = () => {
     if (offerRetryTimer) { clearInterval(offerRetryTimer); offerRetryTimer = null; }
-    lastOffer = null;
   };
 
   const closePc = () => {
-    if (pc && pc.signalingState !== "closed") { pc.close(); pc = null; }
+    if (pc && pc.signalingState !== "closed") pc.close();
+    pc = null;
   };
 
-  const ensurePc = () => {
-    if (pc && pc.signalingState !== "closed") return pc;
-    pc = new RTCPeerConnection(iceConfig);
-    stream.getTracks().forEach((t) => pc!.addTrack(t, stream));
-    pc.onicegatheringstatechange = () => debug(`gather=${pc!.iceGatheringState}`);
-    pc.oniceconnectionstatechange = () => debug(`ice=${pc!.iceConnectionState}`);
-    pc.onconnectionstatechange = () => debug(`pc=${pc!.connectionState}`);
-    pc.onicecandidate = (e) => {
-      if (e.candidate) {
-        const c = e.candidate;
-        debug(`cand type=${(c as unknown as { type?: string }).type ?? "?"} proto=${c.protocol}`);
-      }
+  const buildPcBase = () => {
+    const p = new RTCPeerConnection(iceConfig);
+    stream.getTracks().forEach((t) => p.addTrack(t, stream));
+    p.onicegatheringstatechange = () => debug(`gather=${p.iceGatheringState}`);
+    p.oniceconnectionstatechange = () => {
+      const s = p.iceConnectionState;
+      debug(`ice=${s}`);
+      if (s === "connected" || s === "completed") clearOfferResend();
     };
-    return pc;
+    p.onconnectionstatechange = () => debug(`pc=${p.connectionState}`);
+    pc = p;
+    return p;
   };
 
   const sendOffer = async () => {
-    if (isGathering) {
-      debug("gathering in progress — viewer-ready ignored");
-      return;
-    }
-    // Always start fresh: viewer reconnected or connection failed.
-    clearRetry();
-    closePc();
-    isGathering = true;
-    lastOffer = null;
+    if (isNegotiating) { debug("already negotiating, skip"); return; }
+    isNegotiating = true;
     try {
-      const p = ensurePc();
+      clearOfferResend();
+      closePc();
+      vcBuf.clear();
+      lastOffer = null;
+      lastOfferUfrag = null;
+
+      const p = buildPcBase();
       const offer = await p.createOffer();
+      const ug = iceUfrag(offer.sdp ?? "");
+      // Attach onicecandidate BEFORE setLocalDescription so candidates that
+      // fire during gathering are never dropped. Ufrag is captured in closure.
+      p.onicecandidate = (e) => {
+        if (!e.candidate) return;
+        const c = e.candidate;
+        debug(
+          `bc-cand type=${(c as unknown as { type?: string }).type ?? "?"} proto=${c.protocol}`,
+        );
+        send({ type: "bc-candidate", candidate: c.toJSON(), forOfferUfrag: ug });
+      };
+      lastOfferUfrag = ug;
       await p.setLocalDescription(offer);
-      debug("gathering…");
-      await waitForGatheringComplete(p);
       const sdp = p.localDescription?.sdp ?? offer.sdp ?? "";
       lastOffer = sdp;
-      debug(`send offer (${sdp.length}b)`);
-      send({ type: "offer", sdp });
+      debug(`send offer len=${sdp.length} ufrag=${ug.slice(0, 8)}…`);
+      send({ type: "offer", sdp, offerUfrag: ug });
 
-      let repeats = 0;
+      let n = 0;
       offerRetryTimer = setInterval(() => {
-        if (repeats >= 8 || !lastOffer || (pc && pc.signalingState === "stable")) {
-          clearRetry();
+        n++;
+        if (n > 20 || !lastOffer || !lastOfferUfrag) { clearOfferResend(); return; }
+        if (!pc || pc.signalingState !== "have-local-offer") {
+          clearOfferResend();
           return;
         }
-        repeats += 1;
-        debug(`retry offer #${repeats}`);
-        send({ type: "offer", sdp: lastOffer });
+        debug(`resend offer #${n} ufrag=${lastOfferUfrag.slice(0, 6)}`);
+        send({ type: "offer", sdp: lastOffer, offerUfrag: lastOfferUfrag });
       }, 2000);
     } finally {
-      isGathering = false;
+      isNegotiating = false;
     }
   };
 
   ch.on("broadcast", { event: EVENT }, async (raw) => {
-    const msg = parseSignalPayload(raw);
-    if (!msg) {
-      debug(`recv unknown: ${JSON.stringify(raw).slice(0, 120)}`);
-      return;
-    }
+    const msg = parseRawPayload(raw);
+    if (!msg) { debug(`bad payload ${JSON.stringify(raw).slice(0, 80)}`); return; }
+    // Ignore self-echoes
+    if (msg.type === "offer" || msg.type === "bc-candidate") return;
     debug(`recv ${msg.type}`);
     try {
       if (msg.type === "viewer-ready") {
+        // Always rebuild on viewer-ready (handles both first viewer and stuck retry)
         await sendOffer();
-      } else if (msg.type === "answer" && msg.sdp) {
-        clearRetry();
-        if (!pc || pc.signalingState !== "have-local-offer") {
-          debug(`skip answer — signalingState=${pc?.signalingState ?? "none"}`);
+      } else if (msg.type === "answer" && typeof msg.sdp === "string") {
+        if (!pc || pc.signalingState === "closed") { debug("no pc for answer"); return; }
+        const ansUfrag = typeof msg.forOfferUfrag === "string" ? msg.forOfferUfrag : null;
+        if (ansUfrag && lastOfferUfrag && ansUfrag !== lastOfferUfrag) {
+          debug(
+            `stale answer (want=${lastOfferUfrag.slice(0, 6)} got=${ansUfrag.slice(0, 6)}) — ignore`,
+          );
           return;
         }
-        await pc.setRemoteDescription({ type: "answer", sdp: msg.sdp });
+        if (pc.signalingState !== "have-local-offer") {
+          debug(`skip answer (state=${pc.signalingState})`);
+          return;
+        }
+        try {
+          await pc.setRemoteDescription({ type: "answer", sdp: msg.sdp });
+        } catch (e) {
+          debug(`setRemote answer err: ${e instanceof Error ? e.message : String(e)}`);
+          return;
+        }
         debug("answer applied");
+        clearOfferResend();
+        // Flush buffered vc-candidates that arrived before answer
+        const key = ansUfrag ?? lastOfferUfrag ?? "";
+        const buffered = vcBuf.get(key) ?? [];
+        vcBuf.clear();
+        for (const cand of buffered) {
+          try { await pc.addIceCandidate(cand); } catch { /* ignore stale */ }
+        }
+        if (buffered.length) debug(`flushed ${buffered.length} buffered vc-cands`);
+      } else if (
+        msg.type === "vc-candidate" &&
+        msg.candidate &&
+        typeof msg.forOfferUfrag === "string"
+      ) {
+        const forU = msg.forOfferUfrag;
+        if (lastOfferUfrag && forU !== lastOfferUfrag) {
+          debug(`stale vc-cand (want=${lastOfferUfrag.slice(0, 6)} got=${forU.slice(0, 6)}) — skip`);
+          return;
+        }
+        const cand = msg.candidate as RTCIceCandidateInit;
+        if (pc && pc.signalingState !== "closed" && pc.remoteDescription) {
+          try {
+            await pc.addIceCandidate(cand);
+          } catch (e) {
+            debug(`addIceCandidate err: ${e instanceof Error ? e.message : String(e)}`);
+          }
+        } else {
+          const buf = vcBuf.get(forU) ?? [];
+          buf.push(cand);
+          vcBuf.set(forU, buf);
+        }
       }
-    } catch (err) {
-      debug(`error: ${err instanceof Error ? err.message : String(err)}`);
+    } catch (e) {
+      debug(`err: ${e instanceof Error ? e.message : String(e)}`);
     }
   });
 
-  debug(`subscribing to ${webrtcChannelName(liveSessionId)}`);
   await waitSubscribed(ch);
   debug("subscribed");
 
   return () => {
-    clearRetry();
+    clearOfferResend();
     void ch.unsubscribe();
-    pc?.close();
-    pc = null;
+    closePc();
+    vcBuf.clear();
+    lastOfferUfrag = null;
   };
 }
 
 /**
- * Viewer: connects to the broadcaster's session.
- * Uses gather-complete signaling: waits for all ICE before sending the answer.
+ * Viewer: trickle ICE.
+ * - Sends answer immediately after setLocalDescription (no gather-wait).
+ * - Streams local ICE candidates via "vc-candidate" broadcast events.
+ * - Buffers & applies remote ICE candidates from "bc-candidate" events.
+ * - Retries answer every 2s until ICE connects (broadcaster-side answer loss protection).
+ * - 6s stuck recovery: full reset of negotiation state and resend viewer-ready.
  */
 export async function startViewerP2p(
   liveSessionId: string,
@@ -237,133 +268,225 @@ export async function startViewerP2p(
     onDebug?.(line);
     if (typeof window !== "undefined") console.log("[camtok-viewer]", line);
   };
-
   const iceConfig = buildIceConfig();
   debug(
     `ICE policy=${iceConfig.iceTransportPolicy ?? "all"} servers=${iceConfig.iceServers?.length ?? 0}`,
   );
-
   const supabase = createBrowserClient();
   const ch = supabase.channel(webrtcChannelName(liveSessionId), {
-    config: { broadcast: { ack: false } },
+    config: { broadcast: { ack: false, self: false } },
   });
-
-  const pc = new RTCPeerConnection(iceConfig);
+  let pc: RTCPeerConnection | null = null;
   let cleaned = false;
-  let offerApplied = false;
+  let negotiateId = 0;
+  // Use a Set so very-late offer retransmits don't tear down a newer negotiation.
+  const seenUfrags = new Set<string>();
+  let processingUfrag: string | null = null;
+  let stuckTimer: ReturnType<typeof setInterval> | null = null;
   let answerRetryTimer: ReturnType<typeof setInterval> | null = null;
+  // Buffer bc-candidates that arrive before we finish setRemoteDescription(offer)
+  const bcBuf = new Map<string, RTCIceCandidateInit[]>();
 
+  const send = (payload: BcPayload) =>
+    void ch.send({ type: "broadcast", event: EVENT, payload });
+
+  const clearStuck = () => {
+    if (stuckTimer) { clearInterval(stuckTimer); stuckTimer = null; }
+  };
   const clearAnswerRetry = () => {
     if (answerRetryTimer) { clearInterval(answerRetryTimer); answerRetryTimer = null; }
   };
 
-  const fail = (msg: string) => { if (!cleaned) onFailure?.(msg); };
+  const closeViewerPc = () => {
+    clearAnswerRetry();
+    if (pc && pc.signalingState !== "closed") pc.close();
+    pc = null;
+  };
 
-  pc.ontrack = (e) => {
-    debug(`ontrack kind=${e.track.kind}`);
-    if (e.streams[0]) onRemoteStream(e.streams[0]);
-  };
-  pc.onicegatheringstatechange = () => debug(`gather=${pc.iceGatheringState}`);
-  pc.oniceconnectionstatechange = () => {
-    if (cleaned) return;
-    debug(`ice=${pc.iceConnectionState}`);
-    if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
-      clearAnswerRetry();
-    } else if (pc.iceConnectionState === "failed") {
-      clearAnswerRetry();
-      fail("ICE failed — check TURN server config (NEXT_PUBLIC_TURN_URL).");
-    }
-  };
-  pc.onconnectionstatechange = () => {
-    if (cleaned) return;
-    debug(`pc=${pc.connectionState}`);
-    if (pc.connectionState === "failed") {
-      clearAnswerRetry();
-      fail("WebRTC connection failed.");
-    }
-  };
-  pc.onicecandidate = (e) => {
-    if (e.candidate) {
+  const wire = (p: RTCPeerConnection, offerUfrag: string) => {
+    p.ontrack = (e) => {
+      debug(`ontrack kind=${e.track.kind}`);
+      const s =
+        e.streams[0] ??
+        (() => {
+          const m = new MediaStream();
+          if (e.track) m.addTrack(e.track);
+          return m;
+        })();
+      onRemoteStream(s);
+    };
+    p.onicegatheringstatechange = () => debug(`gather=${p.iceGatheringState}`);
+    p.oniceconnectionstatechange = () => {
+      if (cleaned) return;
+      const s = p.iceConnectionState;
+      debug(`ice=${s}`);
+      if (s === "connected" || s === "completed") {
+        clearStuck();
+        clearAnswerRetry();
+      }
+      if (s === "failed" && p === pc) fail("ICE failed.");
+    };
+    p.onconnectionstatechange = () => {
+      if (cleaned) return;
+      debug(`pc=${p.connectionState}`);
+      if (p.connectionState === "failed" && p === pc) fail("Connection failed.");
+    };
+    // Trickle ICE: stream local candidates as they arrive. Ufrag captured in closure.
+    p.onicecandidate = (e) => {
+      if (cleaned || p !== pc || !e.candidate) return;
       const c = e.candidate;
       debug(
-        `cand type=${(c as unknown as { type?: string }).type ?? "?"} proto=${c.protocol}`,
+        `vc-cand type=${(c as unknown as { type?: string }).type ?? "?"} proto=${c.protocol}`,
       );
-    }
+      send({ type: "vc-candidate", candidate: c.toJSON(), forOfferUfrag: offerUfrag });
+    };
   };
 
-  const applyOffer = async (sdp: string) => {
-    if (offerApplied) {
-      debug("offer already applied, skipping retry");
+  const fail = (m: string) => { if (!cleaned) onFailure?.(m); };
+
+  const applyOffer = async (om: { sdp: string; offerUfrag?: string }) => {
+    const ufrag = om.offerUfrag || iceUfrag(om.sdp);
+    if (!ufrag) return;
+    if (seenUfrags.has(ufrag) || processingUfrag === ufrag) {
+      debug(`dup offer ufrag=${ufrag.slice(0, 6)} — ignore`);
       return;
     }
-    offerApplied = true;
-    await pc.setRemoteDescription({ type: "offer", sdp });
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-    debug("gathering answer…");
-    await waitForGatheringComplete(pc);
-    const answerSdp = pc.localDescription?.sdp ?? answer.sdp ?? "";
-    debug(`send answer (${answerSdp.length}b)`);
+    processingUfrag = ufrag;
+    const g = ++negotiateId;
+    closeViewerPc();
+    if (cleaned) { processingUfrag = null; return; }
+    const newPc = new RTCPeerConnection(iceConfig);
+    wire(newPc, ufrag);
+    pc = newPc;
+    try {
+      await newPc.setRemoteDescription({ type: "offer", sdp: om.sdp });
+    } catch (e) {
+      processingUfrag = null;
+      if (!cleaned) fail(e instanceof Error ? e.message : "setRemote err");
+      return;
+    }
+    if (g !== negotiateId || cleaned) return;
 
-    const sendAnswer = () => {
-      void ch.send({ type: "broadcast", event: EVENT, payload: { type: "answer", sdp: answerSdp } });
+    // Flush bc-candidates that arrived while setRemoteDescription was pending
+    const buffered = bcBuf.get(ufrag) ?? [];
+    bcBuf.delete(ufrag);
+    for (const cand of buffered) {
+      try { await newPc.addIceCandidate(cand); } catch { /* ignore */ }
+    }
+    if (buffered.length) debug(`flushed ${buffered.length} buffered bc-cands`);
+
+    let answer: RTCSessionDescriptionInit;
+    try {
+      answer = await newPc.createAnswer();
+    } catch (e) {
+      processingUfrag = null;
+      if (!cleaned) fail(e instanceof Error ? e.message : "createAnswer err");
+      return;
+    }
+    if (g !== negotiateId || cleaned) return;
+    await newPc.setLocalDescription(answer);
+    if (g !== negotiateId || cleaned) return;
+
+    const answerSdp = newPc.localDescription?.sdp ?? answer.sdp ?? "";
+    seenUfrags.add(ufrag);
+    processingUfrag = null;
+    debug(`send answer (trickle) len=${answerSdp.length} for ufrag=${ufrag.slice(0, 6)}`);
+
+    const sendAns = () => {
+      if (cleaned) return;
+      send({ type: "answer", sdp: answerSdp, forOfferUfrag: ufrag });
     };
-    sendAnswer();
+    sendAns();
 
-    // Retry answer every 2s until the broadcaster applies it (ICE connects).
-    let retries = 0;
+    // Retry answer until ICE connects — the broadcast can be dropped in transit
+    // and the broadcaster has no other way to recover.
+    clearAnswerRetry();
+    let r = 0;
     answerRetryTimer = setInterval(() => {
-      if (retries >= 6 || pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
+      if (cleaned) { clearAnswerRetry(); return; }
+      if (g !== negotiateId) { clearAnswerRetry(); return; }
+      const cur = pc;
+      if (!cur || cur.signalingState === "closed") { clearAnswerRetry(); return; }
+      if (
+        cur.iceConnectionState === "connected" ||
+        cur.iceConnectionState === "completed"
+      ) {
         clearAnswerRetry();
         return;
       }
-      retries += 1;
-      debug(`retry answer #${retries}`);
-      sendAnswer();
+      r++;
+      if (r > 10) { clearAnswerRetry(); return; }
+      debug(`retry answer #${r} ufrag=${ufrag.slice(0, 6)}`);
+      sendAns();
     }, 2000);
   };
 
   ch.on("broadcast", { event: EVENT }, async (raw) => {
-    const msg = parseSignalPayload(raw);
-    if (!msg) {
-      debug(`recv unknown: ${JSON.stringify(raw).slice(0, 120)}`);
-      return;
-    }
-    debug(`recv ${msg.type}`);
-    try {
-      if (msg.type === "offer" && msg.sdp) {
-        await applyOffer(msg.sdp);
+    const msg = parseRawPayload(raw);
+    if (!msg) return;
+    // Ignore self-echoes
+    if (msg.type === "viewer-ready" || msg.type === "answer" || msg.type === "vc-candidate") return;
+    if (msg.type === "offer" && typeof msg.sdp === "string") {
+      void applyOffer({
+        sdp: msg.sdp,
+        offerUfrag: typeof msg.offerUfrag === "string" ? msg.offerUfrag : undefined,
+      });
+    } else if (
+      msg.type === "bc-candidate" &&
+      msg.candidate &&
+      typeof msg.forOfferUfrag === "string"
+    ) {
+      const forU = msg.forOfferUfrag;
+      const candidate = msg.candidate as RTCIceCandidateInit;
+      const curPc = pc;
+      if (curPc && curPc.signalingState !== "closed" && curPc.remoteDescription) {
+        try {
+          await curPc.addIceCandidate(candidate);
+        } catch (e) {
+          debug(`addIceCandidate err: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      } else {
+        const buf = bcBuf.get(forU) ?? [];
+        buf.push(candidate);
+        bcBuf.set(forU, buf);
       }
-    } catch (e) {
-      fail(e instanceof Error ? e.message : "WebRTC negotiation failed");
     }
   });
 
-  debug(`subscribing to ${webrtcChannelName(liveSessionId)}`);
   await waitSubscribed(ch);
   debug("subscribed");
 
   const sendReady = () => {
-    debug("send viewer-ready");
-    void ch.send({ type: "broadcast", event: EVENT, payload: { type: "viewer-ready" } });
+    debug("viewer-ready");
+    send({ type: "viewer-ready" } as BcPayload);
   };
 
   sendReady();
-  // Single retry after 8s — long enough for the broadcaster to finish TURN gathering
-  // without interrupting it. Subsequent retries are handled by the broadcaster's offer
-  // resend timer (every 1.5s) once the offer is in flight.
-  const readyTimers = [8000].map((ms) => setTimeout(() => {
-    if (!offerApplied) {
-      debug("no offer after 8s — re-sending viewer-ready");
-      sendReady();
+
+  // Stuck-recovery: every 6s if still not connected, blow everything away and
+  // resend viewer-ready. Broadcaster will rebuild its PC and send a fresh offer.
+  stuckTimer = setInterval(() => {
+    if (cleaned) { clearStuck(); return; }
+    const s = pc?.iceConnectionState;
+    if (s === "connected" || s === "completed") {
+      clearStuck();
+      return;
     }
-  }, ms));
+    debug(`viewer-ready retry (stuck, ice=${s ?? "none"})`);
+    seenUfrags.clear();
+    processingUfrag = null;
+    bcBuf.clear();
+    closeViewerPc();
+    sendReady();
+  }, 6000);
 
   return () => {
     cleaned = true;
+    clearStuck();
     clearAnswerRetry();
-    readyTimers.forEach(clearTimeout);
     void ch.unsubscribe();
-    pc.close();
+    closeViewerPc();
+    bcBuf.clear();
+    seenUfrags.clear();
   };
 }

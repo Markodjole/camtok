@@ -18,9 +18,26 @@ port = 54334
 port = 54337
 
 [auth]
-site_url = "http://localhost:3000"
-additional_redirect_urls = ["http://localhost:3000/auth/callback"]
+# Production Site URL is used in confirmation email templates ({{ .SiteURL }}).
+# Localhost + Vercel preview URLs are allowlisted via additional_redirect_urls.
+site_url = "https://camtok-web.vercel.app"
+additional_redirect_urls = [
+  "https://camtok-web.vercel.app/**",
+  "https://camtok-web.vercel.app/auth/callback",
+  "https://*.vercel.app/**",
+  "http://localhost:3000/**",
+  "http://localhost:3000/auth/callback",
+]
 
 [auth.email]
 enable_signup = true
-enable_confirmations = false
+enable_confirmations = true
+double_confirm_changes = true
+secure_password_change = false
+max_frequency = "1m0s"
+otp_length = 8
+otp_expiry = 3600
+
+[auth.mfa.totp]
+enroll_enabled = true
+verify_enabled = true
