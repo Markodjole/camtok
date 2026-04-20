@@ -24,29 +24,26 @@ function getStoredMuted(): boolean {
   }
 }
 
-interface FeedState {
-  currentIndex: number;
+interface ViewerChromeState {
+  /** Which live tile is centered in the vertical snap list (`/live`). */
+  liveSnapIndex: number;
   isMuted: boolean;
   lastStakeAmount: number;
-  showFeedBets: boolean;
   /** Bumped after a successful bet so /bets can refetch the list */
   myBetsRevision: number;
-  setCurrentIndex: (index: number) => void;
+  setLiveSnapIndex: (index: number) => void;
   hydratePreferences: () => void;
   toggleMute: () => void;
   setLastStakeAmount: (amount: number) => void;
-  toggleFeedBets: () => void;
-  setShowFeedBets: (visible: boolean) => void;
   bumpMyBetsRevision: () => void;
 }
 
-export const useFeedStore = create<FeedState>((set) => ({
-  currentIndex: 0,
+export const useViewerChromeStore = create<ViewerChromeState>((set) => ({
+  liveSnapIndex: 0,
   isMuted: false,
   lastStakeAmount: 10,
-  showFeedBets: true,
   myBetsRevision: 0,
-  setCurrentIndex: (currentIndex) => set({ currentIndex }),
+  setLiveSnapIndex: (liveSnapIndex) => set({ liveSnapIndex }),
   hydratePreferences: () => {
     set({
       isMuted: getStoredMuted(),
@@ -56,19 +53,22 @@ export const useFeedStore = create<FeedState>((set) => ({
   toggleMute: () =>
     set((s) => {
       const next = !s.isMuted;
-      try { localStorage.setItem(MUTE_STORAGE_KEY, String(next)); } catch {}
+      try {
+        localStorage.setItem(MUTE_STORAGE_KEY, String(next));
+      } catch {
+        /* ignore */
+      }
       return { isMuted: next };
     }),
   setLastStakeAmount: (amount: number) => {
     if (VALID_AMOUNTS.includes(amount)) {
       try {
         localStorage.setItem(STAKE_STORAGE_KEY, String(amount));
-      } catch {}
+      } catch {
+        /* ignore */
+      }
       set({ lastStakeAmount: amount });
     }
   },
-  toggleFeedBets: () =>
-    set((s) => ({ showFeedBets: !s.showFeedBets })),
-  setShowFeedBets: (visible) => set({ showFeedBets: visible }),
   bumpMyBetsRevision: () => set((s) => ({ myBetsRevision: s.myBetsRevision + 1 })),
 }));

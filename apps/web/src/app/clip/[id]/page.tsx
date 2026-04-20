@@ -130,7 +130,7 @@ export default function ClipDetailPage() {
       return;
     }
     toast({ title: "Post deleted", description: "Your clip is no longer visible in the feed." });
-    router.push("/feed");
+    router.push("/live");
   }
 
   return (
@@ -147,7 +147,7 @@ export default function ClipDetailPage() {
               isActive
             />
             <Link
-              href="/feed"
+              href="/live"
               className="absolute left-3 top-3 flex h-8 w-8 items-center justify-center rounded-full bg-black/50 backdrop-blur-sm"
             >
               <ChevronLeft className="h-4 w-4 text-white" />

@@ -594,7 +594,7 @@ export async function generateAiClipFromBlueprint(input: {
       .then((m) => m.analyzeClipVideo(String((clipNode as any).id)))
       .catch(() => {});
 
-    revalidatePath("/feed");
+    revalidatePath("/live");
     return { data: { clipId: (clipNode as any).id } };
   } catch (e: any) {
     const message = e?.message || "Generation failed";

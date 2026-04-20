@@ -727,7 +727,7 @@ export async function updateUserCharacter(
     .order("sort_order", { ascending: true });
 
   revalidatePath("/create");
-  revalidatePath("/feed");
+  revalidatePath("/live");
 
   return {
     character: {

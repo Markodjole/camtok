@@ -12,7 +12,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { getUserBets } from "@/actions/bets";
 import { getNotifications, getUnreadCount, markAllAsRead, markAsRead } from "@/actions/notifications";
 import { cn, formatCurrency, formatRelativeTime } from "@/lib/utils";
-import { useFeedStore } from "@/stores/feed-store";
+import { useViewerChromeStore } from "@/stores/viewer-chrome-store";
 
 type BetRow = {
   id: string;
@@ -193,7 +193,7 @@ function NotificationIcon({ type }: { type: string }) {
 export default function BetsPage() {
   const router = useRouter();
   const pathname = usePathname();
-  const myBetsRevision = useFeedStore((s) => s.myBetsRevision);
+  const myBetsRevision = useViewerChromeStore((s) => s.myBetsRevision);
   const [bets, setBets] = useState<BetRow[]>([]);
   const [notifications, setNotifications] = useState<NotificationRow[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);

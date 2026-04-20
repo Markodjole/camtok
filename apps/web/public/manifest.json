@@ -2,7 +2,7 @@
   "name": "BetTok",
   "short_name": "BetTok",
   "description": "Watch. Predict. Win.",
-  "start_url": "/feed",
+  "start_url": "/live",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#0d0d0d",

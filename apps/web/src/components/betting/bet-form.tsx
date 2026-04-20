@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { placeBet } from "@/actions/bets";
 import { useUserStore } from "@/stores/user-store";
-import { useFeedStore } from "@/stores/feed-store";
+import { useViewerChromeStore } from "@/stores/viewer-chrome-store";
 import { useToast } from "@/components/ui/toast";
 import { formatCurrency } from "@/lib/utils";
 import { cn } from "@/lib/utils";
@@ -32,7 +32,7 @@ export function BetForm({
   const [loading, setLoading] = useState(false);
   const wallet = useUserStore((s) => s.wallet);
   const setWallet = useUserStore((s) => s.setWallet);
-  const setLastStakeAmount = useFeedStore((s) => s.setLastStakeAmount);
+  const setLastStakeAmount = useViewerChromeStore((s) => s.setLastStakeAmount);
   const { toast } = useToast();
 
   const numAmount = parseFloat(amount) || 0;
@@ -96,7 +96,7 @@ export function BetForm({
       if (wallet) {
         setWallet({ ...wallet, balance: balance - numAmount });
       }
-      useFeedStore.getState().bumpMyBetsRevision();
+      useViewerChromeStore.getState().bumpMyBetsRevision();
       setAmount("");
       onBetPlaced();
     }

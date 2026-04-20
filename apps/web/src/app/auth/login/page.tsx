@@ -37,7 +37,7 @@ export default function LoginPage() {
       return;
     }
 
-    router.push("/feed");
+    router.push("/live");
     router.refresh();
   }
 
@@ -47,7 +47,7 @@ export default function LoginPage() {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
-        redirectTo: getAuthCallbackUrl("/feed"),
+        redirectTo: getAuthCallbackUrl("/live"),
       },
     });
     if (error) {

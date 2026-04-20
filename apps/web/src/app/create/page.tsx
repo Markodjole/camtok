@@ -840,7 +840,7 @@ function CreatePageClient() {
         window.localStorage.removeItem(CREATE_REVIEW_CACHE_KEY);
       }
       toast({ title: "Clip posted!", description: "Your clip is now live", variant: "success" });
-      setTimeout(() => router.push("/feed"), 300);
+      setTimeout(() => router.push("/live"), 300);
     } catch (err: any) {
       toast({ title: "Publish failed", description: err?.message || "Unknown error", variant: "destructive" });
     } finally {
@@ -1103,7 +1103,7 @@ function CreatePageClient() {
                       Publishing...
                     </>
                   ) : (
-                    "Post to Feed"
+                    "Publish"
                   )}
                 </Button>
 
@@ -1202,7 +1202,7 @@ function CreatePageClient() {
                       if (typeof window !== "undefined") {
                         window.localStorage.removeItem(CREATE_REVIEW_CACHE_KEY);
                       }
-                      router.push("/feed");
+                      router.push("/live");
                     }}
                     disabled={improving || publishing || deleting}
                   >

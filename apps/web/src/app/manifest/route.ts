@@ -4,7 +4,7 @@ const manifest = {
   name: "BetTok",
   short_name: "BetTok",
   description: "Watch. Predict. Win.",
-  start_url: "/feed",
+  start_url: "/live",
   display: "standalone",
   background_color: "#0d0d0d",
   theme_color: "#7c3aed",

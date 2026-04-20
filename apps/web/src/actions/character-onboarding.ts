@@ -511,7 +511,7 @@ export async function finalizeCharacterOnboarding(input: {
     resultCharacterId = created.character.id;
   }
 
-  revalidatePath("/feed");
+  revalidatePath("/live");
   revalidatePath("/profile");
   revalidatePath("/onboarding/character");
   return { characterId: resultCharacterId };

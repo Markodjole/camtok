@@ -3,99 +3,6 @@
 import { revalidatePath } from "next/cache";
 import { createServerClient, createServiceClient } from "@/lib/supabase/server";
 
-export interface FeedClip {
-  id: string;
-  story_id: string;
-  parent_clip_node_id: string | null;
-  depth: number;
-  creator_user_id: string;
-  source_type: string;
-  status: string;
-  video_storage_path: string | null;
-  poster_storage_path: string | null;
-  scene_summary: string | null;
-  /** GPS / container tags + vision-derived place line for owner uploads */
-  capture_location_text: string | null;
-  /** On-screen spoken line(s); shown as subtitles on feed when set */
-  transcript: string | null;
-  genre: string | null;
-  tone: string | null;
-  pause_start_ms: number | null;
-  duration_ms: number | null;
-  betting_deadline: string | null;
-  view_count: number;
-  bet_count: number;
-  published_at: string;
-  story_title: string;
-  creator_username: string;
-  creator_display_name: string;
-  creator_avatar_path: string | null;
-  /** Resolved clip only: Part 2 (continuation) video path */
-  part2_video_storage_path?: string | null;
-  winning_outcome_text?: string | null;
-  resolution_reason_text?: string | null;
-  resolved_at?: string | null;
-  /** Character fields (from feed_clips view JOIN) */
-  character_id?: string | null;
-  character_name?: string | null;
-  character_slug?: string | null;
-  character_tagline?: string | null;
-  character_betting_signals?: Record<string, unknown> | null;
-  has_frame_options?: boolean;
-}
-
-const isDbUnavailable = (err: { code?: string; message?: string }) =>
-  err?.code === "PGRST002" ||
-  err?.message?.includes("schema cache") ||
-  err?.message?.includes("503") ||
-  err?.message?.includes("Service Unavailable");
-
-async function getFeedClipsOnce(
-  supabase: Awaited<ReturnType<typeof import("@/lib/supabase/server").createServerClient>>,
-  cursor?: string,
-  limit = 10
-) {
-  let query = supabase
-    .from("feed_clips")
-    .select("*")
-    .order("published_at", { ascending: false })
-    .limit(limit);
-  if (cursor) query = query.lt("published_at", cursor);
-  return query;
-}
-
-export async function getFeedClips(
-  cursor?: string,
-  limit = 10
-): Promise<{ clips: FeedClip[]; nextCursor: string | null }> {
-  const supabase = await createServerClient();
-  const maxAttempts = 4;
-  const delayMs = 800;
-
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const { data, error } = await getFeedClipsOnce(supabase, cursor, limit);
-
-    if (!error) {
-      const clips = (data || []) as FeedClip[];
-      const nextCursor =
-        clips.length === limit
-          ? clips[clips.length - 1]?.published_at ?? null
-          : null;
-      return { clips, nextCursor };
-    }
-
-    if (attempt < maxAttempts && isDbUnavailable(error)) {
-      await new Promise((r) => setTimeout(r, delayMs * attempt));
-      continue;
-    }
-
-    console.error("Feed query error:", error);
-    return { clips: [], nextCursor: null };
-  }
-
-  return { clips: [], nextCursor: null };
-}
-
 export async function getClipById(id: string) {
   const supabase = await createServerClient();
 
@@ -368,6 +275,6 @@ export async function setResolveVideoPath(clipId: string, storagePath: string) {
     return { error: `Failed to update clip: ${msg}${hint}` };
   }
 
-  revalidatePath("/feed");
+  revalidatePath("/live");
   return { success: true };
 }

@@ -108,7 +108,7 @@ async function createMockClipMp4(): Promise<Uint8Array> {
           "-f",
           "lavfi",
           "-i",
-          // Use an obvious test pattern so mock clips are clearly visible in review/feed.
+          // Use an obvious test pattern so mock clips are clearly visible in review.
           "testsrc2=s=720x1280:r=24:d=4",
           "-c:v",
           "libx264",
@@ -1891,7 +1891,7 @@ export async function publishCharacterDraft(input: {
       logLine(input.jobId, "prediction_starters_seeded", { created: seed.created, skipped: seed.skipped });
     }
 
-    revalidatePath("/feed");
+    revalidatePath("/live");
     return { data: { clipId: (clipNode as any).id, predictionsSeeded: seed.created } };
   } catch (e: any) {
     const message = e?.message || "Publish failed";

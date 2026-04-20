@@ -806,7 +806,7 @@ export async function publishDraft(input: {
     logLine(input.jobId, "prediction_starters_seeded", { created: seed.created, skipped: seed.skipped });
   }
 
-  revalidatePath("/feed");
+  revalidatePath("/live");
   return { data: { clipId: (clipNode as any).id, predictionsSeeded: seed.created } };
 }
 

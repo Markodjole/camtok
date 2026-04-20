@@ -4,9 +4,9 @@ import { useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useUserStore } from "@/stores/user-store";
-import { useFeedStore } from "@/stores/feed-store";
+import { useViewerChromeStore } from "@/stores/viewer-chrome-store";
 import { formatCurrency } from "@/lib/utils";
-import { Wallet, ChevronDown, Eye, EyeOff, Menu, Sparkles } from "lucide-react";
+import { Wallet, ChevronDown, Menu, Sparkles } from "lucide-react";
 
 const STAKE_OPTIONS = [1, 2, 5, 10, 20, 50] as const;
 const STAKE_STORAGE_KEY = "bettok_last_stake_amount";
@@ -38,16 +38,16 @@ function useClickOutside(ref: React.RefObject<HTMLElement | null>, open: boolean
 export function TopBar() {
   const pathname = usePathname();
   const wallet = useUserStore((s) => s.wallet);
-  const lastStakeAmount = useFeedStore((s) => s.lastStakeAmount);
-  const setLastStakeAmount = useFeedStore((s) => s.setLastStakeAmount);
-  const showFeedBets = useFeedStore((s) => s.showFeedBets);
-  const toggleFeedBets = useFeedStore((s) => s.toggleFeedBets);
+  const lastStakeAmount = useViewerChromeStore((s) => s.lastStakeAmount);
+  const setLastStakeAmount = useViewerChromeStore((s) => s.setLastStakeAmount);
   const [showAmountPicker, setShowAmountPicker] = useState(false);
-  const [showFeedMenu, setShowFeedMenu] = useState(false);
+  const [showLiveMenu, setShowLiveMenu] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  const isFeed = pathname === "/feed" || pathname.startsWith("/feed/");
+  const isLiveHub =
+    pathname === "/live" ||
+    (pathname.startsWith("/live/") && !pathname.startsWith("/live/go"));
   const showBalanceInHeader =
     pathname === "/bets" || pathname.startsWith("/bets/") || pathname === "/profile" || pathname.startsWith("/profile/");
 
@@ -57,11 +57,11 @@ export function TopBar() {
   }, [setLastStakeAmount]);
 
   useClickOutside(pickerRef, showAmountPicker, () => setShowAmountPicker(false));
-  useClickOutside(menuRef, showFeedMenu, () => setShowFeedMenu(false));
+  useClickOutside(menuRef, showLiveMenu, () => setShowLiveMenu(false));
 
   return (
     <header className="fixed left-0 right-0 top-0 z-50 flex h-12 items-center justify-between bg-background/80 px-4 backdrop-blur-lg">
-      <Link href="/feed" className="text-lg font-bold tracking-tight">
+      <Link href="/live" className="text-lg font-bold tracking-tight">
         <span className="text-primary">Bet</span>
         <span className="text-foreground">Tok</span>
       </Link>
@@ -97,36 +97,23 @@ export function TopBar() {
             </div>
           )}
         </div>
-        <button
-          type="button"
-          onClick={toggleFeedBets}
-          className="flex items-center gap-1 rounded-full bg-secondary px-2.5 py-1.5 text-sm transition-colors hover:bg-secondary/80"
-          aria-label={showFeedBets ? "Hide feed bets" : "Show feed bets"}
-          title={showFeedBets ? "Hide feed bets" : "Show feed bets"}
-        >
-          {showFeedBets ? (
-            <Eye className="h-3.5 w-3.5 text-primary" />
-          ) : (
-            <EyeOff className="h-3.5 w-3.5 text-white/70" />
-          )}
-        </button>
-        {isFeed && (
+        {isLiveHub && (
           <div className="relative" ref={menuRef}>
             <button
               type="button"
-              onClick={() => setShowFeedMenu((v) => !v)}
+              onClick={() => setShowLiveMenu((v) => !v)}
               className="flex items-center justify-center rounded-full bg-secondary p-2 text-sm transition-colors hover:bg-secondary/80"
-              aria-label="Feed settings"
-              title="Settings"
+              aria-label="Live menu"
+              title="Menu"
             >
               <Menu className="h-4 w-4" />
             </button>
-            {showFeedMenu && (
+            {showLiveMenu && (
               <div className="absolute right-0 top-full mt-1 min-w-[200px] overflow-hidden rounded-lg border border-border bg-popover py-1 shadow-lg">
                 <Link
                   href="/onboarding/character"
                   className="flex items-center gap-2 px-3 py-2.5 text-sm hover:bg-muted"
-                  onClick={() => setShowFeedMenu(false)}
+                  onClick={() => setShowLiveMenu(false)}
                 >
                   <Sparkles className="h-4 w-4 text-primary" />
                   Become a character

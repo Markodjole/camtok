@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useEffect, useState, useCallback, type MouseEvent } from "react";
-import { useFeedStore } from "@/stores/feed-store";
+import { useViewerChromeStore } from "@/stores/viewer-chrome-store";
 import { cn } from "@/lib/utils";
 import { Play, Pause, Loader2 } from "lucide-react";
 import type { NormalizedBox } from "@/lib/frame-options/types";
@@ -57,7 +57,7 @@ export function VideoPlayer({
   const [isZoomed, setIsZoomed] = useState(false);
   const [zoomOrigin, setZoomOrigin] = useState("50% 50%");
   const [activeSubtitle, setActiveSubtitle] = useState("");
-  const isMuted = useFeedStore((s) => s.isMuted);
+  const isMuted = useViewerChromeStore((s) => s.isMuted);
   const subtitleCuesRef = useRef<Array<{ start: number; end: number; text: string }>>([]);
   const activeSubtitleRef = useRef("");
 

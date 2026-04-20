@@ -100,7 +100,7 @@ export function getAuthRedirectBase(): string {
   return "http://localhost:3000";
 }
 
-export function getAuthCallbackUrl(next = "/feed"): string {
+export function getAuthCallbackUrl(next = "/live"): string {
   const base = getAuthRedirectBase();
   const params = new URLSearchParams({ next });
   return `${base}/auth/callback?${params.toString()}`;

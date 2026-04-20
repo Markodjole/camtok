@@ -288,7 +288,7 @@ function InnerOnboarding() {
         description: "You now have a full BetTok character profile like our defaults.",
         variant: "success",
       });
-      router.replace("/feed");
+      router.replace("/live");
       router.refresh();
     } finally {
       setSubmitting(false);
@@ -313,7 +313,7 @@ function InnerOnboarding() {
             <CardHeader>
               <CardTitle>You already have a character</CardTitle>
               <CardDescription>
-                Optional: refresh your profile data, photos, and signals. Or go back to the feed.
+                Optional: refresh your profile data, photos, and signals. Or go back to live.
               </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-2">
@@ -321,7 +321,7 @@ function InnerOnboarding() {
                 <Link href="/onboarding/character?update=1">Edit my character</Link>
               </Button>
               <Button variant="outline" asChild>
-                <Link href="/feed">Back to feed</Link>
+                <Link href="/live">Back to live</Link>
               </Button>
             </CardContent>
           </Card>

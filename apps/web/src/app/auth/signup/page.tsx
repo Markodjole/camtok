@@ -28,7 +28,7 @@ export default function SignupPage() {
       email,
       password,
       options: {
-        emailRedirectTo: getAuthCallbackUrl("/feed"),
+        emailRedirectTo: getAuthCallbackUrl("/live"),
         data: {
           username,
           display_name: username,
@@ -63,7 +63,7 @@ export default function SignupPage() {
       variant: "success",
     });
 
-    router.push("/feed");
+    router.push("/live");
     router.refresh();
   }
 
@@ -77,7 +77,7 @@ export default function SignupPage() {
       type: "signup",
       email: resendEmail,
       options: {
-        emailRedirectTo: getAuthCallbackUrl("/feed"),
+        emailRedirectTo: getAuthCallbackUrl("/live"),
       },
     });
 
@@ -105,7 +105,7 @@ export default function SignupPage() {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
-        redirectTo: getAuthCallbackUrl("/feed"),
+        redirectTo: getAuthCallbackUrl("/live"),
       },
     });
     if (error) {
