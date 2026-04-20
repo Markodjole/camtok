@@ -317,7 +317,7 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
             <option value="walking">Walking</option>
             <option value="bike">Bike</option>
             <option value="scooter">Scooter</option>
-            <option value="car" disabled>Car (coming later)</option>
+            <option value="car">Car</option>
           </select>
         </div>
 
