@@ -91,7 +91,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-36 bg-gradient-to-b from-black/75 to-transparent" />
 
       {/* ── Top bar — LIVE · name · mode · $amount stepper (sits below app TopBar) ── */}
-      <div className="absolute inset-x-0 top-12 z-20 flex items-center gap-2 px-4 py-3 text-sm">
+      <div className="absolute inset-x-0 top-12 z-40 flex items-center gap-2 px-4 py-3 text-sm">
         <span className="rounded bg-red-500/30 px-2 py-0.5 text-[11px] font-bold text-red-400 tracking-wide">
           LIVE
         </span>
@@ -124,15 +124,17 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
       {/* ── Map overlay — upper-right, below both bars ── */}
       <div
-        className="absolute z-10 overflow-hidden rounded-2xl border border-white/20 shadow-2xl backdrop-blur-sm"
-        style={{ top: 108, right: 12, width: "42vw", height: "42vw", maxWidth: 200, maxHeight: 200, opacity: 0.5 }}
+        className="absolute z-30 overflow-hidden rounded-2xl border border-white/25 shadow-2xl backdrop-blur-sm"
+        style={{ top: 108, right: 12, width: "56vw", height: "56vw", maxWidth: 260, maxHeight: 260, opacity: 0.85 }}
       >
         <LiveMap
           routePoints={routePoints}
           className="h-full w-full"
           interactive={false}
           audienceRole="viewer"
-          tileOpacity={0.3}
+          transportMode={room.transportMode}
+          rotateWithHeading={true}
+          tileOpacity={0.65}
           mapCaption={currentMarket?.title}
         />
         {routePoints.length === 0 && (
@@ -143,31 +145,28 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       </div>
 
       {/* ── Bottom gradient scrim ────────────────────────── */}
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-[58%] bg-gradient-to-t from-black/85 via-black/40 to-transparent" />
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-44 bg-gradient-to-t from-black/70 to-transparent" />
 
-      {/* ── D-pad overlay — bottom-center, above BottomNav ── */}
-      <div className="absolute inset-x-0 bottom-0 z-20 flex flex-col items-center pb-20 pt-3 px-4">
-        {/* Market label just above the pad */}
+      {/* BottomNav is z-50 — pad must be z>50 or touches go to nav and no UI feedback works */}
+      <div className="pointer-events-none fixed inset-x-0 bottom-0 z-[60] flex flex-col items-center gap-1 px-4 pb-[calc(4.25rem+env(safe-area-inset-bottom,0px))]">
+        <div className="pointer-events-auto flex flex-col items-center gap-1">
         {currentMarket ? (
-          <div className="mb-2 flex w-full max-w-xs items-start justify-between gap-2">
-            <p className="text-xs font-semibold text-white/90 leading-snug drop-shadow">
-              {currentMarket.title}
-            </p>
+          <div className="flex items-center gap-2 rounded-full bg-black/45 px-3 py-1 text-[11px] text-white/85 backdrop-blur-sm">
+            <span className="font-semibold leading-none drop-shadow">{currentMarket.title}</span>
             <MarketTimer locksAt={currentMarket.locksAt} />
           </div>
-        ) : (
-          <p className="mb-2 text-xs text-white/30">Waiting for next decision…</p>
-        )}
+        ) : null}
 
-        {/* The pad itself */}
         <DirectionalBetPad
           options={currentMarket?.options ?? []}
           betAmount={betAmount}
           onBet={async (optionId) => { await placeBet(optionId); }}
           locked={isLocked || !currentMarket || !!placingOptionId}
+          routePoints={routePoints}
         />
 
-        {error && <div className="mt-1 text-center text-xs text-red-400">{error}</div>}
+        {error && <div className="text-[10px] text-red-400">{error}</div>}
+        </div>
       </div>
     </div>
   );

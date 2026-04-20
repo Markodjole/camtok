@@ -12,6 +12,12 @@ export interface LiveMapProps {
   mapCaption?: string;
   audienceRole?: "streamer" | "viewer";
   showCourseArrow?: boolean;
+  transportMode?: string;
+  /**
+   * Rotate map so "forward" is always toward screen top based on heading.
+   * Useful for viewer controls where left/right should match streamer POV.
+   */
+  rotateWithHeading?: boolean;
 }
 
 const C = {
@@ -28,6 +34,23 @@ function headingDivIcon(L: { divIcon: (o: object) => import("leaflet").DivIcon }
   return L.divIcon({ html, className: "camtok-h", iconSize: [52, 52], iconAnchor: [26, 26] });
 }
 
+function mapProfile(mode?: string): {
+  zoom: number;
+  lineWeight: number;
+  showSpeed: boolean;
+  speedUnit: "kmh" | "none";
+} {
+  const m = (mode ?? "").toLowerCase();
+  if (m.includes("car") || m.includes("drive")) {
+    return { zoom: 16, lineWeight: 4, showSpeed: true, speedUnit: "kmh" };
+  }
+  if (m.includes("bike") || m.includes("cycle")) {
+    return { zoom: 17, lineWeight: 4, showSpeed: true, speedUnit: "kmh" };
+  }
+  // walking / default
+  return { zoom: 18, lineWeight: 3, showSpeed: false, speedUnit: "none" };
+}
+
 export function LiveMap({
   routePoints,
   className = "",
@@ -36,6 +59,8 @@ export function LiveMap({
   mapCaption,
   audienceRole = "viewer",
   showCourseArrow = true,
+  transportMode,
+  rotateWithHeading = false,
 }: LiveMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<import("leaflet").Map | null>(null);
@@ -44,8 +69,10 @@ export function LiveMap({
   const dotRef = useRef<import("leaflet").CircleMarker | null>(null);
   const arRef = useRef<import("leaflet").Marker | null>(null);
   const [mapReady, setMapReady] = useState(0);
+  const [rotationDeg, setRotationDeg] = useState(0);
   const streamer = audienceRole === "streamer";
   const col = streamer ? C.streamer : C.viewer;
+  const profile = mapProfile(transportMode);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -111,9 +138,13 @@ export function LiveMap({
 
       if (plRef.current) {
         plRef.current.setLatLngs(latlngs);
-        plRef.current.setStyle({ color: col.line, weight: 3, opacity: col.lineOp });
+        plRef.current.setStyle({ color: col.line, weight: profile.lineWeight, opacity: col.lineOp });
       } else {
-        plRef.current = L.polyline(latlngs, { color: col.line, weight: 3, opacity: col.lineOp }).addTo(m);
+        plRef.current = L.polyline(latlngs, {
+          color: col.line,
+          weight: profile.lineWeight,
+          opacity: col.lineOp,
+        }).addTo(m);
       }
       if (dotRef.current) {
         dotRef.current.setLatLng(pos);
@@ -135,17 +166,59 @@ export function LiveMap({
           zIndexOffset: 500,
         }).addTo(m);
       }
-      m.setView(pos, 17, { animate: true, duration: 0.4 });
+      m.setView(pos, profile.zoom, { animate: true, duration: 0.4 });
+
+      // Rotate map opposite of heading so "forward" remains screen-up.
+      // Rotation is applied to an oversized wrapper (see JSX), not the map box,
+      // to avoid empty corners while preserving a fully filled frame.
+      if (rotateWithHeading && last.heading != null) {
+        setRotationDeg(-last.heading);
+      } else {
+        setRotationDeg(0);
+      }
     })();
-  }, [routePoints, col, streamer, showCourseArrow, col.line, col.lineOp, col.fill, col.r, mapReady]);
+  }, [
+    routePoints,
+    col,
+    streamer,
+    showCourseArrow,
+    col.line,
+    col.lineOp,
+    col.fill,
+    col.r,
+    mapReady,
+    profile.zoom,
+    profile.lineWeight,
+    rotateWithHeading,
+  ]);
 
   return (
     <div className="relative h-full w-full" style={{ background: "rgba(10,10,20,0.4)" }}>
-      <div
-        ref={containerRef}
-        className={className}
-        style={{ height: "100%", width: "100%", minHeight: 0, opacity: 0.9 }}
-      />
+      <div className="absolute inset-0 overflow-hidden">
+        <div
+          style={
+            rotateWithHeading
+              ? {
+                  position: "absolute",
+                  // Oversize so rotated map always covers the visible box.
+                  inset: "-24%",
+                  transform: `rotate(${rotationDeg}deg)`,
+                  transformOrigin: "50% 50%",
+                  transition: "transform 240ms linear",
+                }
+              : {
+                  position: "absolute",
+                  inset: 0,
+                }
+          }
+        >
+          <div
+            ref={containerRef}
+            className={className}
+            style={{ height: "100%", width: "100%", minHeight: 0, opacity: 0.9 }}
+          />
+        </div>
+      </div>
       {mapCaption && (
         <div className="pointer-events-none absolute bottom-0 left-0 right-0 z-[2000] p-1.5">
           <p
@@ -153,6 +226,9 @@ export function LiveMap({
             style={{ color: "rgba(255,255,255,0.9)" }}
           >
             {mapCaption}
+            {profile.showSpeed && routePoints.length > 0 && routePoints[routePoints.length - 1]?.speedMps != null
+              ? ` · ${Math.round((routePoints[routePoints.length - 1]!.speedMps ?? 0) * 3.6)} km/h`
+              : ""}
           </p>
         </div>
       )}

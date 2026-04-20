@@ -16,13 +16,29 @@ function buildIceServers(): RTCIceServer[] {
   return servers;
 }
 
+function isLocalHostnameRuntime(): boolean {
+  if (typeof window === "undefined") return false;
+  const h = window.location.hostname;
+  return (
+    h === "localhost" ||
+    h === "127.0.0.1" ||
+    h === "::1" ||
+    h.startsWith("192.168.") ||
+    h.startsWith("10.") ||
+    h.endsWith(".local")
+  );
+}
+
 function buildIceConfig(): RTCConfiguration {
+  // Relay-only via env flag, but NEVER force relay on localhost/LAN: if TURN
+  // isn't reachable there the peer gathers zero candidates and stalls forever.
+  const envRelay = process.env.NEXT_PUBLIC_ICE_RELAY_ONLY === "1";
+  const relay = envRelay && !isLocalHostnameRuntime();
   return {
     iceServers: buildIceServers(),
     bundlePolicy: "max-bundle",
     rtcpMuxPolicy: "require",
-    iceTransportPolicy:
-      process.env.NEXT_PUBLIC_ICE_RELAY_ONLY === "1" ? "relay" : "all",
+    iceTransportPolicy: relay ? "relay" : "all",
   };
 }
 
@@ -96,6 +112,10 @@ export async function startBroadcasterP2p(
   let lastOffer: string | null = null;
   let lastOfferUfrag: string | null = null;
   let isNegotiating = false;
+  // Track whether a viewer has signaled recently. We only aggressively
+  // rebuild the offer (fresh ufrag) if a viewer is actually out there
+  // waiting — otherwise we just keep broadcasting the existing offer.
+  let lastViewerReadyAt = 0;
   // Buffer vc-candidates that arrive before setRemoteDescription(answer)
   const vcBuf = new Map<string, RTCIceCandidateInit[]>();
 
@@ -121,6 +141,12 @@ export async function startBroadcasterP2p(
       if (s === "connected" || s === "completed") clearOfferResend();
     };
     p.onconnectionstatechange = () => debug(`pc=${p.connectionState}`);
+    p.onicecandidateerror = (e) => {
+      const ev = e as unknown as { errorCode?: number; errorText?: string; url?: string };
+      debug(
+        `ice-cand-err code=${ev.errorCode ?? "?"} url=${ev.url ?? "?"} text=${(ev.errorText ?? "").slice(0, 60)}`,
+      );
+    };
     pc = p;
     return p;
   };
@@ -138,10 +164,20 @@ export async function startBroadcasterP2p(
       const p = buildPcBase();
       const offer = await p.createOffer();
       const ug = iceUfrag(offer.sdp ?? "");
+      let candCount = 0;
       // Attach onicecandidate BEFORE setLocalDescription so candidates that
       // fire during gathering are never dropped. Ufrag is captured in closure.
       p.onicecandidate = (e) => {
-        if (!e.candidate) return;
+        if (!e.candidate) {
+          debug(`gather-done cands=${candCount}`);
+          if (candCount === 0) {
+            debug(
+              "no local ICE candidates — check TURN/STUN reachability (set NEXT_PUBLIC_ICE_RELAY_ONLY=0 for local dev)",
+            );
+          }
+          return;
+        }
+        candCount++;
         const c = e.candidate;
         debug(
           `bc-cand type=${(c as unknown as { type?: string }).type ?? "?"} proto=${c.protocol}`,
@@ -150,6 +186,15 @@ export async function startBroadcasterP2p(
       };
       lastOfferUfrag = ug;
       await p.setLocalDescription(offer);
+      // If TURN is broken in relay-only mode, gathering stalls forever. Log a
+      // clear warning at 4s so the user knows why nothing happens.
+      setTimeout(() => {
+        if (pc === p && candCount === 0 && p.iceGatheringState !== "complete") {
+          debug(
+            `WARN no candidates 4s after setLocalDescription (gather=${p.iceGatheringState}) — TURN unreachable or blocked`,
+          );
+        }
+      }, 4000);
       const sdp = p.localDescription?.sdp ?? offer.sdp ?? "";
       lastOffer = sdp;
       debug(`send offer len=${sdp.length} ufrag=${ug.slice(0, 8)}…`);
@@ -158,11 +203,24 @@ export async function startBroadcasterP2p(
       let n = 0;
       offerRetryTimer = setInterval(() => {
         n++;
-        if (n > 20 || !lastOffer || !lastOfferUfrag) { clearOfferResend(); return; }
+        if (!lastOffer || !lastOfferUfrag) { clearOfferResend(); return; }
         if (!pc || pc.signalingState !== "have-local-offer") {
           clearOfferResend();
           return;
         }
+        // If we've sent 4 offers, no answer arrived, AND a viewer signaled
+        // recently (so one is actually out there), rebuild with a fresh ufrag —
+        // the viewer may have the previous ufrag cached as "already seen".
+        const viewerRecent = Date.now() - lastViewerReadyAt < 15000;
+        if (n === 4 && viewerRecent) {
+          debug("no answer after 4 resends + recent viewer → rebuild with fresh ufrag");
+          clearOfferResend();
+          void sendOffer();
+          return;
+        }
+        // Otherwise cap at 20 retries (40s). After that, we stop broadcasting
+        // and wait for the next viewer-ready to nudge us.
+        if (n > 20) { clearOfferResend(); return; }
         debug(`resend offer #${n} ufrag=${lastOfferUfrag.slice(0, 6)}`);
         send({ type: "offer", sdp: lastOffer, offerUfrag: lastOfferUfrag });
       }, 2000);
@@ -179,8 +237,28 @@ export async function startBroadcasterP2p(
     debug(`recv ${msg.type}`);
     try {
       if (msg.type === "viewer-ready") {
-        // Always rebuild on viewer-ready (handles both first viewer and stuck retry)
-        await sendOffer();
+        lastViewerReadyAt = Date.now();
+        // Reuse the existing negotiation if it's still alive:
+        //  - If we're mid-offer, resend the last SDP instead of creating a new one.
+        //  - If the PC is connected/connecting, do nothing; viewer will sync via bc-candidates.
+        //  - Only build a fresh PC when we have none or the previous one is dead.
+        const iceState = pc?.iceConnectionState;
+        const pcState = pc?.connectionState;
+        const alive =
+          !!pc &&
+          pc.signalingState !== "closed" &&
+          iceState !== "failed" &&
+          iceState !== "disconnected" &&
+          pcState !== "failed" &&
+          pcState !== "closed";
+        if (alive && lastOffer && lastOfferUfrag && pc!.signalingState === "have-local-offer") {
+          debug(`viewer-ready → resend existing offer ufrag=${lastOfferUfrag.slice(0, 6)}`);
+          send({ type: "offer", sdp: lastOffer, offerUfrag: lastOfferUfrag });
+        } else if (alive && (iceState === "connected" || iceState === "completed")) {
+          debug(`viewer-ready → already connected (ice=${iceState}), ignoring`);
+        } else {
+          await sendOffer();
+        }
       } else if (msg.type === "answer" && typeof msg.sdp === "string") {
         if (!pc || pc.signalingState === "closed") { debug("no pc for answer"); return; }
         const ansUfrag = typeof msg.forOfferUfrag === "string" ? msg.forOfferUfrag : null;
@@ -241,8 +319,37 @@ export async function startBroadcasterP2p(
   await waitSubscribed(ch);
   debug("subscribed");
 
+  // Proactively publish an offer as soon as the channel is ready. This removes
+  // the viewer→broadcaster handshake dependency — the offer is already on the
+  // wire, so any viewer who subscribes picks it up from the next retransmit.
+  // The viewer-ready handler above still works as a nudge.
+  void sendOffer();
+
+  // Safety heartbeat: if we're sitting with an offer and nothing is happening
+  // (PC stuck in have-local-offer for too long), rebuild with a fresh ufrag.
+  // This covers the case where a viewer subscribed, grabbed the ufrag into its
+  // `seenUfrags` set, then dropped without sending an answer.
+  const watchdog = setInterval(() => {
+    if (!pc) {
+      debug("watchdog: no PC, rebuild offer");
+      void sendOffer();
+      return;
+    }
+    const ss = pc.signalingState;
+    const ice = pc.iceConnectionState;
+    if (
+      ss === "closed" ||
+      ice === "failed" ||
+      ice === "disconnected"
+    ) {
+      debug(`watchdog: pc unhealthy (ss=${ss} ice=${ice}) → rebuild offer`);
+      void sendOffer();
+    }
+  }, 10000);
+
   return () => {
     clearOfferResend();
+    clearInterval(watchdog);
     void ch.unsubscribe();
     closePc();
     vcBuf.clear();
@@ -284,6 +391,8 @@ export async function startViewerP2p(
   let processingUfrag: string | null = null;
   let stuckTimer: ReturnType<typeof setInterval> | null = null;
   let answerRetryTimer: ReturnType<typeof setInterval> | null = null;
+  let readyRetryTimer: ReturnType<typeof setInterval> | null = null;
+  let offerEverReceived = false;
   // Buffer bc-candidates that arrive before we finish setRemoteDescription(offer)
   const bcBuf = new Map<string, RTCIceCandidateInit[]>();
 
@@ -295,6 +404,9 @@ export async function startViewerP2p(
   };
   const clearAnswerRetry = () => {
     if (answerRetryTimer) { clearInterval(answerRetryTimer); answerRetryTimer = null; }
+  };
+  const clearReadyRetry = () => {
+    if (readyRetryTimer) { clearInterval(readyRetryTimer); readyRetryTimer = null; }
   };
 
   const closeViewerPc = () => {
@@ -331,15 +443,44 @@ export async function startViewerP2p(
       debug(`pc=${p.connectionState}`);
       if (p.connectionState === "failed" && p === pc) fail("Connection failed.");
     };
+    p.onicecandidateerror = (e) => {
+      if (cleaned) return;
+      const ev = e as unknown as { errorCode?: number; errorText?: string; url?: string };
+      debug(
+        `ice-cand-err code=${ev.errorCode ?? "?"} url=${ev.url ?? "?"} text=${(ev.errorText ?? "").slice(0, 60)}`,
+      );
+    };
     // Trickle ICE: stream local candidates as they arrive. Ufrag captured in closure.
+    let candCount = 0;
     p.onicecandidate = (e) => {
-      if (cleaned || p !== pc || !e.candidate) return;
+      if (cleaned || p !== pc) return;
+      if (!e.candidate) {
+        debug(`gather-done cands=${candCount} ufrag=${offerUfrag.slice(0, 6)}`);
+        if (candCount === 0) {
+          debug(
+            "no local ICE candidates — check TURN/STUN reachability (set NEXT_PUBLIC_ICE_RELAY_ONLY=0 for local dev)",
+          );
+          fail("No local ICE candidates. TURN/STUN blocked or unreachable.");
+        }
+        return;
+      }
+      candCount++;
       const c = e.candidate;
       debug(
         `vc-cand type=${(c as unknown as { type?: string }).type ?? "?"} proto=${c.protocol}`,
       );
       send({ type: "vc-candidate", candidate: c.toJSON(), forOfferUfrag: offerUfrag });
     };
+    // Safety-net: if gathering is still "gathering" with zero candidates 4s
+    // after wiring, complain loudly so users know it's not the app's fault.
+    setTimeout(() => {
+      if (cleaned || p !== pc) return;
+      if (candCount === 0 && p.iceGatheringState !== "complete") {
+        debug(
+          `WARN no candidates 4s after negotiation (gather=${p.iceGatheringState}) — TURN/STUN unreachable`,
+        );
+      }
+    }, 4000);
   };
 
   const fail = (m: string) => { if (!cleaned) onFailure?.(m); };
@@ -347,6 +488,9 @@ export async function startViewerP2p(
   const applyOffer = async (om: { sdp: string; offerUfrag?: string }) => {
     const ufrag = om.offerUfrag || iceUfrag(om.sdp);
     if (!ufrag) return;
+    // An offer arrived — stop pestering the broadcaster with viewer-ready retries.
+    offerEverReceived = true;
+    clearReadyRetry();
     if (seenUfrags.has(ufrag) || processingUfrag === ufrag) {
       debug(`dup offer ufrag=${ufrag.slice(0, 6)} — ignore`);
       return;
@@ -426,6 +570,7 @@ export async function startViewerP2p(
     if (!msg) return;
     // Ignore self-echoes
     if (msg.type === "viewer-ready" || msg.type === "answer" || msg.type === "vc-candidate") return;
+    debug(`recv ${msg.type}`);
     if (msg.type === "offer" && typeof msg.sdp === "string") {
       void applyOffer({
         sdp: msg.sdp,
@@ -457,11 +602,36 @@ export async function startViewerP2p(
   debug("subscribed");
 
   const sendReady = () => {
+    if (cleaned) return;
     debug("viewer-ready");
     send({ type: "viewer-ready" } as BcPayload);
   };
 
-  sendReady();
+  // Aggressive ready-retry: the very first offer broadcast often gets lost
+  // (Supabase Realtime JOIN race — the server may dispatch the offer before
+  // the viewer's subscription is fully wired). We re-request the offer every
+  // 1.5s until one arrives. The broadcaster also proactively broadcasts
+  // offers on its own schedule, so this is a belt-and-braces redundancy.
+  const startReadyRetry = () => {
+    clearReadyRetry();
+    let n = 0;
+    readyRetryTimer = setInterval(() => {
+      if (cleaned || offerEverReceived) { clearReadyRetry(); return; }
+      n++;
+      debug(`viewer-ready retry #${n}`);
+      sendReady();
+      if (n >= 6) { clearReadyRetry(); }
+    }, 1500);
+  };
+
+  // Supabase Realtime sometimes hasn't fully wired the subscription by the
+  // time SUBSCRIBED fires, so give the server a brief moment before the first
+  // signal. The ready-retry above handles any remaining loss.
+  await new Promise((r) => setTimeout(r, 120));
+  if (!cleaned) {
+    sendReady();
+    startReadyRetry();
+  }
 
   // Stuck-recovery: every 6s if still not connected, blow everything away and
   // resend viewer-ready. Broadcaster will rebuild its PC and send a fresh offer.
@@ -475,15 +645,18 @@ export async function startViewerP2p(
     debug(`viewer-ready retry (stuck, ice=${s ?? "none"})`);
     seenUfrags.clear();
     processingUfrag = null;
+    offerEverReceived = false;
     bcBuf.clear();
     closeViewerPc();
     sendReady();
+    startReadyRetry();
   }, 6000);
 
   return () => {
     cleaned = true;
     clearStuck();
     clearAnswerRetry();
+    clearReadyRetry();
     void ch.unsubscribe();
     closeViewerPc();
     bcBuf.clear();

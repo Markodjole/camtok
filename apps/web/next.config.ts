@@ -1,6 +1,11 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // StrictMode double-mounts every useEffect in dev. With Supabase Realtime,
+  // this creates two channels on the same topic; the first's unsubscribe
+  // leaves the server-side topic subscription in a zombie state so the second
+  // channel can SEND but not RECEIVE broadcasts. Disable to avoid this.
+  reactStrictMode: false,
   outputFileTracingIncludes: {
     "/*": ["./bin/ffmpeg"],
   },

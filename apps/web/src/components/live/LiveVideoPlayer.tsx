@@ -45,28 +45,33 @@ export function LiveVideoPlayer({
     }
 
     let cancelled = false;
-    // Holds the cleanup fn once startViewerP2p resolves. If the effect is torn down
-    // before the promise resolves (React StrictMode double-mount), cleanup is called
-    // immediately when it becomes available.
     const cleanupRef = { fn: undefined as (() => void) | undefined };
 
-    startViewerP2p(
-      liveSessionId,
-      (stream) => { if (!cancelled) { setRemoteStream(stream); setSignalError(null); } },
-      (msg) => { if (!cancelled) setSignalError(msg); },
-      (line) => { if (!cancelled) pushDebug(line); },
-    ).then((cleanup) => {
-      if (cancelled) {
-        cleanup(); // effect already torn down — immediately dispose
-      } else {
-        cleanupRef.fn = cleanup;
-      }
-    }).catch((e) => {
-      if (!cancelled) setSignalError(e instanceof Error ? e.message : "Could not connect");
-    });
+    // Defer the actual subscription by a tick. If React torn down the effect
+    // within this tick (Strict Mode double-mount or rapid re-render), we never
+    // create the Supabase channel at all — avoiding zombie-subscription issues
+    // where the server-side topic membership breaks after the first unsubscribe.
+    const startDelay = setTimeout(() => {
+      if (cancelled) return;
+      startViewerP2p(
+        liveSessionId,
+        (stream) => { if (!cancelled) { setRemoteStream(stream); setSignalError(null); } },
+        (msg) => { if (!cancelled) setSignalError(msg); },
+        (line) => { if (!cancelled) pushDebug(line); },
+      ).then((cleanup) => {
+        if (cancelled) {
+          cleanup();
+        } else {
+          cleanupRef.fn = cleanup;
+        }
+      }).catch((e) => {
+        if (!cancelled) setSignalError(e instanceof Error ? e.message : "Could not connect");
+      });
+    }, 50);
 
     return () => {
       cancelled = true;
+      clearTimeout(startDelay);
       cleanupRef.fn?.();
       cleanupRef.fn = undefined;
       setRemoteStream(null);

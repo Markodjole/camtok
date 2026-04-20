@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { RoutePoint } from "@/actions/live-feed";
 
 export type Direction = "forward" | "left" | "right" | "back";
 
@@ -16,38 +17,19 @@ interface DirectionalBetPadProps {
   betAmount: number;
   onBet: (optionId: string, direction: Direction) => Promise<void>;
   locked: boolean;
+  routePoints?: RoutePoint[];
 }
 
 const DIRECTION_ORDER: Direction[] = ["forward", "left", "right", "back"];
 
 const DIRECTION_META: Record<
   Direction,
-  { icon: string; label: string; color: string; keywords: string[] }
+  { icon: string; label: string; danger: boolean; keywords: string[] }
 > = {
-  forward: {
-    icon: "↑",
-    label: "Straight",
-    color: "from-indigo-500/60 to-indigo-700/60",
-    keywords: ["straight", "forward", "ahead", "continue"],
-  },
-  left: {
-    icon: "←",
-    label: "Left",
-    color: "from-sky-500/60 to-sky-700/60",
-    keywords: ["left"],
-  },
-  right: {
-    icon: "→",
-    label: "Right",
-    color: "from-violet-500/60 to-violet-700/60",
-    keywords: ["right"],
-  },
-  back: {
-    icon: "↓",
-    label: "Back",
-    color: "from-rose-500/60 to-rose-700/60",
-    keywords: ["back", "reverse", "return"],
-  },
+  forward: { icon: "↑", label: "Straight", danger: false, keywords: ["straight", "forward", "ahead", "continue"] },
+  left:    { icon: "←", label: "Left",     danger: false, keywords: ["left"] },
+  right:   { icon: "→", label: "Right",    danger: false, keywords: ["right"] },
+  back:    { icon: "↓", label: "Back",     danger: true,  keywords: ["back", "reverse", "return"] },
 };
 
 function matchOption(options: MarketOption[], dir: Direction): MarketOption | undefined {
@@ -61,89 +43,184 @@ function matchOption(options: MarketOption[], dir: Direction): MarketOption | un
   return sorted[DIRECTION_ORDER.indexOf(dir)];
 }
 
-export function DirectionalBetPad({ options, betAmount, onBet, locked }: DirectionalBetPadProps) {
+function estimateGForce(points: RoutePoint[] | undefined): { x: number; y: number } {
+  if (!points || points.length < 2) return { x: 0, y: 0 };
+  const last = points[points.length - 1]!;
+  const prev = points[points.length - 2]!;
+  const dSpeed = (last.speedMps ?? 0) - (prev.speedMps ?? 0);
+  const longG = dSpeed / 9.81;
+  let dHead = (last.heading ?? 0) - (prev.heading ?? 0);
+  while (dHead > 180) dHead -= 360;
+  while (dHead < -180) dHead += 360;
+  const latG = ((dHead * Math.PI) / 180) * (last.speedMps ?? 0) / 9.81;
+  const clamp = (v: number) => Math.max(-1, Math.min(1, v));
+  return { x: clamp(latG), y: clamp(longG) };
+}
+
+export function DirectionalBetPad({
+  options,
+  betAmount,
+  onBet,
+  locked,
+  routePoints,
+}: DirectionalBetPadProps) {
   const [pressing, setPressing] = useState<Direction | null>(null);
+  const [flashDir, setFlashDir] = useState<Direction | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const gForce = useMemo(() => estimateGForce(routePoints), [routePoints]);
+  const gMag = Math.min(1, Math.hypot(gForce.x, gForce.y));
+  const activeDir = pressing ?? flashDir;
+
+  useEffect(() => {
+    return () => { if (flashTimerRef.current) clearTimeout(flashTimerRef.current); };
+  }, []);
 
   async function handlePress(dir: Direction) {
     if (locked || pressing) return;
-    const opt = matchOption(options, dir);
-    if (!opt) return;
     setPressing(dir);
+    setFlashDir(dir);
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+
+    const opt = matchOption(options, dir);
+    if (!opt) {
+      setPressing(null);
+      flashTimerRef.current = setTimeout(() => {
+        setFlashDir((c) => (c === dir ? null : c));
+      }, 500);
+      return;
+    }
+
     try {
       await onBet(opt.id, dir);
-      setFeedback(`✓  $${betAmount} on ${opt.shortLabel ?? opt.label}`);
+      setFeedback(`✓ $${betAmount} on ${opt.shortLabel ?? opt.label}`);
       setTimeout(() => setFeedback(null), 1400);
     } finally {
       setPressing(null);
+      flashTimerRef.current = setTimeout(() => {
+        setFlashDir((c) => (c === dir ? null : c));
+      }, 500);
     }
   }
 
+  const amountLabel = `$${betAmount}`;
+
   return (
-    /* Semi-transparent backdrop — blurs the video behind the pad */
-    <div className="w-full max-w-xs rounded-3xl border border-white/10 bg-black/30 p-4 backdrop-blur-md">
-      {/* Feedback / hint line */}
-      <div className="mb-2 h-4 text-center text-[11px] text-white/60">
-        {feedback
-          ? feedback
-          : locked
-            ? "Market locked"
-            : options.length === 0
-              ? "No active market"
-              : "Tap a direction to bet"}
-      </div>
-
-      {/* D-pad grid */}
-      <div className="mx-auto grid w-40 grid-cols-3 grid-rows-3 gap-2">
-        <div />
-        <DpadButton dir="forward" pressing={pressing} locked={locked} option={matchOption(options, "forward")} onPress={handlePress} />
-        <div />
-
-        <DpadButton dir="left"    pressing={pressing} locked={locked} option={matchOption(options, "left")}    onPress={handlePress} />
-        <div className="flex items-center justify-center">
-          <div className="h-2 w-2 rounded-full bg-white/20" />
+    <div className="flex flex-col items-center gap-2">
+      {feedback ? (
+        <div className="rounded-full bg-black/60 px-3 py-0.5 text-[11px] font-semibold text-white backdrop-blur-sm">
+          {feedback}
         </div>
-        <DpadButton dir="right"   pressing={pressing} locked={locked} option={matchOption(options, "right")}   onPress={handlePress} />
+      ) : (
+        <div className="h-5" />
+      )}
 
-        <div />
-        <DpadButton dir="back"    pressing={pressing} locked={locked} option={matchOption(options, "back")}    onPress={handlePress} />
-        <div />
+      <div className="relative h-36 w-36 touch-manipulation select-none">
+
+        {/* Center disc — g-force meter */}
+        <div className="absolute inset-[22%] rounded-full border border-white/15 bg-black/35 backdrop-blur-sm">
+          <div
+            className="absolute left-1/2 top-1/2 h-3 w-3 rounded-full"
+            style={{
+              transform: `translate(calc(-50% + ${gForce.x * 60}%), calc(-50% + ${-gForce.y * 60}%))`,
+              background: gMag > 0.66 ? "#ef4444" : gMag > 0.33 ? "#f59e0b" : "#22c55e",
+              boxShadow: `0 0 8px ${gMag > 0.66 ? "#ef4444" : gMag > 0.33 ? "#f59e0b" : "#22c55e"}`,
+              transition: "transform 250ms linear, background 250ms linear",
+            }}
+          />
+        </div>
+
+        {/* UP */}
+        <DpadButton
+          dir="forward"
+          activeDir={activeDir}
+          locked={locked}
+          option={matchOption(options, "forward")}
+          onPress={handlePress}
+          amountLabel={amountLabel}
+          style={{ top: 0, left: "50%", transform: "translateX(-50%)" }}
+        />
+        {/* LEFT */}
+        <DpadButton
+          dir="left"
+          activeDir={activeDir}
+          locked={locked}
+          option={matchOption(options, "left")}
+          onPress={handlePress}
+          amountLabel={amountLabel}
+          style={{ left: 0, top: "50%", transform: "translateY(-50%)" }}
+        />
+        {/* RIGHT */}
+        <DpadButton
+          dir="right"
+          activeDir={activeDir}
+          locked={locked}
+          option={matchOption(options, "right")}
+          onPress={handlePress}
+          amountLabel={amountLabel}
+          style={{ right: 0, top: "50%", transform: "translateY(-50%)" }}
+        />
+        {/* DOWN */}
+        <DpadButton
+          dir="back"
+          activeDir={activeDir}
+          locked={locked}
+          option={matchOption(options, "back")}
+          onPress={handlePress}
+          amountLabel={amountLabel}
+          style={{ bottom: 0, left: "50%", transform: "translateX(-50%)" }}
+        />
       </div>
     </div>
   );
 }
 
 function DpadButton({
-  dir, pressing, locked, option, onPress,
+  dir, activeDir, locked, option, onPress, amountLabel, style,
 }: {
   dir: Direction;
-  pressing: Direction | null;
+  activeDir: Direction | null;
   locked: boolean;
   option?: MarketOption;
   onPress: (d: Direction) => void;
+  amountLabel: string;
+  style: React.CSSProperties;
 }) {
   const meta = DIRECTION_META[dir];
-  const isActive = pressing === dir;
-  const disabled = locked || !option;
+  const isActive = activeDir === dir;
+  const disabled = locked;
+
+  const baseColor = meta.danger
+    ? "bg-red-500/85 border-red-300/50"
+    : "bg-emerald-500/85 border-emerald-300/50";
+  const activeColor =
+    "bg-violet-600 border-violet-200 ring-4 ring-violet-400/80 shadow-[0_0_28px_rgba(139,92,246,0.95)]";
 
   return (
     <button
       type="button"
       disabled={disabled}
-      onPointerDown={() => onPress(dir)}
+      onPointerDown={(e) => { e.preventDefault(); onPress(dir); }}
       className={[
-        "flex aspect-square flex-col items-center justify-center rounded-2xl",
-        "border border-white/15 bg-gradient-to-b text-white",
-        "transition-transform duration-75",
-        meta.color,
-        isActive ? "scale-90 brightness-150" : "scale-100",
-        disabled ? "opacity-25" : "active:scale-90 cursor-pointer",
+        "absolute flex h-12 w-12 flex-col items-center justify-center gap-0.5",
+        "rounded-full border-2 text-white",
+        "transition-[background-color,box-shadow,transform] duration-100",
+        isActive ? activeColor : baseColor,
+        isActive ? "scale-95" : "",
+        disabled ? "opacity-30" : "cursor-pointer",
       ].join(" ")}
+      style={style}
+      aria-label={option?.shortLabel ?? meta.label}
     >
-      <span className="text-xl leading-none">{meta.icon}</span>
-      <span className="mt-0.5 text-[9px] font-medium leading-none text-white/70">
-        {option?.shortLabel ?? meta.label}
-      </span>
+      {isActive ? (
+        <>
+          <span className="text-[10px] font-bold leading-none text-white/80">{meta.icon}</span>
+          <span className="text-[13px] font-extrabold leading-none tracking-tight">{amountLabel}</span>
+        </>
+      ) : (
+        <span className="text-2xl leading-none">{meta.icon}</span>
+      )}
     </button>
   );
 }

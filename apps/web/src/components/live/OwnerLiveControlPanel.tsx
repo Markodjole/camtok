@@ -11,8 +11,6 @@ import { startBroadcasterP2p } from "./liveP2pBroadcast";
 import { transportEmoji } from "./transportEmoji";
 import { StreamGuidanceOverlay } from "./StreamGuidanceOverlay";
 import { LiveEventToasts } from "./LiveEventToasts";
-import { TopBar } from "@/components/layout/top-bar";
-import { BottomNav } from "@/components/layout/bottom-nav";
 
 const LiveMap = dynamic(() => import("./LiveMap").then((m) => m.LiveMap), { ssr: false });
 
@@ -111,11 +109,17 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
           body: JSON.stringify({ transportMode, points: batch }),
         }).catch(() => undefined);
       }
-      await fetch(`/api/live/sessions/${sid}/heartbeat`, {
+      const hb = await fetch(`/api/live/sessions/${sid}/heartbeat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({}),
-      }).catch(() => undefined);
+      }).catch(() => null);
+      // If the server says the session is gone (e.g. ended/stale cleanup),
+      // stop the heartbeat loop instead of spamming 400s.
+      if (hb && !hb.ok && heartbeatRef.current) {
+        clearInterval(heartbeatRef.current);
+        heartbeatRef.current = null;
+      }
     }, 2500);
   }
 
@@ -150,11 +154,18 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
   useEffect(() => {
     if (!sessionId || !stream) return;
     let active = true;
-    void startBroadcasterP2p(sessionId, stream).then((fn) => {
-      if (active) { p2pCleanupRef.current = fn; } else { fn(); }
-    });
+    // Defer by a tick so Strict Mode / rapid re-mounts don't create two
+    // broadcaster channels on the same topic (the first's unsubscribe would
+    // break realtime delivery for the second).
+    const startDelay = setTimeout(() => {
+      if (!active) return;
+      void startBroadcasterP2p(sessionId, stream).then((fn) => {
+        if (active) { p2pCleanupRef.current = fn; } else { fn(); }
+      });
+    }, 50);
     return () => {
       active = false;
+      clearTimeout(startDelay);
       p2pCleanupRef.current?.();
       p2pCleanupRef.current = undefined;
     };
@@ -163,9 +174,7 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
   /* ── LIVE screen ─────────────────────────────────────── */
   if (sessionId && stream) {
     return (
-      <div className="relative h-[100dvh] w-full overflow-hidden bg-black">
-        <TopBar />
-        <BottomNav />
+      <div className="relative h-full min-h-0 w-full flex-1 overflow-hidden bg-black">
         {roomId ? <LiveEventToasts roomId={roomId} role="streamer" /> : null}
         {/* Video — fill background */}
         <div className="absolute inset-0 z-0">
@@ -174,10 +183,10 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
         {routePoints.length > 0 ? <StreamGuidanceOverlay points={routePoints} /> : null}
 
         {/* Top gradient scrim */}
-        <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-36 bg-gradient-to-b from-black/75 to-transparent" />
+        <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-28 bg-gradient-to-b from-black/75 to-transparent" />
 
-        {/* Top bar — sits below app TopBar */}
-        <div className="absolute inset-x-0 top-12 z-20 flex items-center gap-2 px-4 py-3 text-sm">
+        {/* In-stream top chrome (AppShell TopBar is above this panel) */}
+        <div className="absolute inset-x-0 top-0 z-20 flex items-center gap-2 px-4 py-3 text-sm">
           <span className="animate-pulse rounded bg-red-500/30 px-2 py-0.5 text-[11px] font-bold text-red-400 tracking-wide">
             LIVE
           </span>
@@ -192,16 +201,17 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
           )}
         </div>
 
-        {/* Map overlay — upper-right, below both bars */}
+        {/* Map overlay — upper-right */}
         <div
           className="absolute z-10 overflow-hidden rounded-2xl border border-white/20 shadow-2xl backdrop-blur-sm"
-          style={{ top: 108, right: 12, width: "42vw", height: "42vw", maxWidth: 200, maxHeight: 200, opacity: 0.5 }}
+          style={{ top: 56, right: 12, width: "42vw", height: "42vw", maxWidth: 200, maxHeight: 200, opacity: 0.5 }}
         >
           <LiveMap
             routePoints={routePoints}
             className="h-full w-full"
             interactive={false}
             audienceRole="streamer"
+            transportMode={transportMode}
             tileOpacity={0.3}
             mapCaption="You · follow green arrow"
           />
@@ -215,8 +225,8 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
         {/* Bottom gradient scrim */}
         <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-48 bg-gradient-to-t from-black/80 to-transparent" />
 
-        {/* Bottom controls overlay — above BottomNav */}
-        <div className="absolute inset-x-0 bottom-0 z-20 px-5 pb-20">
+        {/* Bottom controls (AppShell main already has pb-16 for BottomNav) */}
+        <div className="absolute inset-x-0 bottom-0 z-20 px-5 pb-4">
           {roomId && (
             <p className="mb-3 text-center text-[10px] text-white/30">room {roomId.slice(0, 8)}…</p>
           )}
@@ -234,7 +244,7 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
 
   /* ── Pre-live setup form ──────────────────────────────── */
   return (
-    <div className="flex h-[100dvh] flex-col justify-center bg-black px-6 py-10">
+    <div className="flex min-h-0 flex-1 flex-col justify-center overflow-y-auto bg-black px-6 py-10">
       <h1 className="mb-6 text-xl font-semibold text-white">Go live</h1>
 
       <div className="space-y-4">
