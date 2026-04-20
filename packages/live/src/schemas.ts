@@ -147,6 +147,5 @@ export type LocationBatchInput = z.infer<typeof locationBatchInputSchema>;
 export type ProposeMarketInput = z.infer<typeof proposeMarketInputSchema>;
 export type PlaceLiveBetInput = z.infer<typeof placeLiveBetInputSchema>;
 export type MarketOption = z.infer<typeof marketOptionSchema>;
-export type CamtokEntityType = z.infer<typeof camtokEntityTypeSchema>;
 export type CamtokBehaviorProfileUpdateInput = z.infer<typeof camtokBehaviorProfileUpdateSchema>;
 export type CamtokSafetyProfileUpdateInput = z.infer<typeof camtokSafetyProfileUpdateSchema>;

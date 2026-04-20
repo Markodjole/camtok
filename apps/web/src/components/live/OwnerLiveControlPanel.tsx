@@ -193,7 +193,7 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
                   ? "BACK"
                   : null,
         )
-        .filter((x): x is string => !!x);
+        .filter((x): x is "LEFT" | "RIGHT" | "STRAIGHT" | "BACK" => x !== null);
       if (!pick.length) return { label: null, locksAt: null };
       const unique = Array.from(new Set(pick));
       return { label: unique.join(" / "), locksAt: room.currentMarket.locksAt };

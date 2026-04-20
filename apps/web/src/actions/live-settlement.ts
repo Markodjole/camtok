@@ -414,7 +414,7 @@ async function settleMarketWithWinner(
 
   const { data: market } = await service
     .from("live_betting_markets")
-    .select("room_id")
+    .select("room_id, live_session_id")
     .eq("id", marketId)
     .maybeSingle();
   if (market) {
@@ -436,11 +436,14 @@ async function settleMarketWithWinner(
 
   await finalizeDecisionAudit(service, marketId, { anomalyFlags: [], operatorIntervention: false });
 
-  const { data: sess } = await service
-    .from("character_live_sessions")
-    .select("character_id")
-    .eq("id", (market as { live_session_id: string }).live_session_id)
-    .maybeSingle();
+  const liveSessionId = (market as { live_session_id?: string } | null)?.live_session_id;
+  const { data: sess } = liveSessionId
+    ? await service
+        .from("character_live_sessions")
+        .select("character_id")
+        .eq("id", liveSessionId)
+        .maybeSingle()
+    : { data: null };
   const characterId = (sess as { character_id?: string } | null)?.character_id;
   if (characterId) {
     const winners = payouts.filter((p) => p.won).length;
