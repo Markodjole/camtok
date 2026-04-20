@@ -6,14 +6,14 @@ import { cn } from "@/lib/utils";
 import {
   Radio,
   Video,
-  Wallet,
+  Bell,
   Users,
   User,
 } from "lucide-react";
 
 const navItems = [
   { href: "/live", label: "Live", icon: Radio },
-  { href: "/bets", label: "Bets", icon: Wallet },
+  { href: "/notifications", label: "Alerts", icon: Bell },
   { href: "/live/go", label: "Go Live", icon: Video, accent: true },
   { href: "/characters", label: "Characters", icon: Users },
   { href: "/profile", label: "Profile", icon: User },

@@ -111,6 +111,35 @@ export const placeLiveBetInputSchema = z.object({
   stakeAmount: z.number().int().positive(),
 });
 
+export const camtokEntityTypeSchema = z.enum([
+  "pedestrian",
+  "bike",
+  "car",
+  "other",
+]);
+
+export const camtokBehaviorProfileUpdateSchema = z.object({
+  characterId: z.string().uuid(),
+  riskLevelScore: z.number().min(0).max(1).optional(),
+  prefersMainRoadsScore: z.number().min(0).max(1).optional(),
+  speedStyleScore: z.number().min(0).max(1).optional(),
+  hesitationTendencyScore: z.number().min(0).max(1).optional(),
+  safestRouteBiasScore: z.number().min(0).max(1).optional(),
+  explorationBiasScore: z.number().min(0).max(1).optional(),
+  learnedModelVersion: z.string().max(120).optional(),
+  historyWindowSize: z.number().int().min(10).max(500).optional(),
+});
+
+export const camtokSafetyProfileUpdateSchema = z.object({
+  characterId: z.string().uuid(),
+  allowedZones: z.array(z.record(z.string(), z.unknown())).optional(),
+  forbiddenZones: z.array(z.record(z.string(), z.unknown())).optional(),
+  maximumMissionRadiusMeters: z.number().positive().optional(),
+  emergencyStopState: z.boolean().optional(),
+  moderationFlags: z.array(z.string()).optional(),
+  operatorIdentityVerified: z.boolean().optional(),
+});
+
 export type StartSessionInput = z.infer<typeof startSessionInputSchema>;
 export type HeartbeatInput = z.infer<typeof heartbeatInputSchema>;
 export type LocationPoint = z.infer<typeof locationPointSchema>;
@@ -118,3 +147,6 @@ export type LocationBatchInput = z.infer<typeof locationBatchInputSchema>;
 export type ProposeMarketInput = z.infer<typeof proposeMarketInputSchema>;
 export type PlaceLiveBetInput = z.infer<typeof placeLiveBetInputSchema>;
 export type MarketOption = z.infer<typeof marketOptionSchema>;
+export type CamtokEntityType = z.infer<typeof camtokEntityTypeSchema>;
+export type CamtokBehaviorProfileUpdateInput = z.infer<typeof camtokBehaviorProfileUpdateSchema>;
+export type CamtokSafetyProfileUpdateInput = z.infer<typeof camtokSafetyProfileUpdateSchema>;

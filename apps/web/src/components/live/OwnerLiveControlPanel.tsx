@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 import { startLiveSession, endLiveSession } from "@/actions/live-sessions";
 import type { TransportMode } from "@bettok/live";
-import type { RoutePoint } from "@/actions/live-feed";
+import type { LiveFeedRow, RoutePoint } from "@/actions/live-feed";
 import { LiveVideoPlayer } from "./LiveVideoPlayer";
 import { startBroadcasterP2p } from "./liveP2pBroadcast";
 import { transportEmoji } from "./transportEmoji";
@@ -24,6 +24,9 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [routePoints, setRoutePoints] = useState<RoutePoint[]>([]);
+  const [aiTurnHint, setAiTurnHint] = useState<string | null>(null);
+  const [aiTurnEtaSec, setAiTurnEtaSec] = useState<number | null>(null);
+  const [aiTurnDistanceM, setAiTurnDistanceM] = useState<number | null>(null);
 
   const watchIdRef = useRef<number | null>(null);
   const heartbeatRef = useRef<NodeJS.Timeout | null>(null);
@@ -171,6 +174,59 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
     };
   }, [sessionId, stream]);
 
+  useEffect(() => {
+    if (!roomId || !sessionId) return;
+    let cancelled = false;
+    const toHint = (room: LiveFeedRow | null): { label: string | null; locksAt: string | null } => {
+      if (!room?.currentMarket?.options?.length) return { label: null, locksAt: null };
+      const opts = room.currentMarket.options;
+      const pick = opts
+        .map((o) => (o.shortLabel ?? o.label).toLowerCase())
+        .map((s) =>
+          s.includes("left")
+            ? "LEFT"
+            : s.includes("right")
+              ? "RIGHT"
+              : s.includes("straight") || s.includes("forward") || s.includes("continue")
+                ? "STRAIGHT"
+                : s.includes("back") || s.includes("reverse")
+                  ? "BACK"
+                  : null,
+        )
+        .filter((x): x is string => !!x);
+      if (!pick.length) return { label: null, locksAt: null };
+      const unique = Array.from(new Set(pick));
+      return { label: unique.join(" / "), locksAt: room.currentMarket.locksAt };
+    };
+    const fetchState = async () => {
+      try {
+        const r = await fetch(`/api/live/rooms/${roomId}/state`, { cache: "no-store" });
+        if (!r.ok) return;
+        const j = (await r.json()) as { room: LiveFeedRow | null };
+        if (cancelled) return;
+        const hint = toHint(j.room);
+        setAiTurnHint(hint.label);
+        if (!hint.label || !hint.locksAt) {
+          setAiTurnEtaSec(null);
+          setAiTurnDistanceM(null);
+          return;
+        }
+        const etaSec = Math.max(0, (new Date(hint.locksAt).getTime() - Date.now()) / 1000);
+        setAiTurnEtaSec(etaSec);
+        const speed = routePoints[routePoints.length - 1]?.speedMps ?? 0;
+        setAiTurnDistanceM(speed > 0 ? speed * etaSec : null);
+      } catch {
+        // transient
+      }
+    };
+    void fetchState();
+    const id = setInterval(fetchState, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [roomId, sessionId, routePoints]);
+
   /* ── LIVE screen ─────────────────────────────────────── */
   if (sessionId && stream) {
     return (
@@ -214,6 +270,9 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
             transportMode={transportMode}
             tileOpacity={0.3}
             mapCaption="You · follow green arrow"
+            turnHint={aiTurnHint}
+            turnHintEtaSec={aiTurnEtaSec}
+            turnHintDistanceM={aiTurnDistanceM}
           />
           {routePoints.length === 0 && (
             <div className="absolute inset-0 flex items-center justify-center bg-black/60 text-[9px] text-white/40">

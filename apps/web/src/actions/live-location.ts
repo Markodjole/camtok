@@ -22,7 +22,7 @@ export async function ingestLocationBatch(input: LocationBatchInput) {
   const service = await createServiceClient();
   const { data: session } = await service
     .from("character_live_sessions")
-    .select("id, owner_user_id, transport_mode, current_room_id, status")
+    .select("id, owner_user_id, transport_mode, current_room_id, status, character_id")
     .eq("id", parsed.data.sessionId)
     .maybeSingle();
 
@@ -88,6 +88,44 @@ export async function ingestLocationBatch(input: LocationBatchInput) {
     .from("character_live_sessions")
     .update({ last_heartbeat_at: new Date().toISOString() })
     .eq("id", parsed.data.sessionId);
+
+  const latest = normalized[normalized.length - 1];
+  if (latest) {
+    const characterId = (session as { character_id: string }).character_id;
+    await service.from("character_live_telemetry_state").upsert(
+      {
+        character_id: characterId,
+        live_session_id: parsed.data.sessionId,
+        current_lat: latest.normalizedLat,
+        current_lng: latest.normalizedLng,
+        heading_deg: latest.headingDeg ?? null,
+        speed_mps: latest.speedMps ?? null,
+        altitude_meters: latest.altitudeMeters ?? null,
+        gps_accuracy_meters: latest.accuracyMeters ?? null,
+        gps_confidence_score: latest.confidence ?? null,
+        stream_status: "live",
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "character_id" },
+    );
+    await service.from("character_route_game_state").upsert(
+      {
+        character_id: characterId,
+        live_session_id: parsed.data.sessionId,
+        missed_turn: false,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "character_id" },
+    );
+    await service.from("character_public_game_stats").upsert(
+      {
+        character_id: characterId,
+        avg_speed_mps: latest.speedMps ?? null,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "character_id" },
+    );
+  }
 
   return { accepted: normalized.filter((p) => !p.discarded).length, total: normalized.length };
 }

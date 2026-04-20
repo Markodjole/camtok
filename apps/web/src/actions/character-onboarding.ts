@@ -22,6 +22,13 @@ export type CharacterOnboardingDraft = {
   characterName?: string;
   tagline?: string;
   backstory?: string;
+  entityType?: "pedestrian" | "bike" | "car" | "other";
+  cityZone?: string;
+  preferredHours?: string;
+  visualStyle?: string;
+  recurringStoryElements?: string;
+  maxMissionRadiusMeters?: string;
+  safetyForbiddenZones?: string;
   /** Slugs of platform characters the user feels closest to (archetype hints). */
   favoriteCharacterSlugs?: string[];
   foodLikes?: string;
@@ -449,6 +456,21 @@ export async function finalizeCharacterOnboarding(input: {
 
   const tagline = draft.tagline?.trim() || null;
   const backstory = draft.backstory?.trim() || null;
+  const entityType = draft.entityType ?? "pedestrian";
+  const maxMissionRadius =
+    draft.maxMissionRadiusMeters && Number.isFinite(Number(draft.maxMissionRadiusMeters))
+      ? Number(draft.maxMissionRadiusMeters)
+      : null;
+  const forbiddenZones = splitList(draft.safetyForbiddenZones).map((z) => ({ label: z }));
+  const camtokContent = {
+    bio: backstory ?? undefined,
+    vibe_tags: splitList(draft.tagline),
+    city_zone: draft.cityZone?.trim() || undefined,
+    preferred_hours: splitList(draft.preferredHours),
+    visual_style: draft.visualStyle?.trim() || undefined,
+    recurring_story_elements: splitList(draft.recurringStoryElements),
+    rivalries_history: [],
+  };
 
   const primaryId = profile?.primary_character_id ?? null;
   const shouldUpdate = !!primaryId && !!input.updateExisting;
@@ -466,6 +488,9 @@ export async function finalizeCharacterOnboarding(input: {
       voice,
       betting_signals,
       media,
+      camtok_entity_type: entityType,
+      camtok_active: true,
+      camtok_content: camtokContent,
     });
     if (upd.error || !upd.character) return { error: upd.error ?? "Update failed" };
 
@@ -480,6 +505,16 @@ export async function finalizeCharacterOnboarding(input: {
       })
       .eq("id", user.id);
 
+    await serviceClient.from("character_safety_profiles").upsert(
+      {
+        character_id: primaryId,
+        maximum_mission_radius_meters: maxMissionRadius,
+        forbidden_zones: forbiddenZones,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "character_id" },
+    );
+
     resultCharacterId = primaryId;
   } else {
     const created = await createCustomCharacter({
@@ -493,6 +528,9 @@ export async function finalizeCharacterOnboarding(input: {
       voice,
       betting_signals,
       media,
+      camtok_entity_type: entityType,
+      camtok_active: true,
+      camtok_content: camtokContent,
       additionalImagePaths: extras.map((path) => ({ path })),
     });
     if (created.error || !created.character) {
@@ -507,6 +545,16 @@ export async function finalizeCharacterOnboarding(input: {
         character_onboarding_draft: {} as never,
       })
       .eq("id", user.id);
+
+    await serviceClient.from("character_safety_profiles").upsert(
+      {
+        character_id: created.character.id,
+        maximum_mission_radius_meters: maxMissionRadius,
+        forbidden_zones: forbiddenZones,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "character_id" },
+    );
 
     resultCharacterId = created.character.id;
   }

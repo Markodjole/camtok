@@ -139,6 +139,17 @@ function InnerOnboarding() {
             characterName: c.name,
             tagline: c.tagline ?? "",
             backstory: c.backstory ?? "",
+            entityType: c.camtok_entity_type ?? "pedestrian",
+            cityZone:
+              typeof c.camtok_content?.city_zone === "string" ? (c.camtok_content.city_zone as string) : "",
+            preferredHours: Array.isArray(c.camtok_content?.preferred_hours)
+              ? (c.camtok_content.preferred_hours as string[]).join(", ")
+              : "",
+            visualStyle:
+              typeof c.camtok_content?.visual_style === "string" ? (c.camtok_content.visual_style as string) : "",
+            recurringStoryElements: Array.isArray(c.camtok_content?.recurring_story_elements)
+              ? (c.camtok_content.recurring_story_elements as string[]).join(", ")
+              : "",
             foodLikes: c.preferences?.food?.likes?.join(", ") ?? "",
             foodDislikes: c.preferences?.food?.dislikes?.join(", ") ?? "",
             activityLikes: c.preferences?.activities?.likes?.join(", ") ?? "",
@@ -285,7 +296,7 @@ function InnerOnboarding() {
       }
       toast({
         title: hasCompletedOnboarding && forceUpdate ? "Character updated" : "Character ready",
-        description: "You now have a full BetTok character profile like our defaults.",
+        description: "Your Camtok live profile is ready for route play and market decisions.",
         variant: "success",
       });
       router.replace("/live");
@@ -340,8 +351,8 @@ function InnerOnboarding() {
             </p>
             <h1 className="text-2xl font-bold tracking-tight">Build your on-screen self</h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              Same rich data our default characters use — distilled from your answers, photos, and quick
-              choices. Optional intro video is stored for future analysis pipelines.
+              Camtok-native setup: live entity type, safety bounds, route context, and behavior profile from
+              your answers.
             </p>
           </div>
 
@@ -359,7 +370,7 @@ function InnerOnboarding() {
             <Card>
               <CardHeader>
                 <CardTitle>Identity</CardTitle>
-                <CardDescription>How you want this character named in clips and bets.</CardDescription>
+                <CardDescription>Core profile for live runs and markets.</CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
                 <div className="space-y-1.5">
@@ -387,6 +398,26 @@ function InnerOnboarding() {
                   />
                 </div>
                 <div className="space-y-1.5">
+                  <label className="text-sm font-medium">Entity type</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {(["pedestrian", "bike", "car", "other"] as const).map((t) => (
+                      <Button
+                        key={t}
+                        type="button"
+                        variant={(draft.entityType ?? "pedestrian") === t ? "default" : "outline"}
+                        onClick={() => {
+                          const next = { ...draft, entityType: t };
+                          setDraft(next);
+                          void persistDraft(next);
+                        }}
+                        className="capitalize"
+                      >
+                        {t}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+                <div className="space-y-1.5">
                   <label className="text-sm font-medium" htmlFor="bio">
                     Short backstory
                   </label>
@@ -399,6 +430,18 @@ function InnerOnboarding() {
                     placeholder="Where you’re from, what you care about, what annoys you — plain language is perfect."
                   />
                 </div>
+                <Input
+                  placeholder="City / zone (e.g. Belgrade - Dorcol)"
+                  value={draft.cityZone ?? ""}
+                  onChange={(e) => setDraft({ ...draft, cityZone: e.target.value })}
+                  onBlur={() => persistDraft({ ...draft, cityZone: draft.cityZone })}
+                />
+                <Input
+                  placeholder="Preferred hours (comma separated, e.g. evening, late-night)"
+                  value={draft.preferredHours ?? ""}
+                  onChange={(e) => setDraft({ ...draft, preferredHours: e.target.value })}
+                  onBlur={() => persistDraft({ ...draft, preferredHours: draft.preferredHours })}
+                />
               </CardContent>
             </Card>
           )}
@@ -546,6 +589,41 @@ function InnerOnboarding() {
                   onChange={(e) => setDraft({ ...draft, catchphrases: e.target.value })}
                   onBlur={() => persistDraft({ ...draft, catchphrases: draft.catchphrases })}
                 />
+                <Input
+                  placeholder="Visual style (street, sporty, minimal...)"
+                  value={draft.visualStyle ?? ""}
+                  onChange={(e) => setDraft({ ...draft, visualStyle: e.target.value })}
+                  onBlur={() => persistDraft({ ...draft, visualStyle: draft.visualStyle })}
+                />
+                <Input
+                  placeholder="Recurring story elements (comma separated)"
+                  value={draft.recurringStoryElements ?? ""}
+                  onChange={(e) => setDraft({ ...draft, recurringStoryElements: e.target.value })}
+                  onBlur={() => persistDraft({ ...draft, recurringStoryElements: draft.recurringStoryElements })}
+                />
+                <Input
+                  placeholder="Max mission radius meters (e.g. 5000)"
+                  inputMode="numeric"
+                  value={draft.maxMissionRadiusMeters ?? ""}
+                  onChange={(e) => setDraft({ ...draft, maxMissionRadiusMeters: e.target.value })}
+                  onBlur={() =>
+                    persistDraft({
+                      ...draft,
+                      maxMissionRadiusMeters: draft.maxMissionRadiusMeters,
+                    })
+                  }
+                />
+                <Input
+                  placeholder="Forbidden zones (comma separated)"
+                  value={draft.safetyForbiddenZones ?? ""}
+                  onChange={(e) => setDraft({ ...draft, safetyForbiddenZones: e.target.value })}
+                  onBlur={() =>
+                    persistDraft({
+                      ...draft,
+                      safetyForbiddenZones: draft.safetyForbiddenZones,
+                    })
+                  }
+                />
               </CardContent>
             </Card>
           )}
@@ -587,9 +665,8 @@ function InnerOnboarding() {
               <CardHeader>
                 <CardTitle>Review</CardTitle>
                 <CardDescription>
-                  We merge your photo (vision), questionnaire, quick choices, and archetype picks into one
-                  character row — same JSON shape as Viktor, Darius, etc. When LLM keys are configured we
-                  refine further automatically.
+                  We merge your live profile, photos, choices, and behavior baseline into one Camtok
+                  character row ready for stream routing and market turns.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-2 text-sm text-muted-foreground">
@@ -599,6 +676,10 @@ function InnerOnboarding() {
                 <p>
                   <span className="font-medium text-foreground">Primary photo:</span>{" "}
                   {draft.primaryImagePath ? "set" : "missing"}
+                </p>
+                <p>
+                  <span className="font-medium text-foreground">Entity type:</span>{" "}
+                  {draft.entityType ?? "pedestrian"}
                 </p>
                 <p>
                   <span className="font-medium text-foreground">Mini-game:</span>{" "}

@@ -546,6 +546,9 @@ export async function createCustomCharacter(input: {
   voice?: Record<string, unknown>;
   betting_signals?: BettingSignals;
   media?: Record<string, unknown>;
+  camtok_entity_type?: "pedestrian" | "bike" | "car" | "other";
+  camtok_active?: boolean;
+  camtok_content?: Record<string, unknown>;
   additionalImagePaths?: Array<{ path: string; angle?: string; isPrimary?: boolean }>;
 }): Promise<{ error?: string; character?: CharacterWithImages }> {
   const supabase = await createServerClient();
@@ -589,6 +592,9 @@ export async function createCustomCharacter(input: {
   const voice = input.voice ?? { tone: "neutral", vocabulary: "casual", catchphrases: [] };
   const betting_signals = input.betting_signals ?? DEFAULT_BETTING_SIGNALS;
   const media = input.media ?? {};
+  const camtokEntityType = input.camtok_entity_type ?? "pedestrian";
+  const camtokActive = input.camtok_active ?? true;
+  const camtokContent = input.camtok_content ?? {};
 
   const { data: charRow, error: insertErr } = await serviceClient
     .from("characters")
@@ -604,6 +610,10 @@ export async function createCustomCharacter(input: {
       voice,
       betting_signals,
       media,
+      operator_user_id: user.id,
+      camtok_entity_type: camtokEntityType,
+      camtok_active: camtokActive,
+      camtok_content: camtokContent,
       trait_history: [],
       total_videos: 0,
       total_resolutions: 0,
@@ -680,6 +690,9 @@ export async function updateUserCharacter(
     voice?: Record<string, unknown>;
     betting_signals?: BettingSignals;
     media?: Record<string, unknown>;
+    camtok_entity_type?: "pedestrian" | "bike" | "car" | "other";
+    camtok_active?: boolean;
+    camtok_content?: Record<string, unknown>;
   },
 ): Promise<{ error?: string; character?: CharacterWithImages }> {
   const supabase = await createServerClient();
@@ -709,6 +722,9 @@ export async function updateUserCharacter(
   if (input.voice !== undefined) patch.voice = input.voice;
   if (input.betting_signals !== undefined) patch.betting_signals = input.betting_signals;
   if (input.media !== undefined) patch.media = input.media;
+  if (input.camtok_entity_type !== undefined) patch.camtok_entity_type = input.camtok_entity_type;
+  if (input.camtok_active !== undefined) patch.camtok_active = input.camtok_active;
+  if (input.camtok_content !== undefined) patch.camtok_content = input.camtok_content;
 
   const { data: updated, error: updErr } = await serviceClient
     .from("characters")

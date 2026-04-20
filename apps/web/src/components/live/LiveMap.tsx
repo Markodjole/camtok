@@ -10,6 +10,9 @@ export interface LiveMapProps {
   /** 0-1, OSM base */
   tileOpacity?: number;
   mapCaption?: string;
+  turnHint?: string | null;
+  turnHintEtaSec?: number | null;
+  turnHintDistanceM?: number | null;
   audienceRole?: "streamer" | "viewer";
   showCourseArrow?: boolean;
   transportMode?: string;
@@ -57,6 +60,9 @@ export function LiveMap({
   interactive = false,
   tileOpacity = 0.36,
   mapCaption,
+  turnHint,
+  turnHintEtaSec,
+  turnHintDistanceM,
   audienceRole = "viewer",
   showCourseArrow = true,
   transportMode,
@@ -232,6 +238,24 @@ export function LiveMap({
           </p>
         </div>
       )}
+      {turnHint ? (
+        <div className="pointer-events-none absolute left-1/2 top-1 z-[2001] -translate-x-1/2">
+          <div
+            className={[
+              "rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide [text-shadow:0_0_3px_#000,0_0_5px_#000]",
+              turnHintEtaSec == null || turnHintEtaSec > 12
+                ? "border-emerald-300/55 bg-emerald-500/20 text-emerald-100"
+                : turnHintEtaSec > 6
+                  ? "border-amber-300/60 bg-amber-500/25 text-amber-100"
+                  : "border-rose-300/65 bg-rose-500/30 text-rose-100",
+            ].join(" ")}
+          >
+            AI next: {turnHint}
+            {turnHintEtaSec != null ? ` · ETA ${Math.max(0, Math.round(turnHintEtaSec))}s` : ""}
+            {turnHintDistanceM != null ? ` · ~${Math.max(0, Math.round(turnHintDistanceM))}m` : ""}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

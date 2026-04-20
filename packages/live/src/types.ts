@@ -77,6 +77,8 @@ export type LiveUserMarketStatus =
   | "rejected"
   | "converted_to_market";
 
+export type CamtokEntityType = "pedestrian" | "bike" | "car" | "other";
+
 export type CharacterLiveSession = {
   id: string;
   characterId: string;
@@ -245,4 +247,109 @@ export type LiveBet = {
     | "settled_loss"
     | "refunded"
     | "cancelled";
+};
+
+/**
+ * Camtok character model: narrative profile + live tracked entity
+ * + decision history + betting object.
+ */
+export type CamtokCharacterCoreIdentity = {
+  characterId: string;
+  displayName: string;
+  avatarPath?: string | null;
+  entityType: CamtokEntityType;
+  ownerUserId?: string | null;
+  operatorUserId?: string | null;
+  active: boolean;
+};
+
+export type CamtokCharacterLiveTelemetryState = {
+  characterId: string;
+  liveSessionId?: string | null;
+  currentLat?: number | null;
+  currentLng?: number | null;
+  headingDeg?: number | null;
+  speedMps?: number | null;
+  altitudeMeters?: number | null;
+  gpsAccuracyMeters?: number | null;
+  gpsConfidenceScore?: number | null;
+  batteryPercent?: number | null;
+  batteryCharging?: boolean | null;
+  networkQualityScore?: number | null;
+  streamStatus?: string | null;
+  cameraSources: string[];
+  updatedAt: string;
+};
+
+export type CamtokCharacterRouteGameState = {
+  characterId: string;
+  liveSessionId?: string | null;
+  currentSegmentId?: string | null;
+  snappedNodeId?: string | null;
+  snappedEdgeId?: string | null;
+  nextValidMoves: Array<{ id: string; label: string }>;
+  lockedMoveOptionId?: string | null;
+  lockedAt?: string | null;
+  lockExpiresAt?: string | null;
+  missedTurn: boolean;
+  missionLabel?: string | null;
+  missionDestination?: Record<string, unknown> | null;
+  missionProgressScore?: number | null;
+  updatedAt: string;
+};
+
+export type CamtokCharacterBehaviorProfile = {
+  characterId: string;
+  riskLevelScore?: number | null;
+  prefersMainRoadsScore?: number | null;
+  speedStyleScore?: number | null;
+  hesitationTendencyScore?: number | null;
+  safestRouteBiasScore?: number | null;
+  explorationBiasScore?: number | null;
+  learnedModelVersion?: string | null;
+  historyWindowSize: number;
+  updatedAt: string;
+};
+
+export type CamtokCharacterPublicGameStats = {
+  characterId: string;
+  totalRuns: number;
+  completedRuns: number;
+  avgRunDurationSeconds?: number | null;
+  avgCompletionSeconds?: number | null;
+  avgSpeedMps?: number | null;
+  crowdPredictionAccuracy?: number | null;
+  volatilityScore?: number | null;
+  favoriteTurnTendencies: Record<string, number>;
+  updatedAt: string;
+};
+
+export type CamtokCharacterDecisionAuditLog = {
+  id: string;
+  characterId: string;
+  liveSessionId?: string | null;
+  marketId?: string | null;
+  decisionNodeId?: string | null;
+  routeSnapshotId?: string | null;
+  lockTimestamp?: string | null;
+  revealTimestamp?: string | null;
+  commitHash?: string | null;
+  stateSnapshotHash?: string | null;
+  operatorInterventionFlag: boolean;
+  gpsConfidenceScore?: number | null;
+  anomalyFlags: string[];
+  evidenceJson: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type CamtokCharacterSafetyProfile = {
+  characterId: string;
+  allowedZones: Record<string, unknown>[];
+  forbiddenZones: Record<string, unknown>[];
+  maximumMissionRadiusMeters?: number | null;
+  emergencyStopState: boolean;
+  moderationFlags: string[];
+  operatorIdentityVerified: boolean;
+  streamSafetyIncidentsCount: number;
+  updatedAt: string;
 };

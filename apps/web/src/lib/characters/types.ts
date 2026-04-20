@@ -68,6 +68,18 @@ export interface CharacterTraitEvent {
   at: string;
 }
 
+export type CamtokEntityType = "pedestrian" | "bike" | "car" | "other";
+
+export interface CamtokContentLayer {
+  bio?: string;
+  vibe_tags?: string[];
+  city_zone?: string;
+  preferred_hours?: string[];
+  visual_style?: string;
+  recurring_story_elements?: string[];
+  rivalries_history?: string[];
+}
+
 export interface CharacterReferenceImage {
   id: string;
   image_storage_path: string;
@@ -88,6 +100,7 @@ export interface BettingSignals {
 export interface Character {
   id: string;
   creator_user_id: string | null;
+  operator_user_id?: string | null;
   slug: string | null;
   name: string;
   tagline: string | null;
@@ -104,6 +117,9 @@ export interface Character {
   total_resolutions: number;
   total_bets_received: number;
   active: boolean;
+  camtok_active?: boolean;
+  camtok_entity_type?: CamtokEntityType;
+  camtok_content?: CamtokContentLayer;
   sort_order: number;
   created_at: string;
 }

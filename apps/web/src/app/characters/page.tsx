@@ -3,7 +3,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import { useEffect, useMemo, useState } from "react";
-import { BarChart3, ChevronRight, Radio, Sparkles } from "lucide-react";
+import { BarChart3, ChevronRight, Radio } from "lucide-react";
 import { AppShell } from "@/components/layout/app-shell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -59,8 +59,6 @@ function CharacterCard({ c }: { c: CharacterRow }) {
   }, [c.betting_signals]);
 
   const profileHref = c.slug ? `/character/${c.slug}` : `/character/${c.id}`;
-  const createHref = c.slug ? `/create?character=${c.slug}` : `/create`;
-
   return (
     <Card className="overflow-hidden">
       <CardContent className="p-0">
@@ -168,9 +166,8 @@ export default function CharactersPage() {
         </div>
 
         <Button asChild variant="secondary" className="mt-2 gap-2">
-          <Link href="/create">
-            <Sparkles className="h-4 w-4" />
-            Create new character clip
+          <Link href="/live">
+            Back to live feed
           </Link>
         </Button>
       </div>

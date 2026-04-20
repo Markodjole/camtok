@@ -18,6 +18,133 @@ type LockEvidence = {
   confidence: number;
 };
 
+async function recordDecisionAuditLock(
+  service: Awaited<ReturnType<typeof createServiceClient>>,
+  args: {
+    liveSessionId: string;
+    marketId: string;
+    decisionNodeId: string | null;
+    routeSnapshotId: string | null;
+    commitHash: string;
+    evidence: LockEvidence;
+  },
+) {
+  const { data: session } = await service
+    .from("character_live_sessions")
+    .select("character_id")
+    .eq("id", args.liveSessionId)
+    .maybeSingle();
+  const characterId = (session as { character_id?: string } | null)?.character_id;
+  if (!characterId) return;
+  await service.from("character_decision_audit_log").insert({
+    character_id: characterId,
+    live_session_id: args.liveSessionId,
+    market_id: args.marketId,
+    decision_node_id: args.decisionNodeId,
+    route_snapshot_id: args.routeSnapshotId,
+    lock_timestamp: new Date().toISOString(),
+    commit_hash: args.commitHash,
+    gps_confidence_score: args.evidence.confidence,
+    evidence_json: args.evidence as unknown as Record<string, unknown>,
+  });
+}
+
+async function finalizeDecisionAudit(
+  service: Awaited<ReturnType<typeof createServiceClient>>,
+  marketId: string,
+  args: { anomalyFlags?: string[]; operatorIntervention?: boolean },
+) {
+  await service
+    .from("character_decision_audit_log")
+    .update({
+      reveal_timestamp: new Date().toISOString(),
+      anomaly_flags: args.anomalyFlags ?? [],
+      operator_intervention_flag: args.operatorIntervention ?? false,
+    })
+    .eq("market_id", marketId);
+}
+
+function clamp01(v: number) {
+  return Math.max(0, Math.min(1, v));
+}
+
+async function applyBehaviorLearningNudges(
+  service: Awaited<ReturnType<typeof createServiceClient>>,
+  args: {
+    characterId: string;
+    winningOptionId: string;
+    reason: string;
+    settledAt: string;
+  },
+) {
+  const { data: current } = await service
+    .from("character_behavior_profiles")
+    .select(
+      "risk_level_score, prefers_main_roads_score, speed_style_score, hesitation_tendency_score, safest_route_bias_score, exploration_bias_score, history_window_size",
+    )
+    .eq("character_id", args.characterId)
+    .maybeSingle();
+
+  const cur = (current ?? {}) as {
+    risk_level_score?: number | null;
+    prefers_main_roads_score?: number | null;
+    speed_style_score?: number | null;
+    hesitation_tendency_score?: number | null;
+    safest_route_bias_score?: number | null;
+    exploration_bias_score?: number | null;
+    history_window_size?: number | null;
+  };
+
+  let risk = cur.risk_level_score ?? 0.5;
+  let mainRoad = cur.prefers_main_roads_score ?? 0.5;
+  let speed = cur.speed_style_score ?? 0.5;
+  let hesitation = cur.hesitation_tendency_score ?? 0.5;
+  let safeBias = cur.safest_route_bias_score ?? 0.5;
+  let explore = cur.exploration_bias_score ?? 0.5;
+
+  const id = args.winningOptionId.toLowerCase();
+  const reason = args.reason.toLowerCase();
+  const delta = 0.03;
+
+  if (id.includes("left") || id.includes("right") || id.includes("turn")) {
+    explore += delta;
+    safeBias -= delta * 0.7;
+    mainRoad -= delta * 0.5;
+  }
+  if (id.includes("continue") || id.includes("straight")) {
+    safeBias += delta;
+    mainRoad += delta * 0.6;
+    explore -= delta * 0.6;
+  }
+  if (id.includes("stop") || id.includes("wait")) {
+    hesitation += delta;
+    speed -= delta;
+    risk -= delta * 0.7;
+  }
+  if (reason.includes("low_confidence") || reason.includes("ambiguous")) {
+    hesitation += delta * 0.8;
+  }
+  if (reason.includes("high_confidence")) {
+    hesitation -= delta * 0.5;
+  }
+
+  await service.from("character_behavior_profiles").upsert(
+    {
+      character_id: args.characterId,
+      risk_level_score: clamp01(risk),
+      prefers_main_roads_score: clamp01(mainRoad),
+      speed_style_score: clamp01(speed),
+      hesitation_tendency_score: clamp01(hesitation),
+      safest_route_bias_score: clamp01(safeBias),
+      exploration_bias_score: clamp01(explore),
+      history_window_size: cur.history_window_size ?? 50,
+      learned_model_version: "v1-outcome-nudges",
+      updated_at: args.settledAt,
+    },
+    { onConflict: "character_id" },
+  );
+}
+
 /**
  * Locks an open market: snapshots the current route state, selects a
  * candidate outcome internally for evidence, and records an immutable
@@ -79,6 +206,15 @@ export async function lockMarket(marketId: string) {
       lock_evidence_json: evidence as unknown as Record<string, unknown>,
     })
     .eq("id", marketId);
+
+  await recordDecisionAuditLock(service, {
+    liveSessionId: (market as { live_session_id: string }).live_session_id,
+    marketId,
+    decisionNodeId: (market as { decision_node_id: string | null }).decision_node_id,
+    routeSnapshotId: (snapshot as { id: string } | null)?.id ?? null,
+    commitHash,
+    evidence,
+  });
 
   await service
     .from("live_rooms")
@@ -199,7 +335,7 @@ async function refundMarket(marketId: string, reason: string) {
 
   const { data: market } = await service
     .from("live_betting_markets")
-    .select("room_id")
+    .select("room_id, live_session_id")
     .eq("id", marketId)
     .maybeSingle();
   if (market) {
@@ -214,6 +350,10 @@ async function refundMarket(marketId: string, reason: string) {
       current_market_id: null,
     }).eq("id", (market as { room_id: string }).room_id);
   }
+  await finalizeDecisionAudit(service, marketId, {
+    anomalyFlags: ["refund", reason],
+    operatorIntervention: false,
+  });
 }
 
 async function settleMarketWithWinner(
@@ -235,6 +375,7 @@ async function settleMarketWithWinner(
   }));
 
   const payouts = Markets.computeParimutuelPayouts(betRows, winningOptionId);
+  const settledAt = new Date().toISOString();
 
   for (let i = 0; i < (bets ?? []).length; i++) {
     const b = (bets ?? [])[i];
@@ -255,7 +396,7 @@ async function settleMarketWithWinner(
       .from("live_bets")
       .update({
         status: p.won ? "settled_win" : "settled_loss",
-        settled_at: new Date().toISOString(),
+        settled_at: settledAt,
         won: p.won,
         payout_amount: p.payoutAmount,
       })
@@ -291,6 +432,43 @@ async function settleMarketWithWinner(
         last_event_at: new Date().toISOString(),
       })
       .eq("id", (market as { room_id: string }).room_id);
+  }
+
+  await finalizeDecisionAudit(service, marketId, { anomalyFlags: [], operatorIntervention: false });
+
+  const { data: sess } = await service
+    .from("character_live_sessions")
+    .select("character_id")
+    .eq("id", (market as { live_session_id: string }).live_session_id)
+    .maybeSingle();
+  const characterId = (sess as { character_id?: string } | null)?.character_id;
+  if (characterId) {
+    const winners = payouts.filter((p) => p.won).length;
+    const total = payouts.length;
+    const crowdAcc = total > 0 ? winners / total : null;
+    const { data: pub } = await service
+      .from("character_public_game_stats")
+      .select("favorite_turn_tendencies")
+      .eq("character_id", characterId)
+      .maybeSingle();
+    const fav = ((pub as { favorite_turn_tendencies?: Record<string, number> } | null)?.favorite_turn_tendencies ??
+      {}) as Record<string, number>;
+    fav[winningOptionId] = (fav[winningOptionId] ?? 0) + 1;
+    await service.from("character_public_game_stats").upsert(
+      {
+        character_id: characterId,
+        crowd_prediction_accuracy: crowdAcc,
+        favorite_turn_tendencies: fav,
+        updated_at: settledAt,
+      },
+      { onConflict: "character_id" },
+    );
+    await applyBehaviorLearningNudges(service, {
+      characterId,
+      winningOptionId,
+      reason,
+      settledAt,
+    });
   }
 
   return { status: "settled" as const, winningOptionId };
