@@ -138,6 +138,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [betAmount, setBetAmount] = useState(10);
   const [placingOptionId, setPlacingOptionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [mapSheetError, setMapSheetError] = useState<string | null>(null);
   const [showReplay, setShowReplay] = useState(false);
   const [skillFeedback, setSkillFeedback] = useState<SkillFeedbackData | null>(null);
   /** When true: map is full-screen, camera feed is in the corner pip */
@@ -202,6 +203,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   async function placeBet(optionId: string) {
     if (!room.currentMarket) return;
     setError(null);
+    setMapSheetError(null);
     setPlacingOptionId(optionId);
     try {
       const res = await fetch(`/api/live/rooms/${room.roomId}/bet`, {
@@ -215,10 +217,15 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       });
       if (res.ok) {
         flash(betAmount);
+        return { ok: true as const };
       } else {
         const j = (await res.json().catch(() => ({}))) as { error?: string };
-        setError(j.error ?? "Bet failed");
+        const message = j.error ?? "Bet failed";
+        setError(message);
+        setMapSheetError(message);
+        return { ok: false as const, error: message };
       }
+      return { ok: false as const, error: "Bet failed" };
     } finally {
       setPlacingOptionId(null);
     }
@@ -538,15 +545,23 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           marketOptions={currentMarket?.options ?? []}
           selectedOptionId={selectedMapOptionId}
           onSelectOption={setSelectedMapOptionId}
-          bettingClosed={false}
+          bettingClosed={isLocked || !currentMarket}
+          isPlacing={!!placingOptionId}
+          error={mapSheetError}
           countdown={currentMarket ? <MarketTimer locksAt={currentMarket.locksAt} /> : null}
           onClose={() => {
             setSelectedZoneId(null);
             setSelectedCheckpointId(null);
+            setMapSheetError(null);
           }}
           onPlaceBet={async () => {
             if (!selectedMapOptionId) return;
-            await placeBet(selectedMapOptionId);
+            const result = await placeBet(selectedMapOptionId);
+            if (result?.ok) {
+              setSelectedZoneId(null);
+              setSelectedCheckpointId(null);
+              setMapSheetError(null);
+            }
           }}
         />
       ) : null}
@@ -612,6 +627,8 @@ function MapSelectionBottomSheet({
   selectedOptionId,
   onSelectOption,
   bettingClosed,
+  isPlacing,
+  error,
   countdown,
   onClose,
   onPlaceBet,
@@ -622,6 +639,8 @@ function MapSelectionBottomSheet({
   selectedOptionId: string | null;
   onSelectOption: (id: string) => void;
   bettingClosed: boolean;
+  isPlacing: boolean;
+  error: string | null;
   countdown: ReactNode;
   onClose: () => void;
   onPlaceBet: () => Promise<void>;
@@ -661,13 +680,20 @@ function MapSelectionBottomSheet({
             );
           })}
         </div>
+        {error ? <div className="mt-2 text-[10px] text-red-300">{error}</div> : null}
         <button
           type="button"
-          disabled={bettingClosed || !selectedOptionId}
+          disabled={bettingClosed || !selectedOptionId || isPlacing}
           onClick={() => void onPlaceBet()}
           className="mt-3 w-full rounded-xl bg-red-500 px-3 py-2 text-xs font-semibold text-white disabled:bg-white/20 disabled:text-white/50"
         >
-          {bettingClosed ? "Betting closed" : !selectedOptionId ? "Select option" : "Place bet"}
+          {bettingClosed
+            ? "Betting closed"
+            : isPlacing
+              ? "Placing..."
+              : !selectedOptionId
+                ? "Select option"
+                : "Place bet"}
         </button>
       </div>
     </div>
