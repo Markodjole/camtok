@@ -21,6 +21,28 @@ export interface LiveMapProps {
    * Useful for viewer controls where left/right should match streamer POV.
    */
   rotateWithHeading?: boolean;
+  zones?: Array<{
+    id: string;
+    name: string;
+    kind?: string;
+    color?: string;
+    polygon: Array<{ lat: number; lng: number }>;
+    isActive?: boolean;
+  }>;
+  checkpoints?: Array<{
+    id: string;
+    name: string;
+    kind?: string;
+    lat: number;
+    lng: number;
+    isActive?: boolean;
+  }>;
+  selectedZoneId?: string | null;
+  selectedCheckpointId?: string | null;
+  showZones?: boolean;
+  showCheckpoints?: boolean;
+  onZoneSelect?: (zoneId: string | null) => void;
+  onCheckpointSelect?: (checkpointId: string | null) => void;
 }
 
 const C = {
@@ -67,6 +89,14 @@ export function LiveMap({
   showCourseArrow = true,
   transportMode,
   rotateWithHeading = false,
+  zones = [],
+  checkpoints = [],
+  selectedZoneId = null,
+  selectedCheckpointId = null,
+  showZones = true,
+  showCheckpoints = true,
+  onZoneSelect,
+  onCheckpointSelect,
 }: LiveMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<import("leaflet").Map | null>(null);
@@ -74,6 +104,8 @@ export function LiveMap({
   const plRef = useRef<import("leaflet").Polyline | null>(null);
   const dotRef = useRef<import("leaflet").CircleMarker | null>(null);
   const arRef = useRef<import("leaflet").Marker | null>(null);
+  const zoneLayerRef = useRef<import("leaflet").LayerGroup | null>(null);
+  const checkpointLayerRef = useRef<import("leaflet").LayerGroup | null>(null);
   const [mapReady, setMapReady] = useState(0);
   const [rotationDeg, setRotationDeg] = useState(0);
   const streamer = audienceRole === "streamer";
@@ -97,17 +129,25 @@ export function LiveMap({
       const m = L.map(el, {
         center: [0, 0],
         zoom: 2,
-        zoomControl: interactive,
+        zoomControl: false,
         dragging: interactive,
         scrollWheelZoom: false,
-        touchZoom: interactive,
+        touchZoom: interactive ? "center" : false,
         doubleClickZoom: interactive,
         boxZoom: false,
         keyboard: false,
         attributionControl: false,
+        zoomSnap: 0.25,
+        zoomDelta: 0.5,
       });
+      if (interactive) {
+        m.touchZoom.enable();
+        m.doubleClickZoom.enable();
+      }
       const t = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, opacity: 0.4 });
       t.addTo(m);
+      zoneLayerRef.current = L.layerGroup().addTo(m);
+      checkpointLayerRef.current = L.layerGroup().addTo(m);
       layerRef.current = t;
       mapRef.current = m;
       setMapReady((n) => n + 1);
@@ -117,6 +157,8 @@ export function LiveMap({
       plRef.current = null;
       dotRef.current = null;
       arRef.current = null;
+      zoneLayerRef.current = null;
+      checkpointLayerRef.current = null;
       mapRef.current?.remove();
       mapRef.current = null;
       layerRef.current = null;
@@ -128,6 +170,68 @@ export function LiveMap({
   }, [tileOpacity]);
 
   useEffect(() => {
+    const group = zoneLayerRef.current;
+    if (!group) return;
+    (async () => {
+      const L = (await import("leaflet")).default;
+      group.clearLayers();
+      if (!showZones) return;
+      zones.forEach((zone) => {
+        const selected = selectedZoneId === zone.id;
+        const isActive = zone.isActive !== false;
+        const color = zone.color ?? "#60a5fa";
+        const poly = L.polygon(
+          zone.polygon.map((p) => [p.lat, p.lng] as [number, number]),
+          {
+            color: selected ? "#ffffff" : color,
+            weight: selected ? 3 : 2,
+            fillColor: color,
+            fillOpacity: isActive ? (selected ? 0.35 : 0.2) : 0.08,
+            opacity: isActive ? 0.9 : 0.35,
+          },
+        );
+        if (interactive && onZoneSelect) {
+          poly.on("click", () => onZoneSelect(selected ? null : zone.id));
+        }
+        poly.addTo(group);
+      });
+    })();
+  }, [zones, selectedZoneId, showZones, interactive, onZoneSelect, mapReady]);
+
+  useEffect(() => {
+    const group = checkpointLayerRef.current;
+    if (!group) return;
+    (async () => {
+      const L = (await import("leaflet")).default;
+      group.clearLayers();
+      if (!showCheckpoints) return;
+      checkpoints.forEach((cp) => {
+        const selected = selectedCheckpointId === cp.id;
+        const isActive = cp.isActive !== false;
+        const marker = L.circleMarker([cp.lat, cp.lng], {
+          radius: selected ? 7 : 5,
+          color: "#ffffff",
+          weight: selected ? 2 : 1,
+          fillColor: selected ? "#f59e0b" : "#fb7185",
+          fillOpacity: isActive ? 0.95 : 0.3,
+          opacity: isActive ? 0.95 : 0.4,
+        });
+        if (interactive && onCheckpointSelect) {
+          marker.on("click", () => onCheckpointSelect(selected ? null : cp.id));
+        }
+        marker.addTo(group);
+      });
+    })();
+  }, [
+    checkpoints,
+    selectedCheckpointId,
+    showCheckpoints,
+    interactive,
+    onCheckpointSelect,
+    mapReady,
+  ]);
+
+  useEffect(() => {
     const m = mapRef.current;
     if (!m) return;
     (async () => {
@@ -136,6 +240,8 @@ export function LiveMap({
         if (arRef.current) { m.removeLayer(arRef.current); arRef.current = null; }
         if (plRef.current) { m.removeLayer(plRef.current); plRef.current = null; }
         if (dotRef.current) { m.removeLayer(dotRef.current); dotRef.current = null; }
+        // Keep map visible even before first GPS point.
+        m.setView([44.8125, 20.4612], 13, { animate: false });
         return;
       }
       const last = routePoints[routePoints.length - 1]!;
@@ -221,7 +327,14 @@ export function LiveMap({
           <div
             ref={containerRef}
             className={className}
-            style={{ height: "100%", width: "100%", minHeight: 0, opacity: 0.9 }}
+            style={{
+              height: "100%",
+              width: "100%",
+              minHeight: 0,
+              opacity: 0.9,
+              touchAction: interactive ? "none" : "auto",
+              pointerEvents: "auto",
+            }}
           />
         </div>
       </div>

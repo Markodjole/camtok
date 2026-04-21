@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import type { SkillFeedbackData } from "./SkillFeedbackCard";
 
 type TKind = "info" | "ok" | "bad";
 type TItem = { id: string; text: string; kind: TKind };
@@ -15,7 +16,28 @@ function queueToast(
   setTimeout(() => set((p) => p.filter((x) => x.id !== id)), 4000);
 }
 
-export function LiveEventToasts({ roomId, role }: { roomId: string; role: "viewer" | "streamer" }) {
+type EnrichedSettlement = {
+  market_id: string;
+  title: string;
+  won: boolean;
+  stake_amount: number;
+  payout_amount: number;
+  status: string;
+  settled_at: string | null;
+  my_option_id: string;
+  winning_option_id: string | null;
+  options: Array<{ id: string; label: string; shortLabel: string | null; crowd_pct: number | null }>;
+};
+
+export function LiveEventToasts({
+  roomId,
+  role,
+  onSettlement,
+}: {
+  roomId: string;
+  role: "viewer" | "streamer";
+  onSettlement?: (data: SkillFeedbackData) => void;
+}) {
   const [toasts, setToasts] = useState<TItem[]>([]);
   const seenEvent = useRef<Set<string>>(new Set());
   const seenSettle = useRef<Set<string>>(new Set());
@@ -30,7 +52,9 @@ export function LiveEventToasts({ roomId, role }: { roomId: string; role: "viewe
   useEffect(() => {
     const run = async () => {
       try {
-        const res = await fetch(`/api/live/rooms/${roomId}/activity`, { cache: "no-store" });
+        const res = await fetch(`/api/live/rooms/${roomId}/activity`, {
+          cache: "no-store",
+        });
         if (!res.ok) return;
         const j = (await res.json()) as {
           events: Array<{
@@ -38,14 +62,9 @@ export function LiveEventToasts({ roomId, role }: { roomId: string; role: "viewe
             event_type: string;
             payload: { stakeAmount?: number; optionId?: string };
           }>;
-          mySettlements: Array<{
-            market_id: string;
-            won: boolean;
-            stake_amount: number;
-            payout_amount: number;
-            settled_at: string | null;
-          }>;
+          mySettlements: EnrichedSettlement[];
         };
+
         if (firstBoot.current) {
           for (const e of j.events ?? []) seenEvent.current.add(e.id);
           for (const s of j.mySettlements ?? []) {
@@ -54,6 +73,7 @@ export function LiveEventToasts({ roomId, role }: { roomId: string; role: "viewe
           firstBoot.current = false;
           return;
         }
+
         for (const e of j.events ?? []) {
           if (seenEvent.current.has(e.id)) continue;
           if (e.event_type === "bet_placed" && role === "streamer") {
@@ -63,34 +83,40 @@ export function LiveEventToasts({ roomId, role }: { roomId: string; role: "viewe
           }
           seenEvent.current.add(e.id);
         }
-        if (role === "viewer") {
+
+        if (role === "viewer" && onSettlement) {
           for (const s of j.mySettlements ?? []) {
             if (!s.settled_at) continue;
             const k = `${s.market_id}|${s.settled_at}`;
             if (seenSettle.current.has(k)) continue;
             seenSettle.current.add(k);
-            if (s.won) {
-              const gain = Math.max(0, s.payout_amount - s.stake_amount);
-              queueToast(
-                setToasts,
-                `Won! +$${gain}  (payout $${s.payout_amount})`,
-                "ok",
-              );
-            } else {
-              queueToast(setToasts, `Result:  −$${s.stake_amount}`, "bad");
-            }
+            onSettlement({
+              marketId: s.market_id,
+              title: s.title,
+              options: s.options,
+              myOptionId: s.my_option_id,
+              winningOptionId: s.winning_option_id,
+              won: s.won,
+              stakeAmount: s.stake_amount,
+              payoutAmount: s.payout_amount,
+            });
           }
         }
-      } catch { /*  */ }
+      } catch {
+        /* transient */
+      }
     };
     void run();
     const id = setInterval(run, 3000);
     return () => clearInterval(id);
-  }, [roomId, role]);
+  }, [roomId, role, onSettlement]);
 
   if (!toasts.length) return null;
   return (
-    <div className="pointer-events-none fixed left-0 right-0 z-[200] flex flex-col items-stretch gap-1.5 px-3" style={{ top: "3.4rem" }}>
+    <div
+      className="pointer-events-none fixed left-0 right-0 z-[200] flex flex-col items-stretch gap-1.5 px-3"
+      style={{ top: "3.4rem" }}
+    >
       {toasts.map((t) => (
         <div
           key={t.id}
@@ -112,7 +138,10 @@ export function LiveEventToasts({ roomId, role }: { roomId: string; role: "viewe
 export function BetPlacedPill({ text }: { text: string | null }) {
   if (!text) return null;
   return (
-    <div className="pointer-events-none fixed left-0 right-0 z-[201] flex justify-center" style={{ top: "3.1rem" }}>
+    <div
+      className="pointer-events-none fixed left-0 right-0 z-[201] flex justify-center"
+      style={{ top: "3.1rem" }}
+    >
       <div className="rounded-full border border-amber-400/40 bg-amber-500/20 px-4 py-1 text-sm font-bold text-amber-100 [text-shadow:0_0_2px_#000]">
         {text}
       </div>

@@ -170,6 +170,59 @@ export async function placeLiveBet(input: PlaceLiveBetInput) {
   return { betId: bet.id };
 }
 
+type MarketDraftOption = {
+  id: string;
+  label: string;
+  shortLabel?: string | null;
+  odds?: number | null;
+  displayOrder: number;
+};
+
+type MarketDraft = {
+  title: string;
+  subtitle?: string | null;
+  marketType: string;
+  options: MarketDraftOption[];
+};
+
+function buildMidRangeMarketDraft(
+  baseDraft: MarketDraft,
+  characterName: string,
+  templateIdx: number,
+): MarketDraft {
+  if (templateIdx === 0) {
+    return {
+      ...baseDraft,
+      title: `Which route does ${characterName} take?`,
+      subtitle: "Route choice prediction",
+      marketType: "route_choice",
+      options: baseDraft.options.map((o) => ({
+        ...o,
+        label:
+          o.id === "straight"
+            ? "Main road"
+            : o.id === "left"
+              ? "Side street left"
+              : "Side street right",
+        shortLabel:
+          o.id === "straight" ? "Main" : o.id === "left" ? "Side L" : "Side R",
+      })),
+    };
+  }
+  // Template 1: continue vs turn
+  return {
+    ...baseDraft,
+    title: `Does ${characterName} continue or take a turn?`,
+    subtitle: null,
+    marketType: "continue_vs_turn",
+    options: baseDraft.options.map((o) => ({
+      ...o,
+      label: o.id === "straight" ? "Continue straight" : "Take a turn",
+      shortLabel: o.id === "straight" ? "Straight" : "Turn",
+    })),
+  };
+}
+
 export async function openSystemMarketForRoom(roomId: string) {
   unstable_noStore();
   const service = await createServiceClient();
@@ -234,11 +287,23 @@ export async function openSystemMarketForRoom(roomId: string) {
   const decision = RouteState.detectNextDecision(points, transportMode);
   if (!decision) return { error: "No decision node detected" };
 
-  const draft = RouteState.buildMarketDraftFromOptions(
+  // Count settled markets to vary framing: every 3rd market use a mid-range template
+  const { count: settledCount } = await service
+    .from("live_betting_markets")
+    .select("id", { count: "exact", head: true })
+    .eq("room_id", roomId)
+    .in("status", ["settled", "cancelled"]);
+
+  const baseDraft = RouteState.buildMarketDraftFromOptions(
     characterName,
     transportMode,
     decision.options,
-  );
+  ) as MarketDraft;
+
+  const midRangeIdx = ((settledCount ?? 0) % 3) === 2 ? (decision.options.length > 2 ? 0 : 1) : -1;
+  const draft = midRangeIdx >= 0
+    ? buildMidRangeMarketDraft(baseDraft, characterName, midRangeIdx)
+    : baseDraft;
 
   const now = new Date();
   const opensAt = now;

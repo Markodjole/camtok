@@ -95,7 +95,7 @@ export function DirectionalBetPad({
     try {
       await onBet(opt.id, dir);
       setFeedback(`✓ $${betAmount} on ${opt.shortLabel ?? opt.label}`);
-      setTimeout(() => setFeedback(null), 1400);
+      setTimeout(() => setFeedback(null), 3500);
     } finally {
       setPressing(null);
       flashTimerRef.current = setTimeout(() => {
@@ -108,13 +108,12 @@ export function DirectionalBetPad({
 
   return (
     <div className="flex flex-col items-center gap-2">
-      {feedback ? (
+      {/* Always same height — text fades in/out without shifting the joystick */}
+      <div className="h-5 flex items-center justify-center transition-opacity duration-200" style={{ opacity: feedback ? 1 : 0 }}>
         <div className="rounded-full bg-black/60 px-3 py-0.5 text-[11px] font-semibold text-white backdrop-blur-sm">
-          {feedback}
+          {feedback ?? " "}
         </div>
-      ) : (
-        <div className="h-5" />
-      )}
+      </div>
 
       <div className="relative h-36 w-36 touch-manipulation select-none">
 

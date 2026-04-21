@@ -14,6 +14,40 @@ import { LiveEventToasts } from "./LiveEventToasts";
 
 const LiveMap = dynamic(() => import("./LiveMap").then((m) => m.LiveMap), { ssr: false });
 
+/** Force rear camera first; fallback to selfie only if rear is unavailable. */
+async function openLiveCameraStream(): Promise<MediaStream> {
+  try {
+    return await navigator.mediaDevices.getUserMedia({
+      audio: true,
+      video: {
+        facingMode: { exact: "environment" },
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
+      },
+    });
+  } catch {
+    try {
+      return await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+        },
+      });
+    } catch {
+      return await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: {
+          facingMode: "user",
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+      });
+    }
+  }
+}
+
 export function OwnerLiveControlPanel({ characterId }: { characterId: string }) {
   const [transportMode, setTransportMode] = useState<TransportMode>("walking");
   const [statusText, setStatusText] = useState("");
@@ -47,17 +81,15 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
   async function goLive() {
     setStarting(true);
     setError(null);
+    let media: MediaStream;
     try {
-      const media = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment" },
-        audio: true,
-      });
-      setStream(media);
+      media = await openLiveCameraStream();
     } catch {
       setError("Camera/microphone permission denied");
       setStarting(false);
       return;
     }
+    setStream(media);
 
     const res = await startLiveSession({
       characterId,
@@ -117,8 +149,6 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({}),
       }).catch(() => null);
-      // If the server says the session is gone (e.g. ended/stale cleanup),
-      // stop the heartbeat loop instead of spamming 400s.
       if (hb && !hb.ok && heartbeatRef.current) {
         clearInterval(heartbeatRef.current);
         heartbeatRef.current = null;
@@ -129,7 +159,7 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
   function startTick(rid: string) {
     tickRef.current = setInterval(async () => {
       await fetch(`/api/live/rooms/${rid}/tick`, { method: "POST" }).catch(() => undefined);
-    }, 3000);
+    }, 4000);
   }
 
   async function stopLive() {
@@ -145,9 +175,18 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
       navigator.geolocation.clearWatch(watchIdRef.current);
       watchIdRef.current = null;
     }
-    if (heartbeatRef.current) { clearInterval(heartbeatRef.current); heartbeatRef.current = null; }
-    if (tickRef.current) { clearInterval(tickRef.current); tickRef.current = null; }
-    if (stream) { stream.getTracks().forEach((t) => t.stop()); setStream(null); }
+    if (heartbeatRef.current) {
+      clearInterval(heartbeatRef.current);
+      heartbeatRef.current = null;
+    }
+    if (tickRef.current) {
+      clearInterval(tickRef.current);
+      tickRef.current = null;
+    }
+    if (stream) {
+      stream.getTracks().forEach((t) => t.stop());
+      setStream(null);
+    }
     setSessionId(null);
     setRoomId(null);
   }
@@ -157,13 +196,14 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
   useEffect(() => {
     if (!sessionId || !stream) return;
     let active = true;
-    // Defer by a tick so Strict Mode / rapid re-mounts don't create two
-    // broadcaster channels on the same topic (the first's unsubscribe would
-    // break realtime delivery for the second).
     const startDelay = setTimeout(() => {
       if (!active) return;
       void startBroadcasterP2p(sessionId, stream).then((fn) => {
-        if (active) { p2pCleanupRef.current = fn; } else { fn(); }
+        if (active) {
+          p2pCleanupRef.current = fn;
+        } else {
+          fn();
+        }
       });
     }, 50);
     return () => {
@@ -227,21 +267,18 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
     };
   }, [roomId, sessionId, routePoints]);
 
-  /* ── LIVE screen ─────────────────────────────────────── */
   if (sessionId && stream) {
     return (
       <div className="relative h-full min-h-0 w-full flex-1 overflow-hidden bg-black">
         {roomId ? <LiveEventToasts roomId={roomId} role="streamer" /> : null}
-        {/* Video — fill background */}
+
         <div className="absolute inset-0 z-0">
           <LiveVideoPlayer localStream={stream} className="h-full w-full" />
         </div>
         {routePoints.length > 0 ? <StreamGuidanceOverlay points={routePoints} /> : null}
 
-        {/* Top gradient scrim */}
         <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-28 bg-gradient-to-b from-black/75 to-transparent" />
 
-        {/* In-stream top chrome (AppShell TopBar is above this panel) */}
         <div className="absolute inset-x-0 top-0 z-20 flex items-center gap-2 px-4 py-3 text-sm">
           <span className="animate-pulse rounded bg-red-500/30 px-2 py-0.5 text-[11px] font-bold text-red-400 tracking-wide">
             LIVE
@@ -257,7 +294,6 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
           )}
         </div>
 
-        {/* Map overlay — upper-right */}
         <div
           className="absolute z-10 overflow-hidden rounded-2xl border border-white/20 shadow-2xl backdrop-blur-sm"
           style={{ top: 56, right: 12, width: "42vw", height: "42vw", maxWidth: 200, maxHeight: 200, opacity: 0.5 }}
@@ -281,10 +317,8 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
           )}
         </div>
 
-        {/* Bottom gradient scrim */}
         <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-48 bg-gradient-to-t from-black/80 to-transparent" />
 
-        {/* Bottom controls (AppShell main already has pb-16 for BottomNav) */}
         <div className="absolute inset-x-0 bottom-0 z-20 px-5 pb-4">
           {roomId && (
             <p className="mb-3 text-center text-[10px] text-white/30">room {roomId.slice(0, 8)}…</p>
@@ -301,7 +335,6 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
     );
   }
 
-  /* ── Pre-live setup form ──────────────────────────────── */
   return (
     <div className="flex min-h-0 flex-1 flex-col justify-center overflow-y-auto bg-black px-6 py-10">
       <h1 className="mb-6 text-xl font-semibold text-white">Go live</h1>
@@ -340,6 +373,10 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
             className="mt-1 w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 text-sm text-white placeholder:text-white/20"
           />
         </div>
+
+        <p className="text-[11px] text-white/35">
+          Uses your rear (world-facing) camera when the device supports it.
+        </p>
 
         {error && <div className="text-xs text-red-400">{error}</div>}
 

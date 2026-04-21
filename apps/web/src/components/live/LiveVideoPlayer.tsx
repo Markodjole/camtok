@@ -20,9 +20,6 @@ export function LiveVideoPlayer({
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [signalError, setSignalError] = useState<string | null>(null);
   const [soundOn, setSoundOn] = useState(false);
-  const [debugLines, setDebugLines] = useState<string[]>([]);
-  const pushDebug = (line: string) =>
-    setDebugLines((prev) => [...prev.slice(-7), `${new Date().toLocaleTimeString()} ${line}`]);
 
   useEffect(() => {
     const el = ref.current;
@@ -57,7 +54,6 @@ export function LiveVideoPlayer({
         liveSessionId,
         (stream) => { if (!cancelled) { setRemoteStream(stream); setSignalError(null); } },
         (msg) => { if (!cancelled) setSignalError(msg); },
-        (line) => { if (!cancelled) pushDebug(line); },
       ).then((cleanup) => {
         if (cancelled) {
           cleanup();
@@ -114,13 +110,6 @@ export function LiveVideoPlayer({
       {!localStream && !liveSessionId ? (
         <div className="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">
           No stream
-        </div>
-      ) : null}
-      {!localStream && liveSessionId ? (
-        <div className="pointer-events-none absolute left-0 right-0 top-0 z-10 max-h-24 overflow-hidden bg-black/50 p-1 text-[10px] leading-snug text-white/70">
-          {debugLines.map((l, i) => (
-            <div key={i}>{l}</div>
-          ))}
         </div>
       ) : null}
     </div>

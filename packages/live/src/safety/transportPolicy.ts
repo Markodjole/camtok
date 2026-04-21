@@ -41,7 +41,7 @@ export function policyFor(mode: TransportMode): TransportPolicy {
     case "other_vehicle":
       return {
         mode,
-        allowSystemMarkets: false, // V1: disabled by default
+        allowSystemMarkets: true,
         allowUserMarkets: false,
         safetyLevel: "restricted",
         minLockWindowSec: 6,

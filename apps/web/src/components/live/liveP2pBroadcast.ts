@@ -97,7 +97,6 @@ export async function startBroadcasterP2p(
 ): Promise<() => void> {
   const debug = (line: string) => {
     onDebug?.(line);
-    if (typeof window !== "undefined") console.log("[camtok-broadcast]", line);
   };
   const iceConfig = buildIceConfig();
   debug(
@@ -131,16 +130,43 @@ export async function startBroadcasterP2p(
     pc = null;
   };
 
+  /** Push high-quality encoding params onto the video sender. */
+  const applyHighBitrate = (p: RTCPeerConnection) => {
+    const sender = p.getSenders().find((s) => s.track?.kind === "video");
+    if (!sender) return;
+    const params = sender.getParameters();
+    if (!params.encodings || params.encodings.length === 0) {
+      params.encodings = [{}];
+    }
+    params.encodings[0]!.maxBitrate = 6_000_000; // 6 Mbps ceiling
+    sender.setParameters(params).catch((e) =>
+      debug(`setParameters err: ${e instanceof Error ? e.message : String(e)}`),
+    );
+    debug("video bitrate ceiling set to 6 Mbps");
+  };
+
   const buildPcBase = () => {
     const p = new RTCPeerConnection(iceConfig);
-    stream.getTracks().forEach((t) => p.addTrack(t, stream));
+    stream.getTracks().forEach((t) => {
+      // Hint the browser to optimise for motion (not text/detail)
+      if (t.kind === "video") {
+        (t as MediaStreamTrack & { contentHint?: string }).contentHint = "motion";
+      }
+      p.addTrack(t, stream);
+    });
     p.onicegatheringstatechange = () => debug(`gather=${p.iceGatheringState}`);
     p.oniceconnectionstatechange = () => {
       const s = p.iceConnectionState;
       debug(`ice=${s}`);
-      if (s === "connected" || s === "completed") clearOfferResend();
+      if (s === "connected" || s === "completed") {
+        clearOfferResend();
+        applyHighBitrate(p);
+      }
     };
-    p.onconnectionstatechange = () => debug(`pc=${p.connectionState}`);
+    p.onconnectionstatechange = () => {
+      debug(`pc=${p.connectionState}`);
+      if (p.connectionState === "connected") applyHighBitrate(p);
+    };
     p.onicecandidateerror = (e) => {
       const ev = e as unknown as { errorCode?: number; errorText?: string; url?: string };
       debug(
@@ -373,7 +399,6 @@ export async function startViewerP2p(
 ): Promise<() => void> {
   const debug = (line: string) => {
     onDebug?.(line);
-    if (typeof window !== "undefined") console.log("[camtok-viewer]", line);
   };
   const iceConfig = buildIceConfig();
   debug(
