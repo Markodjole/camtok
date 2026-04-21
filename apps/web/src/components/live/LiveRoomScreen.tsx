@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import dynamic from "next/dynamic";
 import type { LiveFeedRow, RoutePoint } from "@/actions/live-feed";
 import { LiveVideoPlayer } from "./LiveVideoPlayer";
@@ -147,6 +147,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [selectedMapOptionId, setSelectedMapOptionId] = useState<string | null>(null);
   const [showZones, setShowZones] = useState(true);
   const [showCheckpoints, setShowCheckpoints] = useState(true);
+  const [osmZones, setOsmZones] = useState<MapZone[]>([]);
+  const [osmCheckpoints, setOsmCheckpoints] = useState<MapCheckpoint[]>([]);
+  const lastGeoKeyRef = useRef<string | null>(null);
   const showLiveBets = true;
   const skillFeedbackTimerRef = { current: null as ReturnType<typeof setTimeout> | null };
   const { betPill, flash } = useBetPill();
@@ -225,10 +228,12 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const isLocked = currentMarket
     ? new Date(currentMarket.locksAt) <= new Date()
     : true;
-  const { zones, checkpoints } = useMemo(
+  const fallbackMapObjects = useMemo(
     () => buildMapObjects(routePoints[routePoints.length - 1] ?? initialRoom.routePoints?.[0] ?? null),
-    [routePoints],
+    [routePoints, initialRoom.routePoints],
   );
+  const zones = osmZones.length > 0 ? osmZones : fallbackMapObjects.zones;
+  const checkpoints = osmCheckpoints.length > 0 ? osmCheckpoints : fallbackMapObjects.checkpoints;
   const selectedZone = zones.find((z) => z.id === selectedZoneId) ?? null;
   const selectedCheckpoint = checkpoints.find((c) => c.id === selectedCheckpointId) ?? null;
   const selectedTargetLabel = selectedZone?.name ?? selectedCheckpoint?.name ?? null;
@@ -238,6 +243,40 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     const first = currentMarket?.options?.[0]?.id ?? null;
     setSelectedMapOptionId(first);
   }, [currentMarket?.id, selectedZoneId, selectedCheckpointId]);
+
+  useEffect(() => {
+    const anchor = routePoints[routePoints.length - 1] ?? initialRoom.routePoints?.[0] ?? null;
+    if (!anchor) return;
+    const lat = Number(anchor.lat.toFixed(3));
+    const lng = Number(anchor.lng.toFixed(3));
+    const geoKey = `${lat},${lng}`;
+    if (lastGeoKeyRef.current === geoKey) return;
+    lastGeoKeyRef.current = geoKey;
+    let cancelled = false;
+
+    const fetchGeoContext = async () => {
+      try {
+        const res = await fetch(`/api/live/geo-context?lat=${lat}&lng=${lng}`, {
+          cache: "no-store",
+        });
+        if (!res.ok) return;
+        const json = (await res.json()) as {
+          zones?: MapZone[];
+          checkpoints?: MapCheckpoint[];
+        };
+        if (cancelled) return;
+        setOsmZones(Array.isArray(json.zones) ? json.zones : []);
+        setOsmCheckpoints(Array.isArray(json.checkpoints) ? json.checkpoints : []);
+      } catch {
+        // Keep existing/fallback map objects if network call fails.
+      }
+    };
+
+    void fetchGeoContext();
+    return () => {
+      cancelled = true;
+    };
+  }, [routePoints, initialRoom.routePoints]);
 
   return (
     <div className="relative h-[100dvh] w-full overflow-hidden bg-black">
