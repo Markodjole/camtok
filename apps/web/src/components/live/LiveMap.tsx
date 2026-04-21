@@ -106,6 +106,7 @@ export function LiveMap({
   const arRef = useRef<import("leaflet").Marker | null>(null);
   const zoneLayerRef = useRef<import("leaflet").LayerGroup | null>(null);
   const checkpointLayerRef = useRef<import("leaflet").LayerGroup | null>(null);
+  const hasAppliedInitialZoomRef = useRef(false);
   const [mapReady, setMapReady] = useState(0);
   const [rotationDeg, setRotationDeg] = useState(0);
   const streamer = audienceRole === "streamer";
@@ -154,6 +155,7 @@ export function LiveMap({
     })();
     return () => {
       done = true;
+      hasAppliedInitialZoomRef.current = false;
       plRef.current = null;
       dotRef.current = null;
       arRef.current = null;
@@ -247,6 +249,12 @@ export function LiveMap({
       const last = routePoints[routePoints.length - 1]!;
       const pos: [number, number] = [last.lat, last.lng];
       const latlngs: [number, number][] = routePoints.map((p) => [p.lat, p.lng]);
+      const targetZoom = interactive
+        ? hasAppliedInitialZoomRef.current
+          ? m.getZoom()
+          : profile.zoom
+        : profile.zoom;
+      hasAppliedInitialZoomRef.current = true;
 
       if (plRef.current) {
         plRef.current.setLatLngs(latlngs);
@@ -278,7 +286,7 @@ export function LiveMap({
           zIndexOffset: 500,
         }).addTo(m);
       }
-      m.setView(pos, profile.zoom, { animate: true, duration: 0.4 });
+      m.setView(pos, targetZoom, { animate: true, duration: 0.4 });
 
       // Rotate map opposite of heading so "forward" remains screen-up.
       // Rotation is applied to an oversized wrapper (see JSX), not the map box,

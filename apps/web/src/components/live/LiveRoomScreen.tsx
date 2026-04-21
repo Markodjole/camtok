@@ -36,6 +36,68 @@ type MapCheckpoint = {
   isActive: boolean;
 };
 
+const CITY_ZONE_PRESETS: Array<{
+  id: string;
+  slug: string;
+  name: string;
+  kind: MapZone["kind"];
+  color: string;
+  points: Array<{ x: number; y: number }>;
+}> = [
+  {
+    id: "zone-city-center",
+    slug: "city-center",
+    name: "City Center",
+    kind: "district",
+    color: "#60a5fa",
+    points: [
+      { x: -1.1, y: 0.7 },
+      { x: -0.15, y: 1.2 },
+      { x: 0.75, y: 0.35 },
+      { x: -0.25, y: -0.35 },
+    ],
+  },
+  {
+    id: "zone-old-quarter",
+    slug: "old-quarter",
+    name: "Old Quarter",
+    kind: "district",
+    color: "#a78bfa",
+    points: [
+      { x: -1.6, y: 0.25 },
+      { x: -1.1, y: 0.95 },
+      { x: -0.55, y: 0.1 },
+      { x: -1.05, y: -0.45 },
+    ],
+  },
+  {
+    id: "zone-riverside",
+    slug: "riverside",
+    name: "Riverside",
+    kind: "corridor",
+    color: "#22c55e",
+    points: [
+      { x: 0.05, y: -1.4 },
+      { x: 0.9, y: -1.1 },
+      { x: 1.15, y: -0.25 },
+      { x: 0.2, y: -0.45 },
+    ],
+  },
+];
+
+const TOURIST_CHECKPOINT_PRESETS: Array<{
+  id: string;
+  name: string;
+  kind: MapCheckpoint["kind"];
+  offset: { x: number; y: number };
+}> = [
+  { id: "cp-main-square", name: "Main Square", kind: "square", offset: { x: -0.65, y: -0.6 } },
+  { id: "cp-city-bridge", name: "City Bridge", kind: "bridge", offset: { x: 0.95, y: 0.2 } },
+  { id: "cp-cathedral", name: "Cathedral", kind: "landmark", offset: { x: -0.95, y: 0.75 } },
+  { id: "cp-museum", name: "Museum", kind: "poi", offset: { x: 0.35, y: 1.05 } },
+  { id: "cp-viewpoint", name: "Viewpoint", kind: "landmark", offset: { x: 1.25, y: -0.45 } },
+];
+
 function buildMapObjects(anchor: RoutePoint | null): {
   zones: MapZone[];
   checkpoints: MapCheckpoint[];
@@ -45,55 +107,26 @@ function buildMapObjects(anchor: RoutePoint | null): {
   const dLat = 0.0032;
   const dLng = 0.0045;
   return {
-    zones: [
-      {
-        id: "zone-downtown",
-        slug: "downtown",
-        name: "Downtown",
-        kind: "district",
-        color: "#60a5fa",
-        isActive: true,
-        polygon: [
-          { lat: lat + dLat * 0.7, lng: lng - dLng * 1.05 },
-          { lat: lat + dLat * 1.25, lng: lng - dLng * 0.3 },
-          { lat: lat + dLat * 0.45, lng: lng + dLng * 0.55 },
-          { lat: lat - dLat * 0.35, lng: lng - dLng * 0.5 },
-        ],
-      },
-      {
-        id: "zone-riverside",
-        slug: "riverside",
-        name: "Riverside",
-        kind: "corridor",
-        color: "#22c55e",
-        isActive: true,
-        polygon: [
-          { lat: lat - dLat * 1.4, lng: lng - dLng * 0.1 },
-          { lat: lat - dLat * 1.05, lng: lng + dLng * 0.9 },
-          { lat: lat - dLat * 0.15, lng: lng + dLng * 1.2 },
-          { lat: lat - dLat * 0.5, lng: lng + dLng * 0.1 },
-        ],
-      },
-      {
-        id: "zone-old-town",
-        slug: "old-town",
-        name: "Old Town",
-        kind: "district",
-        color: "#a78bfa",
-        isActive: true,
-        polygon: [
-          { lat: lat + dLat * 0.2, lng: lng - dLng * 1.55 },
-          { lat: lat + dLat * 0.95, lng: lng - dLng * 1.15 },
-          { lat: lat + dLat * 0.25, lng: lng - dLng * 0.65 },
-          { lat: lat - dLat * 0.45, lng: lng - dLng * 1.15 },
-        ],
-      },
-    ],
-    checkpoints: [
-      { id: "cp-bridge", name: "Bridge", kind: "bridge", lat: lat + dLat * 0.15, lng: lng + dLng * 0.8, isActive: true },
-      { id: "cp-square", name: "Square", kind: "square", lat: lat - dLat * 0.8, lng: lng - dLng * 0.6, isActive: true },
-      { id: "cp-crossing", name: "Major Crossing", kind: "crossing", lat: lat + dLat * 0.55, lng: lng - dLng * 0.15, isActive: true },
-    ],
+    zones: CITY_ZONE_PRESETS.map((zone) => ({
+      id: zone.id,
+      slug: zone.slug,
+      name: zone.name,
+      kind: zone.kind,
+      color: zone.color,
+      isActive: true,
+      polygon: zone.points.map((point) => ({
+        lat: lat + dLat * point.y,
+        lng: lng + dLng * point.x,
+      })),
+    })),
+    checkpoints: TOURIST_CHECKPOINT_PRESETS.map((checkpoint) => ({
+      id: checkpoint.id,
+      name: checkpoint.name,
+      kind: checkpoint.kind,
+      lat: lat + dLat * checkpoint.offset.y,
+      lng: lng + dLng * checkpoint.offset.x,
+      isActive: true,
+    })),
   };
 }
 
@@ -333,7 +366,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               showCheckpoints ? "bg-fuchsia-500/30 text-fuchsia-100" : "bg-white/10 text-white/60"
             }`}
           >
-            Checkpoints
+            Attractions
           </button>
           <button
             type="button"
@@ -341,6 +374,54 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           >
             Live bets
           </button>
+        </div>
+      ) : null}
+      {mapExpanded ? (
+        <div className="absolute left-4 right-4 top-40 z-40 flex flex-wrap gap-1.5">
+          {showZones
+            ? zones.map((zone) => {
+                const selected = selectedZoneId === zone.id;
+                return (
+                  <button
+                    key={zone.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedZoneId(selected ? null : zone.id);
+                      setSelectedCheckpointId(null);
+                    }}
+                    className={`rounded-full border px-2 py-1 text-[10px] ${
+                      selected
+                        ? "border-cyan-300/70 bg-cyan-500/35 text-cyan-50"
+                        : "border-white/20 bg-black/40 text-white/80"
+                    }`}
+                  >
+                    {zone.name}
+                  </button>
+                );
+              })
+            : null}
+          {showCheckpoints
+            ? checkpoints.map((checkpoint) => {
+                const selected = selectedCheckpointId === checkpoint.id;
+                return (
+                  <button
+                    key={checkpoint.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedCheckpointId(selected ? null : checkpoint.id);
+                      setSelectedZoneId(null);
+                    }}
+                    className={`rounded-full border px-2 py-1 text-[10px] ${
+                      selected
+                        ? "border-fuchsia-300/70 bg-fuchsia-500/35 text-fuchsia-50"
+                        : "border-white/20 bg-black/40 text-white/80"
+                    }`}
+                  >
+                    {checkpoint.name}
+                  </button>
+                );
+              })
+            : null}
         </div>
       ) : null}
 
