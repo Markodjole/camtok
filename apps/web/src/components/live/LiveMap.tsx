@@ -73,21 +73,25 @@ function headingDivIcon(L: { divIcon: (o: object) => import("leaflet").DivIcon }
   return L.divIcon({ html, className: "camtok-h", iconSize: [52, 52], iconAnchor: [26, 26] });
 }
 
-function mapProfile(mode?: string): {
+function mapProfile(
+  mode?: string,
+  role: "streamer" | "viewer" = "viewer",
+): {
   zoom: number;
   lineWeight: number;
   showSpeed: boolean;
   speedUnit: "kmh" | "none";
 } {
   const m = (mode ?? "").toLowerCase();
+  const bonus = role === "streamer" ? 1 : 0;
   if (m.includes("car") || m.includes("drive")) {
-    return { zoom: 16, lineWeight: 4, showSpeed: true, speedUnit: "kmh" };
+    return { zoom: 17 + bonus, lineWeight: 4, showSpeed: true, speedUnit: "kmh" };
   }
   if (m.includes("bike") || m.includes("cycle")) {
-    return { zoom: 17, lineWeight: 4, showSpeed: true, speedUnit: "kmh" };
+    return { zoom: 18 + bonus, lineWeight: 4, showSpeed: true, speedUnit: "kmh" };
   }
   // walking / default
-  return { zoom: 18, lineWeight: 3, showSpeed: false, speedUnit: "none" };
+  return { zoom: Math.min(19, 18 + bonus + 1), lineWeight: 3, showSpeed: false, speedUnit: "none" };
 }
 
 function normalizeAngleDeg(deg: number): number {
@@ -144,7 +148,7 @@ export function LiveMap({
   }, [onUserInteract]);
   const streamer = audienceRole === "streamer";
   const col = streamer ? C.streamer : C.viewer;
-  const profile = mapProfile(transportMode);
+  const profile = mapProfile(transportMode, streamer ? "streamer" : "viewer");
 
   useEffect(() => {
     const el = containerRef.current;
@@ -286,74 +290,125 @@ export function LiveMap({
       if (!turnTarget) return;
       const pos: [number, number] = [turnTarget.lat, turnTarget.lng];
 
-      // Draw a "rails"-style blue path from the driver through the turn point
-      // and ~50 m after it in the direction implied by the turn kind.
-      const last = routePoints[routePoints.length - 1];
-      if (last) {
-        const approachHeading = last.heading ?? 0;
-        const kind = turnTarget.kind ?? "straight";
-        const deltaDeg = kind === "left" ? -90 : kind === "right" ? 90 : 0;
-        const exitHeading = approachHeading + deltaDeg;
-        const metersToLatDeg = (m: number) => m / 111320;
-        const metersToLngDeg = (m: number, atLat: number) =>
-          m / (111320 * Math.cos((atLat * Math.PI) / 180));
-        const afterM = 50;
-        const rad = (exitHeading * Math.PI) / 180;
-        const afterLat =
-          turnTarget.lat + metersToLatDeg(afterM * Math.cos(rad));
-        const afterLng =
-          turnTarget.lng +
-          metersToLngDeg(afterM * Math.sin(rad), turnTarget.lat);
+      // Approximate meters between two coordinates using equirectangular math
+      // (accurate enough at < 200 m scale used for rail / gating below).
+      const metersBetween = (
+        a: { lat: number; lng: number },
+        b: { lat: number; lng: number },
+      ) => {
+        const latAvg = (a.lat + b.lat) / 2;
+        const dy = (b.lat - a.lat) * 111320;
+        const dx =
+          (b.lng - a.lng) * 111320 * Math.cos((latAvg * Math.PI) / 180);
+        return Math.hypot(dx, dy);
+      };
+      // Compass bearing a → b in degrees (0 = north, clockwise).
+      const bearingDeg = (
+        a: { lat: number; lng: number },
+        b: { lat: number; lng: number },
+      ) => {
+        const latAvg = (a.lat + b.lat) / 2;
+        const dy = (b.lat - a.lat) * 111320;
+        const dx =
+          (b.lng - a.lng) * 111320 * Math.cos((latAvg * Math.PI) / 180);
+        return (Math.atan2(dx, dy) * 180) / Math.PI;
+      };
 
-        const railPts: [number, number][] = [
-          [last.lat, last.lng],
-          pos,
-          [afterLat, afterLng],
-        ];
-        // Outer halo for visibility.
-        L.polyline(railPts, {
-          color: "#1d4ed8",
-          weight: 10,
-          opacity: 0.35,
-          lineCap: "round",
-          lineJoin: "round",
-        }).addTo(rail);
-        // Solid blue "rail".
-        L.polyline(railPts, {
-          color: "#3b82f6",
-          weight: 6,
-          opacity: 0.95,
-          lineCap: "round",
-          lineJoin: "round",
-        }).addTo(rail);
-        // Small cap at the rail end to simulate a destination arrow.
-        L.circleMarker([afterLat, afterLng], {
-          radius: 5,
-          color: "#ffffff",
-          weight: 2,
-          fillColor: "#2563eb",
-          fillOpacity: 1,
-        }).addTo(rail);
-      }
-
-      // Outer pulse ring – Google-Maps-style destination indicator in blue.
+      // Always show the blue destination pin at the fixed turn point so the
+      // driver can see where the AI decided, even when far away.
       L.circle(pos, {
-        radius: 28,
+        radius: 14,
         color: "#2563eb",
-        weight: 2.5,
+        weight: 2,
         fillColor: "#3b82f6",
-        fillOpacity: 0.18,
+        fillOpacity: 0.22,
         opacity: 0.9,
       }).addTo(group);
-
-      // Inner solid dot.
       L.circleMarker(pos, {
-        radius: 7,
+        radius: 6,
         color: "#ffffff",
-        weight: 2.5,
+        weight: 2,
         fillColor: "#2563eb",
         fillOpacity: 1,
       }).addTo(group);
+
+      // The "rails" must only appear just before the turn (like Google Maps
+      // highlighting the next maneuver), otherwise random blue lines far away
+      // look like noise. Gate on proximity to the fixed turn point.
+      const last = routePoints[routePoints.length - 1];
+      if (!last) return;
+      const distToTurn = metersBetween(last, turnTarget);
+      const RAIL_ARM_M = 75; // start drawing when we're this close
+      const RAIL_DISARM_M = 8; // drop when we've effectively hit the turn
+      if (distToTurn > RAIL_ARM_M || distToTurn < RAIL_DISARM_M) return;
+
+      // Derive a stable approach heading from the route history: find a point
+      // roughly 20–40 m before the turn and take the bearing from there to the
+      // turn. This smooths out per-GPS noise and single-sample heading jitter.
+      let approachBearing: number | null = null;
+      for (let i = routePoints.length - 1; i >= 0; i -= 1) {
+        const rp = routePoints[i]!;
+        const d = metersBetween(rp, turnTarget);
+        if (d >= 20 && d <= 60) {
+          approachBearing = bearingDeg(rp, turnTarget);
+          break;
+        }
+      }
+      if (approachBearing == null) {
+        // Fallback: bearing from current position → turn (acceptable at < 75 m).
+        approachBearing = bearingDeg(last, turnTarget);
+      }
+
+      const kind = turnTarget.kind ?? "straight";
+      const deltaDeg = kind === "left" ? -90 : kind === "right" ? 90 : 0;
+      const exitBearing = approachBearing + deltaDeg;
+
+      const metersToLatDeg = (mm: number) => mm / 111320;
+      const metersToLngDeg = (mm: number, atLat: number) =>
+        mm / (111320 * Math.cos((atLat * Math.PI) / 180));
+      const pointAt = (
+        from: [number, number],
+        bearing: number,
+        meters: number,
+      ): [number, number] => {
+        const rad = (bearing * Math.PI) / 180;
+        return [
+          from[0] + metersToLatDeg(meters * Math.cos(rad)),
+          from[1] + metersToLngDeg(meters * Math.sin(rad), from[0]),
+        ];
+      };
+
+      // Short "approach" stub anchored to the turn point going back 22 m
+      // along the road, then a 50 m "exit" rail in the new direction.
+      const approachStart = pointAt(pos, approachBearing + 180, 22);
+      const exitEnd = pointAt(pos, exitBearing, 50);
+
+      const railPts: [number, number][] = [approachStart, pos, exitEnd];
+
+      // Outer halo.
+      L.polyline(railPts, {
+        color: "#1d4ed8",
+        weight: 11,
+        opacity: 0.3,
+        lineCap: "round",
+        lineJoin: "round",
+      }).addTo(rail);
+      // Solid rail.
+      L.polyline(railPts, {
+        color: "#3b82f6",
+        weight: 6,
+        opacity: 0.95,
+        lineCap: "round",
+        lineJoin: "round",
+      }).addTo(rail);
+      // End cap at the exit to hint destination direction.
+      L.circleMarker(exitEnd, {
+        radius: 5,
+        color: "#ffffff",
+        weight: 2,
+        fillColor: "#2563eb",
+        fillOpacity: 1,
+      }).addTo(rail);
     })();
   }, [turnTarget, routePoints, mapReady]);
 

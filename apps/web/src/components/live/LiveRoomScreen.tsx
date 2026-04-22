@@ -6,7 +6,7 @@ import type { LiveFeedRow, RoutePoint } from "@/actions/live-feed";
 import { LiveVideoPlayer } from "./LiveVideoPlayer";
 import { DirectionalBetPad } from "./DirectionalBetPad";
 import { useCountdown } from "./useCountdown";
-import { transportEmoji } from "./transportEmoji";
+import { TransportModeIcon } from "./TransportModeIcon";
 import { BetPlacedPill, LiveEventToasts, useBetPill } from "./LiveEventToasts";
 import { SkillFeedbackCard, type SkillFeedbackData } from "./SkillFeedbackCard";
 import { ReplaySheet } from "./ReplaySheet";
@@ -160,7 +160,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [osmCheckpoints, setOsmCheckpoints] = useState<MapCheckpoint[]>([]);
   const [geoLoadedOnce, setGeoLoadedOnce] = useState(false);
   const [geoLoading, setGeoLoading] = useState(false);
-  const [pipPos, setPipPos] = useState({ top: 68, left: 12 });
+  const [pipPos, setPipPos] = useState({ top: 58, left: 12 });
   const [pipDragReady, setPipDragReady] = useState(false);
   const lastGeoKeyRef = useRef<string | null>(null);
   const pipLongPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -366,7 +366,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       Math.min(window.innerWidth - boxW - 8, pipDragRef.current.baseLeft + dx),
     );
     const nextTop = Math.max(
-      56,
+      58,
       Math.min(window.innerHeight - boxH - 92, pipDragRef.current.baseTop + dy),
     );
     setPipPos({ top: nextTop, left: nextLeft });
@@ -459,8 +459,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         <span className="font-semibold text-white drop-shadow">
           {room.characterName}
         </span>
-        <span className="text-white/55 drop-shadow text-xs">
-          {transportEmoji(room.transportMode)} {room.transportMode.replace("_", " ")}
+        <span className="flex items-center gap-1.5 text-white/55 drop-shadow text-xs">
+          <TransportModeIcon mode={room.transportMode} className="h-4 w-4" />
+          {room.transportMode.replace("_", " ")}
         </span>
 
         <div className="ml-auto flex items-center gap-1.5">

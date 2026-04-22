@@ -8,7 +8,7 @@ import type { TransportMode } from "@bettok/live";
 import type { LiveFeedRow, RoutePoint } from "@/actions/live-feed";
 import { LiveVideoPlayer } from "./LiveVideoPlayer";
 import { startBroadcasterP2p } from "./liveP2pBroadcast";
-import { transportEmoji } from "./transportEmoji";
+import { TransportModeIcon } from "./TransportModeIcon";
 import { StreamGuidanceOverlay } from "./StreamGuidanceOverlay";
 import { TurnBlinkOverlay, type TurnDirection } from "./TurnBlinkOverlay";
 import { computeStreamGuidance } from "@/lib/live/streamGuidance";
@@ -82,13 +82,11 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
   const [aiTurnDistanceM, setAiTurnDistanceM] = useState<number | null>(null);
   const [realTurnPoint, setRealTurnPoint] = useState<{ lat: number; lng: number } | null>(null);
   const [mapExpanded, setMapExpanded] = useState(true);
-  const [showZones, setShowZones] = useState(true);
-  const [showCheckpoints, setShowCheckpoints] = useState(true);
   const [osmZones, setOsmZones] = useState<MapZone[]>([]);
   const [osmCheckpoints, setOsmCheckpoints] = useState<MapCheckpoint[]>([]);
   const [geoLoadedOnce, setGeoLoadedOnce] = useState(false);
   const [geoLoading, setGeoLoading] = useState(false);
-  const [pipPos, setPipPos] = useState({ top: 68, left: 12 });
+  const [pipPos, setPipPos] = useState({ top: 58, left: 12 });
   const [pipDragReady, setPipDragReady] = useState(false);
 
   const watchIdRef = useRef<number | null>(null);
@@ -409,7 +407,7 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
       Math.min(window.innerWidth - boxW - 8, pipDragRef.current.baseLeft + dx),
     );
     const nextTop = Math.max(
-      56,
+      58,
       Math.min(window.innerHeight - boxH - 92, pipDragRef.current.baseTop + dy),
     );
     setPipPos({ top: nextTop, left: nextLeft });
@@ -488,8 +486,8 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
               mapCaption={"You \u00b7 follow green arrow"}
               zones={geoLoadedOnce ? osmZones : []}
               checkpoints={geoLoadedOnce ? osmCheckpoints : []}
-              showZones={showZones}
-              showCheckpoints={showCheckpoints}
+              showZones={false}
+              showCheckpoints={false}
               turnHint={aiTurnHint}
               turnHintEtaSec={aiTurnEtaSec}
               turnHintDistanceM={aiTurnDistanceM}
@@ -520,30 +518,9 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
             aria-label="Live"
             title="Live"
           />
-          <span
-            className="text-xl leading-none drop-shadow"
-            aria-label={transportMode}
-            title={transportMode}
-          >
-            {transportEmoji(transportMode)}
+          <span className="text-white/85" aria-label={transportMode} title={transportMode}>
+            <TransportModeIcon mode={transportMode} className="h-6 w-6" />
           </span>
-          <IconRailButton
-            active={showZones}
-            onClick={() => setShowZones((v) => !v)}
-            title="Zones"
-          >
-            <IconLayers />
-          </IconRailButton>
-          <IconRailButton
-            active={showCheckpoints}
-            onClick={() => setShowCheckpoints((v) => !v)}
-            title="Places"
-          >
-            <IconPin />
-          </IconRailButton>
-          {geoLoading && !geoLoadedOnce ? (
-            <span className="h-1.5 w-1.5 animate-ping rounded-full bg-white/70" />
-          ) : null}
         </div>
 
 
@@ -582,8 +559,8 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
                 mapCaption={"You \u00b7 follow green arrow"}
                 zones={geoLoadedOnce ? osmZones : []}
                 checkpoints={geoLoadedOnce ? osmCheckpoints : []}
-                showZones={showZones}
-                showCheckpoints={showCheckpoints}
+                showZones={false}
+                showCheckpoints={false}
                 turnHint={aiTurnHint}
                 turnHintEtaSec={aiTurnEtaSec}
                 turnHintDistanceM={aiTurnDistanceM}
