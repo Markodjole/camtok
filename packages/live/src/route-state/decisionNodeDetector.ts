@@ -3,21 +3,22 @@ import type { NormalizedPoint } from "./gpsNormalizer";
 
 /**
  * Minimum time-before-decision required to safely open a betting window.
+ * Kept high enough that the driver sees the instruction well before the turn.
  */
 export const MIN_LOCK_WINDOW_SEC: Record<TransportMode, number> = {
-  walking: 10,
-  bike: 8,
-  scooter: 8,
-  car: 6,
-  other_vehicle: 6,
+  walking: 12,
+  bike: 14,
+  scooter: 18,
+  car: 22,
+  other_vehicle: 22,
 };
 
 export const MAX_LOCK_WINDOW_SEC: Record<TransportMode, number> = {
-  walking: 20,
-  bike: 15,
-  scooter: 15,
-  car: 12,
-  other_vehicle: 12,
+  walking: 25,
+  bike: 30,
+  scooter: 38,
+  car: 45,
+  other_vehicle: 45,
 };
 
 export type DecisionCandidate = {
@@ -59,11 +60,14 @@ export function detectNextDecision(
   let confidence: number;
 
   if (slowing && speed > 0.1) {
-    etaSec = Math.min(maxEta, Math.max(minEta, 6 + (1 / speed) * 4));
-    distanceMeters = Math.max(5, speed * etaSec);
+    // Slow-down detected — use speed to project how far ahead the decision is.
+    // Lower bound is minEta so the window is always wide enough.
+    etaSec = Math.min(maxEta, Math.max(minEta, minEta + (1 / speed) * 4));
+    distanceMeters = Math.max(10, speed * etaSec);
     confidence = 0.65;
   } else if (steady && speed > 0.3) {
-    etaSec = Math.min(maxEta, Math.max(minEta, 10));
+    // Steady speed — open early, use the full min window so driver has time.
+    etaSec = Math.min(maxEta, Math.max(minEta, minEta));
     distanceMeters = speed * etaSec;
     confidence = 0.55;
   } else {

@@ -62,6 +62,7 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
   const [aiTurnHint, setAiTurnHint] = useState<string | null>(null);
   const [aiTurnEtaSec, setAiTurnEtaSec] = useState<number | null>(null);
   const [aiTurnDistanceM, setAiTurnDistanceM] = useState<number | null>(null);
+  const [realTurnPoint, setRealTurnPoint] = useState<{ lat: number; lng: number } | null>(null);
   const [mapExpanded, setMapExpanded] = useState(false);
 
   const watchIdRef = useRef<number | null>(null);
@@ -219,7 +220,7 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
   useEffect(() => {
     if (!roomId || !sessionId) return;
     let cancelled = false;
-    const EARLY_TURN_LEAD_SEC = 8;
+    const EARLY_TURN_LEAD_SEC = 20;
     const toHint = (room: LiveFeedRow | null): { label: string | null; locksAt: string | null } => {
       if (!room?.currentMarket?.options?.length) return { label: null, locksAt: null };
       const opts = room.currentMarket.options;
@@ -249,6 +250,13 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
         if (cancelled) return;
         const hint = toHint(j.room);
         setAiTurnHint(hint.label);
+        // Pull the server-stored real turn point (computed at market creation from GPS + heading + distance)
+        const mkt = j.room?.currentMarket;
+        if (mkt?.turnPointLat != null && mkt?.turnPointLng != null) {
+          setRealTurnPoint({ lat: mkt.turnPointLat, lng: mkt.turnPointLng });
+        } else {
+          setRealTurnPoint(null);
+        }
         if (!hint.label || !hint.locksAt) {
           setAiTurnEtaSec(null);
           setAiTurnDistanceM(null);
@@ -274,34 +282,11 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
     };
   }, [roomId, sessionId, routePoints]);
 
-  function projectTurnTarget(): { lat: number; lng: number; kind: "left" | "right" | "straight"; label: string } | null {
-    const last = routePoints[routePoints.length - 1];
-    if (!last || !aiTurnHint) return null;
-    const hint = aiTurnHint.toUpperCase();
-    const kind: "left" | "right" | "straight" =
-      hint.includes("LEFT") ? "left" : hint.includes("RIGHT") ? "right" : "straight";
-    const headingDeg = last.heading ?? 0;
-    const meters = Math.max(18, Math.min(220, aiTurnDistanceM ?? 70));
-    const headingRad = (headingDeg * Math.PI) / 180;
-    const dLat = (Math.cos(headingRad) * meters) / 111_320;
-    const dLng =
-      (Math.sin(headingRad) * meters) /
-      (111_320 * Math.cos((last.lat * Math.PI) / 180));
-    return {
-      lat: last.lat + dLat,
-      lng: last.lng + dLng,
-      kind,
-      label:
-        kind === "left" ? "Turn left here" : kind === "right" ? "Turn right here" : "Stay straight",
-    };
-  }
-
   if (sessionId && stream) {
-    const turnTarget = projectTurnTarget();
     const guidance = routePoints.length > 0 ? computeStreamGuidance(routePoints) : null;
     const hintUpper = (aiTurnHint ?? "").toUpperCase();
-    const hintIsLeft = hintUpper === "LEFT";
-    const hintIsRight = hintUpper === "RIGHT";
+    const hintIsLeft = hintUpper.includes("LEFT");
+    const hintIsRight = hintUpper.includes("RIGHT");
     const turnDirection: TurnDirection =
       hintIsLeft
         ? "left"
@@ -315,19 +300,22 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
     const urgent =
       (aiTurnEtaSec != null && aiTurnEtaSec <= 7) ||
       (aiTurnDistanceM != null && aiTurnDistanceM <= 40);
-    const destinationLabel = turnDirection
-      ? turnDirection === "left"
-        ? "Turn left"
-        : "Turn right"
-      : aiTurnHint
-        ? `Next: ${aiTurnHint}`
+    const blinkLabel = turnDirection === "left"
+      ? "Turn left"
+      : turnDirection === "right"
+        ? "Turn right"
         : guidance?.kind === "brake"
           ? "Slow down"
-          : guidance?.kind === "back"
-            ? "Go back"
-            : guidance
-              ? "Continue straight"
-              : null;
+          : null;
+    // Build turnTarget from server-stored real coords + direction from hint
+    const turnTarget = realTurnPoint && aiTurnHint
+      ? {
+          lat: realTurnPoint.lat,
+          lng: realTurnPoint.lng,
+          kind: (hintIsLeft ? "left" : hintIsRight ? "right" : "straight") as "left" | "right" | "straight",
+          label: "",
+        }
+      : null;
 
     return (
       <div className="relative h-full min-h-0 w-full flex-1 overflow-hidden bg-black">
@@ -361,7 +349,7 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
           direction={turnDirection}
           etaSec={aiTurnEtaSec}
           distanceM={aiTurnDistanceM}
-          label={destinationLabel}
+          label={blinkLabel}
           urgent={urgent}
         />
 
@@ -382,28 +370,6 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
           )}
         </div>
 
-        {destinationLabel ? (
-          <div className="pointer-events-none absolute left-1/2 top-16 z-30 -translate-x-1/2">
-            <div
-              className={[
-                "flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-bold uppercase tracking-wider backdrop-blur-sm [text-shadow:0_0_4px_#000]",
-                urgent
-                  ? "border-rose-300/70 bg-rose-500/35 text-rose-100"
-                  : turnDirection
-                    ? "border-amber-300/60 bg-amber-500/30 text-amber-100"
-                    : "border-emerald-300/55 bg-emerald-500/25 text-emerald-100",
-              ].join(" ")}
-            >
-              <span>{destinationLabel}</span>
-              {aiTurnEtaSec != null ? (
-                <span className="opacity-80">{`\u00b7 ${Math.max(0, Math.round(aiTurnEtaSec))}s`}</span>
-              ) : null}
-              {aiTurnDistanceM != null ? (
-                <span className="opacity-80">{`\u00b7 ~${Math.max(0, Math.round(aiTurnDistanceM))}m`}</span>
-              ) : null}
-            </div>
-          </div>
-        ) : null}
 
         <div
           className="absolute z-30 overflow-hidden rounded-2xl border border-white/25 shadow-2xl backdrop-blur-sm"

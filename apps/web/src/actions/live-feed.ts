@@ -35,6 +35,8 @@ export type LiveFeedRow = {
     revealAt: string;
     options: Array<{ id: string; label: string; shortLabel?: string; displayOrder: number }>;
     participantCount: number;
+    turnPointLat: number | null;
+    turnPointLng: number | null;
   } | null;
   sessionStartedAt: string;
   lastHeartbeatAt: string | null;
@@ -76,6 +78,8 @@ export async function getLiveFeed(): Promise<{ items: LiveFeedRow[] }> {
             ? never
             : NonNullable<LiveFeedRow["currentMarket"]>["options"]) ?? [],
           participantCount: (r.current_market_participants as number) ?? 0,
+          turnPointLat: (r.current_market_turn_point_lat as number | null) ?? null,
+          turnPointLng: (r.current_market_turn_point_lng as number | null) ?? null,
         }
       : null,
     sessionStartedAt: r.session_started_at as string,

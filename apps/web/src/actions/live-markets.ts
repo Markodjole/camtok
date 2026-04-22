@@ -305,6 +305,17 @@ export async function openSystemMarketForRoom(roomId: string) {
     ? buildMidRangeMarketDraft(baseDraft, characterName, midRangeIdx)
     : baseDraft;
 
+  // Project the real turn point from the latest GPS position + heading + distance
+  const latestGps = points[points.length - 1];
+  const headingRad = ((latestGps.headingDeg ?? 0) * Math.PI) / 180;
+  const dist = Math.max(15, Math.min(400, decision.triggerDistanceMeters));
+  const turnPointLat =
+    latestGps.lat + (Math.cos(headingRad) * dist) / 111_320;
+  const turnPointLng =
+    latestGps.lng +
+    (Math.sin(headingRad) * dist) /
+      (111_320 * Math.cos((latestGps.lat * Math.PI) / 180));
+
   const now = new Date();
   const opensAt = now;
   const locksAtMs = now.getTime() + decision.triggerEtaSeconds * 1000;
@@ -345,6 +356,8 @@ export async function openSystemMarketForRoom(roomId: string) {
       locks_at: locksAt.toISOString(),
       reveal_at: revealAt.toISOString(),
       status: "open",
+      turn_point_lat: turnPointLat,
+      turn_point_lng: turnPointLng,
     })
     .select("*")
     .single();

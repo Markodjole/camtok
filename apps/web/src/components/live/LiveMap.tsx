@@ -279,50 +279,26 @@ export function LiveMap({
       const L = (await import("leaflet")).default;
       group.clearLayers();
       if (!turnTarget) return;
-      const kind = turnTarget.kind ?? "straight";
-      const color =
-        kind === "left" ? "#22c55e" : kind === "right" ? "#10b981" : "#34d399";
       const pos: [number, number] = [turnTarget.lat, turnTarget.lng];
 
-      // Destination-like target ring.
+      // Outer pulse ring – Google-Maps-style destination indicator in blue.
       L.circle(pos, {
-        radius: 22,
-        color,
-        weight: 2,
-        fillColor: color,
-        fillOpacity: 0.22,
-        opacity: 0.95,
+        radius: 28,
+        color: "#2563eb",
+        weight: 2.5,
+        fillColor: "#3b82f6",
+        fillOpacity: 0.18,
+        opacity: 0.9,
       }).addTo(group);
 
+      // Inner solid dot.
       L.circleMarker(pos, {
-        radius: 6,
+        radius: 7,
         color: "#ffffff",
-        weight: 2,
-        fillColor: color,
-        fillOpacity: 0.95,
+        weight: 2.5,
+        fillColor: "#2563eb",
+        fillOpacity: 1,
       }).addTo(group);
-
-      if (turnTarget.label) {
-        L.marker(pos, {
-          icon: L.divIcon({
-            className: "camtok-turn-target",
-            html: `<div style="
-              background: rgba(0,0,0,0.72);
-              color: #dcfce7;
-              border: 1px solid rgba(34,197,94,0.65);
-              border-radius: 9999px;
-              padding: 2px 8px;
-              font-size: 10px;
-              font-weight: 700;
-              text-transform: uppercase;
-              white-space: nowrap;
-              text-shadow: 0 0 4px #000;
-            ">${turnTarget.label}</div>`,
-            iconAnchor: [0, 24],
-          }),
-          interactive: false,
-        }).addTo(group);
-      }
     })();
   }, [turnTarget, mapReady]);
 
@@ -360,7 +336,7 @@ export function LiveMap({
         }).addTo(m);
       }
       if (dotRef.current) {
-        dotRef.current.setLatLng(pos);
+        // Keep position updates inside the RAF interpolator to avoid per-GPS snaps.
         dotRef.current.setStyle({ fillColor: col.fill, color: "rgba(255,255,255,0.85)", fillOpacity: 0.92, weight: 1, radius: col.r });
       } else {
         dotRef.current = L.circleMarker(pos, {
@@ -371,13 +347,20 @@ export function LiveMap({
           fillOpacity: 0.92,
         }).addTo(m);
       }
-      if (arRef.current) { m.removeLayer(arRef.current); arRef.current = null; }
       if (showCourseArrow && last.heading != null) {
-        arRef.current = L.marker(pos, {
-          icon: headingDivIcon(L, last.heading, streamer),
-          interactive: false,
-          zIndexOffset: 500,
-        }).addTo(m);
+        if (arRef.current) {
+          // Do not hard-set marker lat/lng here; RAF loop animates it smoothly.
+          arRef.current.setIcon(headingDivIcon(L, last.heading, streamer));
+        } else {
+          arRef.current = L.marker(pos, {
+            icon: headingDivIcon(L, last.heading, streamer),
+            interactive: false,
+            zIndexOffset: 500,
+          }).addTo(m);
+        }
+      } else if (arRef.current) {
+        m.removeLayer(arRef.current);
+        arRef.current = null;
       }
       if (followMode) {
         if (isFirstFollowFrame) {
@@ -524,24 +507,6 @@ export function LiveMap({
           </p>
         </div>
       )}
-      {turnHint ? (
-        <div className="pointer-events-none absolute left-1/2 top-1 z-[2001] -translate-x-1/2">
-          <div
-            className={[
-              "rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide [text-shadow:0_0_3px_#000,0_0_5px_#000]",
-              turnHintEtaSec == null || turnHintEtaSec > 12
-                ? "border-emerald-300/55 bg-emerald-500/20 text-emerald-100"
-                : turnHintEtaSec > 6
-                  ? "border-amber-300/60 bg-amber-500/25 text-amber-100"
-                  : "border-rose-300/65 bg-rose-500/30 text-rose-100",
-            ].join(" ")}
-          >
-            AI next: {turnHint}
-            {turnHintEtaSec != null ? ` · ETA ${Math.max(0, Math.round(turnHintEtaSec))}s` : ""}
-            {turnHintDistanceM != null ? ` · ~${Math.max(0, Math.round(turnHintDistanceM))}m` : ""}
-          </div>
-        </div>
-      ) : null}
     </div>
   );
 }

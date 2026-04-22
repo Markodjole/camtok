@@ -235,6 +235,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   }
 
   const currentMarket = room.currentMarket;
+  const viewerTurnTarget = currentMarket?.turnPointLat != null && currentMarket?.turnPointLng != null
+    ? { lat: currentMarket.turnPointLat, lng: currentMarket.turnPointLng, kind: "straight" as const, label: "" }
+    : null;
   const isLocked = currentMarket
     ? new Date(currentMarket.locksAt) <= new Date()
     : true;
@@ -344,6 +347,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             selectedCheckpointId={selectedCheckpointId}
             showZones={showZones}
             showCheckpoints={showCheckpoints}
+            turnTarget={viewerTurnTarget}
             onZoneSelect={(id) => {
               setSelectedZoneId(id);
               if (id) setSelectedCheckpointId(null);
@@ -550,6 +554,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               selectedCheckpointId={selectedCheckpointId}
               showZones={showZones}
               showCheckpoints={showCheckpoints}
+              turnTarget={viewerTurnTarget}
             />
             {routePoints.length === 0 && (
               <div className="absolute inset-0 flex items-center justify-center bg-black/30 text-[9px] text-white/70">
