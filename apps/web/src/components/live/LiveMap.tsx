@@ -43,6 +43,14 @@ export interface LiveMapProps {
   showCheckpoints?: boolean;
   onZoneSelect?: (zoneId: string | null) => void;
   onCheckpointSelect?: (checkpointId: string | null) => void;
+  /**
+   * When true the map auto-centers on the latest route point and applies
+   * heading rotation if `rotateWithHeading` is enabled. When false the map
+   * preserves the user's current center/zoom without any auto-correction.
+   */
+  followMode?: boolean;
+  /** Called when the user manually pans the map (dragstart) while interactive. */
+  onUserInteract?: () => void;
 }
 
 const C = {
@@ -97,6 +105,8 @@ export function LiveMap({
   showCheckpoints = true,
   onZoneSelect,
   onCheckpointSelect,
+  followMode = true,
+  onUserInteract,
 }: LiveMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<import("leaflet").Map | null>(null);
@@ -107,8 +117,12 @@ export function LiveMap({
   const zoneLayerRef = useRef<import("leaflet").LayerGroup | null>(null);
   const checkpointLayerRef = useRef<import("leaflet").LayerGroup | null>(null);
   const hasAppliedInitialZoomRef = useRef(false);
+  const onUserInteractRef = useRef<(() => void) | undefined>(undefined);
   const [mapReady, setMapReady] = useState(0);
   const [rotationDeg, setRotationDeg] = useState(0);
+  useEffect(() => {
+    onUserInteractRef.current = onUserInteract;
+  }, [onUserInteract]);
   const streamer = audienceRole === "streamer";
   const col = streamer ? C.streamer : C.viewer;
   const profile = mapProfile(transportMode);
@@ -145,6 +159,9 @@ export function LiveMap({
         m.touchZoom.enable();
         m.doubleClickZoom.enable();
       }
+      m.on("dragstart", () => {
+        onUserInteractRef.current?.();
+      });
       const t = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, opacity: 0.4 });
       t.addTo(m);
       zoneLayerRef.current = L.layerGroup().addTo(m);
@@ -286,14 +303,16 @@ export function LiveMap({
           zIndexOffset: 500,
         }).addTo(m);
       }
-      m.setView(pos, targetZoom, { animate: true, duration: 0.4 });
+      if (followMode) {
+        m.setView(pos, targetZoom, { animate: true, duration: 0.4 });
+      }
 
       // Rotate map opposite of heading so "forward" remains screen-up.
       // Rotation is applied to an oversized wrapper (see JSX), not the map box,
       // to avoid empty corners while preserving a fully filled frame.
-      if (rotateWithHeading && last.heading != null) {
+      if (followMode && rotateWithHeading && last.heading != null) {
         setRotationDeg(-last.heading);
-      } else {
+      } else if (followMode) {
         setRotationDeg(0);
       }
     })();
@@ -310,6 +329,7 @@ export function LiveMap({
     profile.zoom,
     profile.lineWeight,
     rotateWithHeading,
+    followMode,
   ]);
 
   return (
@@ -317,10 +337,9 @@ export function LiveMap({
       <div className="absolute inset-0 overflow-hidden">
         <div
           style={
-            rotateWithHeading
+            rotateWithHeading && followMode
               ? {
                   position: "absolute",
-                  // Oversize so rotated map always covers the visible box.
                   inset: "-24%",
                   transform: `rotate(${rotationDeg}deg)`,
                   transformOrigin: "50% 50%",

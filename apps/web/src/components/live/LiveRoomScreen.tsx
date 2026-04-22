@@ -148,6 +148,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [selectedMapOptionId, setSelectedMapOptionId] = useState<string | null>(null);
   const [showZones, setShowZones] = useState(true);
   const [showCheckpoints, setShowCheckpoints] = useState(true);
+  const [mapFollow, setMapFollow] = useState(true);
   const [osmZones, setOsmZones] = useState<MapZone[]>([]);
   const [osmCheckpoints, setOsmCheckpoints] = useState<MapCheckpoint[]>([]);
   const lastGeoKeyRef = useRef<string | null>(null);
@@ -321,7 +322,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             interactive={true}
             audienceRole="viewer"
             transportMode={room.transportMode}
-            rotateWithHeading={false}
+            rotateWithHeading={true}
+            followMode={mapFollow}
+            onUserInteract={() => setMapFollow(false)}
             tileOpacity={1}
             mapCaption={currentMarket?.title}
             zones={zones}
@@ -420,7 +423,30 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           >
             Live bets
           </button>
+          <button
+            type="button"
+            onClick={() => setMapFollow(true)}
+            className={`rounded-full px-2.5 py-1 text-[11px] ${
+              mapFollow
+                ? "bg-emerald-500/30 text-emerald-100"
+                : "bg-amber-500/30 text-amber-100"
+            }`}
+            title={mapFollow ? "Following streamer" : "Tap to follow streamer"}
+          >
+            {mapFollow ? "Following" : "Center"}
+          </button>
         </div>
+      ) : null}
+      {mapExpanded && !mapFollow ? (
+        <button
+          type="button"
+          onClick={() => setMapFollow(true)}
+          className="absolute bottom-48 right-4 z-50 flex items-center gap-1.5 rounded-full border border-amber-300/50 bg-amber-500/30 px-3 py-1.5 text-[11px] font-semibold text-amber-50 shadow-lg backdrop-blur active:bg-amber-500/50"
+          title="Recenter on streamer"
+        >
+          <span className="text-base leading-none">◎</span>
+          Center on streamer
+        </button>
       ) : null}
       {mapExpanded ? (
         <div className="absolute left-4 right-4 top-40 z-40 flex flex-wrap gap-1.5">

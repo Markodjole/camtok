@@ -11,6 +11,8 @@ import { startBroadcasterP2p } from "./liveP2pBroadcast";
 import { transportEmoji } from "./transportEmoji";
 import { StreamGuidanceOverlay } from "./StreamGuidanceOverlay";
 import { LiveEventToasts } from "./LiveEventToasts";
+import { TurnBlinkOverlay, type TurnDirection } from "./TurnBlinkOverlay";
+import { computeStreamGuidance } from "@/lib/live/streamGuidance";
 
 const LiveMap = dynamic(() => import("./LiveMap").then((m) => m.LiveMap), { ssr: false });
 
@@ -61,6 +63,7 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
   const [aiTurnHint, setAiTurnHint] = useState<string | null>(null);
   const [aiTurnEtaSec, setAiTurnEtaSec] = useState<number | null>(null);
   const [aiTurnDistanceM, setAiTurnDistanceM] = useState<number | null>(null);
+  const [mapExpanded, setMapExpanded] = useState(false);
 
   const watchIdRef = useRef<number | null>(null);
   const heartbeatRef = useRef<NodeJS.Timeout | null>(null);
@@ -268,14 +271,73 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
   }, [roomId, sessionId, routePoints]);
 
   if (sessionId && stream) {
+    const guidance = routePoints.length > 0 ? computeStreamGuidance(routePoints) : null;
+    const hintUpper = (aiTurnHint ?? "").toUpperCase();
+    const hintIsLeft = hintUpper === "LEFT";
+    const hintIsRight = hintUpper === "RIGHT";
+    const turnDirection: TurnDirection =
+      hintIsLeft
+        ? "left"
+        : hintIsRight
+          ? "right"
+          : guidance?.kind === "left"
+            ? "left"
+            : guidance?.kind === "right"
+              ? "right"
+              : null;
+    const urgent =
+      (aiTurnEtaSec != null && aiTurnEtaSec <= 7) ||
+      (aiTurnDistanceM != null && aiTurnDistanceM <= 40);
+    const destinationLabel = turnDirection
+      ? turnDirection === "left"
+        ? "Turn left"
+        : "Turn right"
+      : aiTurnHint
+        ? `Next: ${aiTurnHint}`
+        : guidance?.kind === "brake"
+          ? "Slow down"
+          : guidance?.kind === "back"
+            ? "Go back"
+            : guidance
+              ? "Continue straight"
+              : null;
+
     return (
       <div className="relative h-full min-h-0 w-full flex-1 overflow-hidden bg-black">
         {roomId ? <LiveEventToasts roomId={roomId} role="streamer" /> : null}
 
         <div className="absolute inset-0 z-0">
-          <LiveVideoPlayer localStream={stream} className="h-full w-full" />
+          {mapExpanded ? (
+            <LiveMap
+              routePoints={routePoints}
+              className="h-full w-full"
+              interactive={true}
+              audienceRole="streamer"
+              transportMode={transportMode}
+              rotateWithHeading={true}
+              followMode={true}
+              tileOpacity={1}
+              mapCaption={"You \u00b7 follow green arrow"}
+              turnHint={aiTurnHint}
+              turnHintEtaSec={aiTurnEtaSec}
+              turnHintDistanceM={aiTurnDistanceM}
+            />
+          ) : (
+            <LiveVideoPlayer localStream={stream} className="h-full w-full" />
+          )}
         </div>
-        {routePoints.length > 0 ? <StreamGuidanceOverlay points={routePoints} /> : null}
+
+        {!mapExpanded && routePoints.length > 0 ? (
+          <StreamGuidanceOverlay points={routePoints} />
+        ) : null}
+
+        <TurnBlinkOverlay
+          direction={turnDirection}
+          etaSec={aiTurnEtaSec}
+          distanceM={aiTurnDistanceM}
+          label={destinationLabel}
+          urgent={urgent}
+        />
 
         <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-28 bg-gradient-to-b from-black/75 to-transparent" />
 
@@ -294,34 +356,89 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
           )}
         </div>
 
-        <div
-          className="absolute z-10 overflow-hidden rounded-2xl border border-white/20 shadow-2xl backdrop-blur-sm"
-          style={{ top: 56, right: 12, width: "42vw", height: "42vw", maxWidth: 200, maxHeight: 200, opacity: 0.5 }}
-        >
-          <LiveMap
-            routePoints={routePoints}
-            className="h-full w-full"
-            interactive={false}
-            audienceRole="streamer"
-            transportMode={transportMode}
-            tileOpacity={0.3}
-            mapCaption="You · follow green arrow"
-            turnHint={aiTurnHint}
-            turnHintEtaSec={aiTurnEtaSec}
-            turnHintDistanceM={aiTurnDistanceM}
-          />
-          {routePoints.length === 0 && (
-            <div className="absolute inset-0 flex items-center justify-center bg-black/60 text-[9px] text-white/40">
-              Waiting for GPS…
+        {destinationLabel ? (
+          <div className="pointer-events-none absolute left-1/2 top-16 z-30 -translate-x-1/2">
+            <div
+              className={[
+                "flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-bold uppercase tracking-wider backdrop-blur-sm [text-shadow:0_0_4px_#000]",
+                urgent
+                  ? "border-rose-300/70 bg-rose-500/35 text-rose-100"
+                  : turnDirection
+                    ? "border-amber-300/60 bg-amber-500/30 text-amber-100"
+                    : "border-emerald-300/55 bg-emerald-500/25 text-emerald-100",
+              ].join(" ")}
+            >
+              <span>{destinationLabel}</span>
+              {aiTurnEtaSec != null ? (
+                <span className="opacity-80">{`\u00b7 ${Math.max(0, Math.round(aiTurnEtaSec))}s`}</span>
+              ) : null}
+              {aiTurnDistanceM != null ? (
+                <span className="opacity-80">{`\u00b7 ~${Math.max(0, Math.round(aiTurnDistanceM))}m`}</span>
+              ) : null}
             </div>
+          </div>
+        ) : null}
+
+        <div
+          className="absolute z-30 overflow-hidden rounded-2xl border border-white/25 shadow-2xl backdrop-blur-sm"
+          style={{
+            top: 108,
+            right: 12,
+            width: "42vw",
+            height: "42vw",
+            maxWidth: 220,
+            maxHeight: 220,
+            opacity: 0.9,
+          }}
+        >
+          {mapExpanded ? (
+            <LiveVideoPlayer localStream={stream} className="h-full w-full" />
+          ) : (
+            <>
+              <LiveMap
+                routePoints={routePoints}
+                className="h-full w-full"
+                interactive={false}
+                audienceRole="streamer"
+                transportMode={transportMode}
+                rotateWithHeading={true}
+                followMode={true}
+                tileOpacity={0.65}
+                mapCaption={"You \u00b7 follow green arrow"}
+                turnHint={aiTurnHint}
+                turnHintEtaSec={aiTurnEtaSec}
+                turnHintDistanceM={aiTurnDistanceM}
+              />
+              {routePoints.length === 0 && (
+                <div className="absolute inset-0 flex items-center justify-center bg-black/60 text-[9px] text-white/40">
+                  {"Waiting for GPS\u2026"}
+                </div>
+              )}
+            </>
           )}
+
+          <button
+            type="button"
+            onClick={() => setMapExpanded((v) => !v)}
+            className="absolute bottom-1.5 right-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur active:bg-black/80"
+            title={mapExpanded ? "Show camera fullscreen" : "Show map fullscreen"}
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 20 20"
+              fill="currentColor"
+              className="h-3.5 w-3.5"
+            >
+              <path d="M3 7V3h4a1 1 0 110 2H5v2a1 1 0 11-2 0zm10-4h4v4a1 1 0 11-2 0V5h-2a1 1 0 110-2zM3 13a1 1 0 011 1v2h2a1 1 0 110 2H2v-4a1 1 0 011-1zm14 0a1 1 0 011 1v4h-4a1 1 0 110-2h2v-2a1 1 0 011-1z" />
+            </svg>
+          </button>
         </div>
 
         <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-48 bg-gradient-to-t from-black/80 to-transparent" />
 
         <div className="absolute inset-x-0 bottom-0 z-20 px-5 pb-4">
           {roomId && (
-            <p className="mb-3 text-center text-[10px] text-white/30">room {roomId.slice(0, 8)}…</p>
+            <p className="mb-3 text-center text-[10px] text-white/30">{`room ${roomId.slice(0, 8)}\u2026`}</p>
           )}
           <button
             type="button"
