@@ -81,14 +81,14 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
   const [aiTurnEtaSec, setAiTurnEtaSec] = useState<number | null>(null);
   const [aiTurnDistanceM, setAiTurnDistanceM] = useState<number | null>(null);
   const [realTurnPoint, setRealTurnPoint] = useState<{ lat: number; lng: number } | null>(null);
-  const [mapExpanded, setMapExpanded] = useState(false);
+  const [mapExpanded, setMapExpanded] = useState(true);
   const [showZones, setShowZones] = useState(true);
   const [showCheckpoints, setShowCheckpoints] = useState(true);
   const [osmZones, setOsmZones] = useState<MapZone[]>([]);
   const [osmCheckpoints, setOsmCheckpoints] = useState<MapCheckpoint[]>([]);
   const [geoLoadedOnce, setGeoLoadedOnce] = useState(false);
   const [geoLoading, setGeoLoading] = useState(false);
-  const [pipPos, setPipPos] = useState({ top: 96, left: 12 });
+  const [pipPos, setPipPos] = useState({ top: 68, left: 12 });
   const [pipDragReady, setPipDragReady] = useState(false);
 
   const watchIdRef = useRef<number | null>(null);
@@ -96,10 +96,18 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
   const tickRef = useRef<NodeJS.Timeout | null>(null);
   const pipLongPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastGeoKeyRef = useRef<string | null>(null);
-  const pipDragRef = useRef<{ pointerId: number | null; dx: number; dy: number }>({
+  const pipDragRef = useRef<{
+    pointerId: number | null;
+    startX: number;
+    startY: number;
+    baseTop: number;
+    baseLeft: number;
+  }>({
     pointerId: null,
-    dx: 0,
-    dy: 0,
+    startX: 0,
+    startY: 0,
+    baseTop: 0,
+    baseLeft: 0,
   });
   const pendingLocationsRef = useRef<
     Array<{
@@ -363,29 +371,57 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
   }, [routePoints]);
 
   const onPipPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect();
+    const target = e.target as HTMLElement;
+    if (target.closest("[data-pip-no-drag]")) return;
     pipDragRef.current = {
       pointerId: e.pointerId,
-      dx: e.clientX - rect.left,
-      dy: e.clientY - rect.top,
+      startX: e.clientX,
+      startY: e.clientY,
+      baseTop: pipPos.top,
+      baseLeft: pipPos.left,
     };
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      /* no-op */
+    }
     if (pipLongPressTimerRef.current) clearTimeout(pipLongPressTimerRef.current);
     pipLongPressTimerRef.current = setTimeout(() => {
       setPipDragReady(true);
-    }, 180);
+    }, 140);
   };
 
   const onPipPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!pipDragReady || pipDragRef.current.pointerId !== e.pointerId) return;
+    if (pipDragRef.current.pointerId !== e.pointerId) return;
+    const dx = e.clientX - pipDragRef.current.startX;
+    const dy = e.clientY - pipDragRef.current.startY;
+    if (!pipDragReady) {
+      // Arm drag early if the finger moves a clear distance (signals drag intent
+      // before the long-press fires). Without this, quick swipes feel "stuck".
+      if (Math.hypot(dx, dy) > 10) setPipDragReady(true);
+      else return;
+    }
+    e.preventDefault();
     const boxW = Math.min(window.innerWidth * 0.42, 220);
     const boxH = boxW;
-    const nextLeft = Math.max(8, Math.min(window.innerWidth - boxW - 8, e.clientX - pipDragRef.current.dx));
-    const nextTop = Math.max(56, Math.min(window.innerHeight - boxH - 92, e.clientY - pipDragRef.current.dy));
+    const nextLeft = Math.max(
+      8,
+      Math.min(window.innerWidth - boxW - 8, pipDragRef.current.baseLeft + dx),
+    );
+    const nextTop = Math.max(
+      56,
+      Math.min(window.innerHeight - boxH - 92, pipDragRef.current.baseTop + dy),
+    );
     setPipPos({ top: nextTop, left: nextLeft });
   };
 
-  const onPipPointerUp = () => {
+  const onPipPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     if (pipLongPressTimerRef.current) clearTimeout(pipLongPressTimerRef.current);
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      /* no-op */
+    }
     pipDragRef.current.pointerId = null;
     setPipDragReady(false);
   };
@@ -478,35 +514,35 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
 
         <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-28 bg-gradient-to-b from-black/75 to-transparent" />
 
-        <div className="absolute right-3 top-20 z-40 flex flex-col items-end gap-2">
-          <span className="animate-pulse rounded bg-red-500/30 px-2 py-0.5 text-[11px] font-bold text-red-400 tracking-wide shadow-md">
-            LIVE
+        <div className="absolute right-4 top-20 z-40 flex flex-col items-center gap-6">
+          <span
+            className="flex h-2.5 w-2.5 animate-pulse rounded-full bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.9)]"
+            aria-label="Live"
+            title="Live"
+          />
+          <span
+            className="text-xl leading-none drop-shadow"
+            aria-label={transportMode}
+            title={transportMode}
+          >
+            {transportEmoji(transportMode)}
           </span>
-          <span className="rounded-full bg-black/45 px-2.5 py-1 text-[11px] text-white/85 shadow-md backdrop-blur">
-            {transportEmoji(transportMode)} {transportMode}
-          </span>
-          <button
-            type="button"
+          <IconRailButton
+            active={showZones}
             onClick={() => setShowZones((v) => !v)}
-            className={`rounded-full px-2.5 py-1 text-[11px] shadow-md ${
-              showZones ? "bg-cyan-500/30 text-cyan-100" : "bg-white/10 text-white/60"
-            }`}
+            title="Zones"
           >
-            Zones
-          </button>
-          <button
-            type="button"
+            <IconLayers />
+          </IconRailButton>
+          <IconRailButton
+            active={showCheckpoints}
             onClick={() => setShowCheckpoints((v) => !v)}
-            className={`rounded-full px-2.5 py-1 text-[11px] shadow-md ${
-              showCheckpoints ? "bg-fuchsia-500/30 text-fuchsia-100" : "bg-white/10 text-white/60"
-            }`}
+            title="Places"
           >
-            Places
-          </button>
+            <IconPin />
+          </IconRailButton>
           {geoLoading && !geoLoadedOnce ? (
-            <span className="rounded-full bg-black/45 px-2 py-0.5 text-[10px] text-white/70">
-              Loading…
-            </span>
+            <span className="h-1.5 w-1.5 animate-ping rounded-full bg-white/70" />
           ) : null}
         </div>
 
@@ -521,6 +557,9 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
             maxWidth: 220,
             maxHeight: 220,
             opacity: 0.9,
+            touchAction: "none",
+            cursor: pipDragReady ? "grabbing" : "grab",
+            transition: pipDragRef.current.pointerId != null ? "none" : "box-shadow 200ms ease",
           }}
           onPointerDown={onPipPointerDown}
           onPointerMove={onPipPointerMove}
@@ -559,6 +598,7 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
           )}
 
           <button
+            data-pip-no-drag
             type="button"
             onClick={() => setMapExpanded((v) => !v)}
             className="absolute bottom-1.5 right-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur active:bg-black/80"
@@ -650,3 +690,77 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
     </div>
   );
 }
+
+function IconRailButton({
+  active,
+  onClick,
+  title,
+  children,
+}: {
+  active?: boolean;
+  onClick: () => void;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={title}
+      title={title}
+      onClick={onClick}
+      className={`flex h-11 w-11 items-center justify-center rounded-full border border-white/15 bg-black/30 backdrop-blur transition active:scale-95 ${
+        active ? "text-white" : "text-white/45"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function IconLayers() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="h-5 w-5">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 3 3 8l9 5 9-5-9-5Z" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="m3 14 9 5 9-5" opacity={0.7} />
+      <path strokeLinecap="round" strokeLinejoin="round" d="m3 11 9 5 9-5" opacity={0.35} />
+    </svg>
+  );
+}
+
+function IconPin() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="h-5 w-5">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 21s-7-6.1-7-11a7 7 0 1 1 14 0c0 4.9-7 11-7 11Z" />
+      <circle cx={12} cy={10} r={2.4} />
+    </svg>
+  );
+}
+
+function IconSparkle() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="h-5 w-5">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v4M12 17v4M3 12h4M17 12h4M6.3 6.3l2.8 2.8M14.9 14.9l2.8 2.8M6.3 17.7l2.8-2.8M14.9 9.1l2.8-2.8" />
+    </svg>
+  );
+}
+
+function IconCoin() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="h-5 w-5">
+      <circle cx={12} cy={12} r={8.5} />
+      <path strokeLinecap="round" d="M12 7.5v9M14.5 9.5h-3.25a1.75 1.75 0 0 0 0 3.5h1.5a1.75 1.75 0 0 1 0 3.5H9.5" />
+    </svg>
+  );
+}
+
+function IconCrosshair() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="h-5 w-5">
+      <circle cx={12} cy={12} r={7.5} />
+      <circle cx={12} cy={12} r={2.2} fill="currentColor" stroke="none" />
+      <path strokeLinecap="round" d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3" />
+    </svg>
+  );
+}
+
+export { IconRailButton, IconLayers, IconPin, IconSparkle, IconCoin, IconCrosshair };

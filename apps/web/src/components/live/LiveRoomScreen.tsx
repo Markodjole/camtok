@@ -12,6 +12,13 @@ import { SkillFeedbackCard, type SkillFeedbackData } from "./SkillFeedbackCard";
 import { ReplaySheet } from "./ReplaySheet";
 import { TopBar } from "@/components/layout/top-bar";
 import { BottomNav } from "@/components/layout/bottom-nav";
+import {
+  IconRailButton,
+  IconLayers,
+  IconSparkle,
+  IconCoin,
+  IconCrosshair,
+} from "./OwnerLiveControlPanel";
 
 const LiveMap = dynamic(() => import("./LiveMap").then((m) => m.LiveMap), {
   ssr: false,
@@ -153,14 +160,22 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [osmCheckpoints, setOsmCheckpoints] = useState<MapCheckpoint[]>([]);
   const [geoLoadedOnce, setGeoLoadedOnce] = useState(false);
   const [geoLoading, setGeoLoading] = useState(false);
-  const [pipPos, setPipPos] = useState({ top: 96, left: 12 });
+  const [pipPos, setPipPos] = useState({ top: 68, left: 12 });
   const [pipDragReady, setPipDragReady] = useState(false);
   const lastGeoKeyRef = useRef<string | null>(null);
   const pipLongPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pipDragRef = useRef<{ pointerId: number | null; dx: number; dy: number }>({
+  const pipDragRef = useRef<{
+    pointerId: number | null;
+    startX: number;
+    startY: number;
+    baseTop: number;
+    baseLeft: number;
+  }>({
     pointerId: null,
-    dx: 0,
-    dy: 0,
+    startX: 0,
+    startY: 0,
+    baseTop: 0,
+    baseLeft: 0,
   });
   const showLiveBets = true;
   const skillFeedbackTimerRef = { current: null as ReturnType<typeof setTimeout> | null };
@@ -315,29 +330,55 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   }, []);
 
   const onPipPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect();
+    const target = e.target as HTMLElement;
+    if (target.closest("[data-pip-no-drag]")) return;
     pipDragRef.current = {
       pointerId: e.pointerId,
-      dx: e.clientX - rect.left,
-      dy: e.clientY - rect.top,
+      startX: e.clientX,
+      startY: e.clientY,
+      baseTop: pipPos.top,
+      baseLeft: pipPos.left,
     };
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      /* no-op */
+    }
     if (pipLongPressTimerRef.current) clearTimeout(pipLongPressTimerRef.current);
     pipLongPressTimerRef.current = setTimeout(() => {
       setPipDragReady(true);
-    }, 180);
+    }, 140);
   };
 
   const onPipPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!pipDragReady || pipDragRef.current.pointerId !== e.pointerId) return;
+    if (pipDragRef.current.pointerId !== e.pointerId) return;
+    const dx = e.clientX - pipDragRef.current.startX;
+    const dy = e.clientY - pipDragRef.current.startY;
+    if (!pipDragReady) {
+      if (Math.hypot(dx, dy) > 10) setPipDragReady(true);
+      else return;
+    }
+    e.preventDefault();
     const boxW = Math.min(window.innerWidth * 0.56, 260);
     const boxH = boxW;
-    const nextLeft = Math.max(8, Math.min(window.innerWidth - boxW - 8, e.clientX - pipDragRef.current.dx));
-    const nextTop = Math.max(56, Math.min(window.innerHeight - boxH - 92, e.clientY - pipDragRef.current.dy));
+    const nextLeft = Math.max(
+      8,
+      Math.min(window.innerWidth - boxW - 8, pipDragRef.current.baseLeft + dx),
+    );
+    const nextTop = Math.max(
+      56,
+      Math.min(window.innerHeight - boxH - 92, pipDragRef.current.baseTop + dy),
+    );
     setPipPos({ top: nextTop, left: nextLeft });
   };
 
-  const onPipPointerUp = () => {
+  const onPipPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     if (pipLongPressTimerRef.current) clearTimeout(pipLongPressTimerRef.current);
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      /* no-op */
+    }
     pipDragRef.current.pointerId = null;
     setPipDragReady(false);
   };
@@ -455,43 +496,31 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       </div>
 
       {mapExpanded ? (
-        <div className="absolute right-3 top-24 z-40 flex flex-col items-end gap-2">
-          <button
-            type="button"
+        <div className="absolute right-4 top-24 z-40 flex flex-col items-center gap-6">
+          <IconRailButton
+            active={showZones}
             onClick={() => setShowZones((v) => !v)}
-            className={`rounded-full px-2.5 py-1 text-[11px] shadow-md ${
-              showZones ? "bg-cyan-500/30 text-cyan-100" : "bg-white/10 text-white/60"
-            }`}
+            title="Zones"
           >
-            Zones
-          </button>
-          <button
-            type="button"
+            <IconLayers />
+          </IconRailButton>
+          <IconRailButton
+            active={showCheckpoints}
             onClick={() => setShowCheckpoints((v) => !v)}
-            className={`rounded-full px-2.5 py-1 text-[11px] shadow-md ${
-              showCheckpoints ? "bg-fuchsia-500/30 text-fuchsia-100" : "bg-white/10 text-white/60"
-            }`}
+            title="Attractions"
           >
-            Attractions
-          </button>
-          <button
-            type="button"
-            className="rounded-full bg-emerald-500/30 px-2.5 py-1 text-[11px] text-emerald-100 shadow-md"
-          >
-            Live bets
-          </button>
-          <button
-            type="button"
+            <IconSparkle />
+          </IconRailButton>
+          <IconRailButton active onClick={() => undefined} title="Live bets">
+            <IconCoin />
+          </IconRailButton>
+          <IconRailButton
+            active={mapFollow}
             onClick={() => setMapFollow(true)}
-            className={`rounded-full px-2.5 py-1 text-[11px] shadow-md ${
-              mapFollow
-                ? "bg-emerald-500/30 text-emerald-100"
-                : "bg-amber-500/30 text-amber-100"
-            }`}
             title={mapFollow ? "Following streamer" : "Tap to follow streamer"}
           >
-            {mapFollow ? "Following" : "Center"}
-          </button>
+            <IconCrosshair />
+          </IconRailButton>
         </div>
       ) : null}
       {mapExpanded && geoLoading && !geoLoadedOnce ? (
@@ -570,6 +599,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           maxWidth: 260,
           maxHeight: 260,
           opacity: 0.9,
+          touchAction: "none",
+          cursor: pipDragReady ? "grabbing" : "grab",
         }}
         onPointerDown={onPipPointerDown}
         onPointerMove={onPipPointerMove}
@@ -612,6 +643,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
         {/* Swap / expand button */}
         <button
+          data-pip-no-drag
           type="button"
           onClick={() => setMapExpanded((v) => !v)}
           className="absolute bottom-1.5 right-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-black/50 text-white backdrop-blur active:bg-black/75"
