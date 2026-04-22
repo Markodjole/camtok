@@ -118,6 +118,8 @@ export function LiveMap({
   const checkpointLayerRef = useRef<import("leaflet").LayerGroup | null>(null);
   const hasAppliedInitialZoomRef = useRef(false);
   const onUserInteractRef = useRef<(() => void) | undefined>(undefined);
+  const motionRafRef = useRef<number | null>(null);
+  const lastGpsAtMsRef = useRef<number | null>(null);
   const [mapReady, setMapReady] = useState(0);
   const [rotationDeg, setRotationDeg] = useState(0);
   useEffect(() => {
@@ -172,7 +174,9 @@ export function LiveMap({
     })();
     return () => {
       done = true;
+      if (motionRafRef.current != null) cancelAnimationFrame(motionRafRef.current);
       hasAppliedInitialZoomRef.current = false;
+      lastGpsAtMsRef.current = null;
       plRef.current = null;
       dotRef.current = null;
       arRef.current = null;
@@ -304,11 +308,8 @@ export function LiveMap({
         }).addTo(m);
       }
       if (followMode) {
-        const zoomChanged = Math.abs(m.getZoom() - targetZoom) > 0.01;
-        if (isFirstFollowFrame || zoomChanged) {
+        if (isFirstFollowFrame) {
           m.setView(pos, targetZoom, { animate: true, duration: 0.45 });
-        } else {
-          m.panTo(pos, { animate: true, duration: 2.2, easeLinearity: 0.2, noMoveStart: true });
         }
         hasAppliedInitialZoomRef.current = true;
       }
@@ -337,6 +338,63 @@ export function LiveMap({
     rotateWithHeading,
     followMode,
   ]);
+
+  useEffect(() => {
+    const m = mapRef.current;
+    const dot = dotRef.current;
+    if (!m || !dot || routePoints.length === 0) return;
+
+    const last = routePoints[routePoints.length - 1]!;
+    const prev = routePoints.length > 1 ? routePoints[routePoints.length - 2]! : null;
+    const current = dot.getLatLng();
+    const startPos: [number, number] = [current.lat, current.lng];
+    const targetPos: [number, number] = [last.lat, last.lng];
+    const heading = last.heading ?? 0;
+
+    const now = performance.now();
+    const sinceLastGpsSec = lastGpsAtMsRef.current != null ? Math.max(0.7, Math.min(2.8, (now - lastGpsAtMsRef.current) / 1000)) : 1.2;
+    lastGpsAtMsRef.current = now;
+
+    const vLatPerSec = prev ? (last.lat - prev.lat) / sinceLastGpsSec : 0;
+    const vLngPerSec = prev ? (last.lng - prev.lng) / sinceLastGpsSec : 0;
+    const settleMs = 800;
+    const tailMs = 1400;
+    const totalMs = settleMs + tailMs;
+    const frameStart = performance.now();
+
+    if (motionRafRef.current != null) cancelAnimationFrame(motionRafRef.current);
+    const tick = () => {
+      const t = performance.now() - frameStart;
+      let lat = targetPos[0];
+      let lng = targetPos[1];
+      if (t < settleMs) {
+        const p = t / settleMs;
+        lat = startPos[0] + (targetPos[0] - startPos[0]) * p;
+        lng = startPos[1] + (targetPos[1] - startPos[1]) * p;
+      } else if (t < totalMs) {
+        const k = (t - settleMs) / 1000;
+        lat = targetPos[0] + vLatPerSec * k;
+        lng = targetPos[1] + vLngPerSec * k;
+      }
+
+      const livePos: [number, number] = [lat, lng];
+      dot.setLatLng(livePos);
+      if (arRef.current) arRef.current.setLatLng(livePos);
+      if (followMode) {
+        m.setView(livePos, m.getZoom(), { animate: false });
+        if (rotateWithHeading) setRotationDeg(-heading);
+      }
+
+      if (t < totalMs) {
+        motionRafRef.current = requestAnimationFrame(tick);
+      }
+    };
+    motionRafRef.current = requestAnimationFrame(tick);
+    return () => {
+      if (motionRafRef.current != null) cancelAnimationFrame(motionRafRef.current);
+      motionRafRef.current = null;
+    };
+  }, [routePoints, followMode, rotateWithHeading]);
 
   return (
     <div className="relative h-full w-full" style={{ background: "rgba(10,10,20,0.4)" }}>

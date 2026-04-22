@@ -457,15 +457,48 @@ async function settleMarketWithWinner(
     const fav = ((pub as { favorite_turn_tendencies?: Record<string, number> } | null)?.favorite_turn_tendencies ??
       {}) as Record<string, number>;
     fav[winningOptionId] = (fav[winningOptionId] ?? 0) + 1;
+
+    // Detect a missed turn: market had directional turn options but driver went straight.
+    const winId = winningOptionId.toLowerCase();
+    const wentStraight = winId.includes("straight") || winId.includes("continue") || winId.includes("forward");
+    const settledOptionSet = (bets != null
+      ? (await service.from("live_betting_markets").select("option_set").eq("id", marketId).maybeSingle()).data
+      : null) as { option_set?: Array<{ id: string; label?: string }> } | null;
+    const marketHadTurns = (settledOptionSet?.option_set ?? []).some((o) => {
+      const ol = (o.id + " " + (o.label ?? "")).toLowerCase();
+      return ol.includes("left") || ol.includes("right") || ol.includes("turn");
+    });
+    const isMissedTurn = wentStraight && marketHadTurns;
+
+    const { data: currentDriverStats } = await service
+      .from("character_public_game_stats")
+      .select("missed_turns_total")
+      .eq("character_id", characterId)
+      .maybeSingle();
+    const currentMissed = (currentDriverStats as { missed_turns_total?: number } | null)?.missed_turns_total ?? 0;
+
     await service.from("character_public_game_stats").upsert(
       {
         character_id: characterId,
         crowd_prediction_accuracy: crowdAcc,
         favorite_turn_tendencies: fav,
+        missed_turns_total: isMissedTurn ? currentMissed + 1 : currentMissed,
         updated_at: settledAt,
       },
       { onConflict: "character_id" },
     );
+
+    if (isMissedTurn) {
+      await service.from("character_route_game_state").upsert(
+        {
+          character_id: characterId,
+          live_session_id: liveSessionId,
+          missed_turn: true,
+          updated_at: settledAt,
+        },
+        { onConflict: "character_id" },
+      );
+    }
     await applyBehaviorLearningNudges(service, {
       characterId,
       winningOptionId,

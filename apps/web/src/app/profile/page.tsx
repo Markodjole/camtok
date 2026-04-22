@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { LogOut, Pencil, Sparkles, Trophy, Target, TrendingUp } from "lucide-react";
+import { LogOut, Pencil, Sparkles, Trophy, Target, TrendingUp, Navigation, AlertTriangle, Gauge } from "lucide-react";
 import { AppShell } from "@/components/layout/app-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -72,25 +72,24 @@ export default function ProfilePage() {
             </CardContent>
           </Card>
 
-          {/* Stats */}
+          {/* Betting stats */}
           <Card>
             <CardContent className="p-0">
               <div className="flex divide-x divide-border">
-                <StatItem
-                  icon={Target}
-                  label="Bets"
-                  value={profile?.total_bets ?? 0}
-                />
-                <StatItem
-                  icon={Trophy}
-                  label="Wins"
-                  value={profile?.total_wins ?? 0}
-                />
-                <StatItem
-                  icon={TrendingUp}
-                  label="Predictions"
-                  value={profile?.total_predictions ?? 0}
-                />
+                <StatItem icon={Target} label="Bets" value={profile?.total_bets ?? 0} />
+                <StatItem icon={Trophy} label="Wins" value={profile?.total_wins ?? 0} />
+                <StatItem icon={TrendingUp} label="Predictions" value={profile?.total_predictions ?? 0} />
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Driver stats */}
+          <Card>
+            <CardContent className="p-0">
+              <div className="flex divide-x divide-border">
+                <StatItem icon={Navigation} label="Sessions" value={(profile as Record<string, unknown> & { sessions_total?: number })?.sessions_total ?? 0} />
+                <StatItem icon={AlertTriangle} label="Missed turns" value={(profile as Record<string, unknown> & { missed_turns_total?: number })?.missed_turns_total ?? 0} />
+                <StatItem icon={Gauge} label="Km driven" value={Math.round(((profile as Record<string, unknown> & { total_distance_km?: number })?.total_distance_km ?? 0))} />
               </div>
             </CardContent>
           </Card>
@@ -124,7 +123,7 @@ export default function ProfilePage() {
                 }
               >
                 <Sparkles className="h-4 w-4" />
-                My BetTok character
+                My driver profile
               </Link>
             </Button>
 
