@@ -10,7 +10,6 @@ import { LiveVideoPlayer } from "./LiveVideoPlayer";
 import { startBroadcasterP2p } from "./liveP2pBroadcast";
 import { transportEmoji } from "./transportEmoji";
 import { StreamGuidanceOverlay } from "./StreamGuidanceOverlay";
-import { LiveEventToasts } from "./LiveEventToasts";
 import { TurnBlinkOverlay, type TurnDirection } from "./TurnBlinkOverlay";
 import { computeStreamGuidance } from "@/lib/live/streamGuidance";
 
@@ -220,6 +219,7 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
   useEffect(() => {
     if (!roomId || !sessionId) return;
     let cancelled = false;
+    const EARLY_TURN_LEAD_SEC = 8;
     const toHint = (room: LiveFeedRow | null): { label: string | null; locksAt: string | null } => {
       if (!room?.currentMarket?.options?.length) return { label: null, locksAt: null };
       const opts = room.currentMarket.options;
@@ -254,7 +254,11 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
           setAiTurnDistanceM(null);
           return;
         }
-        const etaSec = Math.max(0, (new Date(hint.locksAt).getTime() - Date.now()) / 1000);
+        // Bias guidance earlier so drivers get enough time before the actual lock/reveal window.
+        const etaSec = Math.max(
+          0,
+          (new Date(hint.locksAt).getTime() - Date.now()) / 1000 + EARLY_TURN_LEAD_SEC,
+        );
         setAiTurnEtaSec(etaSec);
         const speed = routePoints[routePoints.length - 1]?.speedMps ?? 0;
         setAiTurnDistanceM(speed > 0 ? speed * etaSec : null);
@@ -263,14 +267,37 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
       }
     };
     void fetchState();
-    const id = setInterval(fetchState, 2000);
+    const id = setInterval(fetchState, 1200);
     return () => {
       cancelled = true;
       clearInterval(id);
     };
   }, [roomId, sessionId, routePoints]);
 
+  function projectTurnTarget(): { lat: number; lng: number; kind: "left" | "right" | "straight"; label: string } | null {
+    const last = routePoints[routePoints.length - 1];
+    if (!last || !aiTurnHint) return null;
+    const hint = aiTurnHint.toUpperCase();
+    const kind: "left" | "right" | "straight" =
+      hint.includes("LEFT") ? "left" : hint.includes("RIGHT") ? "right" : "straight";
+    const headingDeg = last.heading ?? 0;
+    const meters = Math.max(18, Math.min(220, aiTurnDistanceM ?? 70));
+    const headingRad = (headingDeg * Math.PI) / 180;
+    const dLat = (Math.cos(headingRad) * meters) / 111_320;
+    const dLng =
+      (Math.sin(headingRad) * meters) /
+      (111_320 * Math.cos((last.lat * Math.PI) / 180));
+    return {
+      lat: last.lat + dLat,
+      lng: last.lng + dLng,
+      kind,
+      label:
+        kind === "left" ? "Turn left here" : kind === "right" ? "Turn right here" : "Stay straight",
+    };
+  }
+
   if (sessionId && stream) {
+    const turnTarget = projectTurnTarget();
     const guidance = routePoints.length > 0 ? computeStreamGuidance(routePoints) : null;
     const hintUpper = (aiTurnHint ?? "").toUpperCase();
     const hintIsLeft = hintUpper === "LEFT";
@@ -304,8 +331,6 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
 
     return (
       <div className="relative h-full min-h-0 w-full flex-1 overflow-hidden bg-black">
-        {roomId ? <LiveEventToasts roomId={roomId} role="streamer" /> : null}
-
         <div className="absolute inset-0 z-0">
           {mapExpanded ? (
             <LiveMap
@@ -321,6 +346,7 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
               turnHint={aiTurnHint}
               turnHintEtaSec={aiTurnEtaSec}
               turnHintDistanceM={aiTurnDistanceM}
+              turnTarget={turnTarget}
             />
           ) : (
             <LiveVideoPlayer localStream={stream} className="h-full w-full" />
@@ -408,6 +434,7 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
                 turnHint={aiTurnHint}
                 turnHintEtaSec={aiTurnEtaSec}
                 turnHintDistanceM={aiTurnDistanceM}
+                turnTarget={turnTarget}
               />
               {routePoints.length === 0 && (
                 <div className="absolute inset-0 flex items-center justify-center bg-black/60 text-[9px] text-white/40">

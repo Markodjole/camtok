@@ -141,6 +141,42 @@ function zoneColor(placeType: string | undefined, adminLevel: string | undefined
   return "#60a5fa";
 }
 
+function radialPolygon(lat: number, lng: number, radiusM: number, points = 10): GeoPoint[] {
+  const out: GeoPoint[] = [];
+  for (let i = 0; i < points; i++) {
+    const angle = (Math.PI * 2 * i) / points;
+    const dy = (Math.sin(angle) * radiusM) / 111_320;
+    const dx = (Math.cos(angle) * radiusM) / (111_320 * Math.cos((lat * Math.PI) / 180));
+    out.push({ lat: lat + dy, lng: lng + dx });
+  }
+  return out;
+}
+
+function offsetMeters(lat: number, lng: number, dxMeters: number, dyMeters: number): GeoPoint {
+  const dy = dyMeters / 111_320;
+  const dx = dxMeters / (111_320 * Math.cos((lat * Math.PI) / 180));
+  return { lat: lat + dy, lng: lng + dx };
+}
+
+function sectorPolygon(
+  lat: number,
+  lng: number,
+  startRad: number,
+  endRad: number,
+  outerRadiusM: number,
+  arcSteps = 8,
+): GeoPoint[] {
+  const ring: GeoPoint[] = [{ lat, lng }];
+  for (let i = 0; i <= arcSteps; i++) {
+    const t = i / arcSteps;
+    const a = startRad + (endRad - startRad) * t;
+    const dx = Math.cos(a) * outerRadiusM;
+    const dy = Math.sin(a) * outerRadiusM;
+    ring.push(offsetMeters(lat, lng, dx, dy));
+  }
+  return ring;
+}
+
 // --- Route ------------------------------------------------------------------
 
 export async function GET(req: NextRequest) {
@@ -156,6 +192,7 @@ export async function GET(req: NextRequest) {
   const overpassQuery = `
 [out:json][timeout:25];
 (
+  node(around:6000,${lat},${lng})["place"~"^(neighbourhood|suburb|quarter|district|borough|city_block)$"]["name"];
   way(around:6000,${lat},${lng})["place"~"^(neighbourhood|suburb|quarter|district|borough|city_block)$"]["name"];
   relation(around:6000,${lat},${lng})["place"~"^(neighbourhood|suburb|quarter|district|borough|city_block)$"]["name"];
   relation(around:6000,${lat},${lng})["boundary"="administrative"]["admin_level"~"^(9|10|11)$"]["name"];
@@ -189,80 +226,86 @@ out geom 120;
 
   const elements = payload?.elements ?? [];
 
-  // ── Zones ─────────────────────────────────────────────────────────────────
-
-  const zoneCandidates: Array<{
-    id: string;
-    name: string;
-    placeType: string;
-    color: string;
-    polygon: GeoPoint[];
-    dist: number;
-  }> = [];
-
-  for (const el of elements) {
-    const tags = el.tags ?? {};
-    const name = tags.name;
-    const placeType = tags.place;
-    const adminLevel = tags.admin_level;
-    // Must have a name and be a boundary-type element
-    if (!name) continue;
-    if (!placeType && !adminLevel) continue;
-
-    let ring: GeoPoint[] | null = null;
-    if (el.type === "way") {
-      ring = wayToRing(el);
-    } else if (el.type === "relation") {
-      ring = relationToRing(el);
-      // Fallback: use bounds rectangle if member geometry is missing
-      if (!ring && el.bounds) {
-        const { minlat, minlon, maxlat, maxlon } = el.bounds;
-        ring = [
-          { lat: minlat, lng: minlon },
-          { lat: maxlat, lng: minlon },
-          { lat: maxlat, lng: maxlon },
-          { lat: minlat, lng: maxlon },
-        ];
+  // ── Zones (full-map coverage using real place anchors) ───────────────────
+  // We use real OSM place names/centers, then generate contiguous sectors that
+  // cover the visible map area around the streamer so there are no "holes".
+  const placeAnchors = elements
+    .map((el) => {
+      const tags = el.tags ?? {};
+      const name = tags.name;
+      const placeType = tags.place;
+      const adminLevel = tags.admin_level;
+      if (!name) return null;
+      if (!placeType && !adminLevel) return null;
+      let cLat: number | null = null;
+      let cLng: number | null = null;
+      if (el.type === "node") {
+        cLat = el.lat ?? null;
+        cLng = el.lon ?? null;
+      } else {
+        const ring = el.type === "way" ? wayToRing(el) : relationToRing(el);
+        if (ring && ring.length >= 3) {
+          const c = centroid(ring);
+          cLat = c.lat;
+          cLng = c.lng;
+        } else if (el.center) {
+          cLat = el.center.lat;
+          cLng = el.center.lon;
+        }
       }
-    }
-    if (!ring || ring.length < 3) continue;
+      if (cLat == null || cLng == null) return null;
+      const dist = distanceMeters(lat, lng, cLat, cLng);
+      if (dist > 15_000) return null;
+      return {
+        name,
+        placeType: placeType ?? "administrative",
+        adminLevel,
+        lat: cLat,
+        lng: cLng,
+        dist,
+      };
+    })
+    .filter((x): x is NonNullable<typeof x> => x !== null)
+    .sort((a, b) => a.dist - b.dist);
 
-    // Filter out polygons that are absurdly large (> 50 km²) or tiny (< 0.005 km²)
-    const area = polygonAreaM2(ring);
-    if (area > 50_000_000 || area < 5_000) continue;
+  const dedupAnchors: typeof placeAnchors = [];
+  const seenAnchorNames = new Set<string>();
+  for (const a of placeAnchors) {
+    const key = a.name.toLowerCase();
+    if (seenAnchorNames.has(key)) continue;
+    seenAnchorNames.add(key);
+    dedupAnchors.push(a);
+    if (dedupAnchors.length >= 18) break;
+  }
 
-    const center = centroid(ring);
-    const dist = distanceMeters(lat, lng, center.lat, center.lng);
-
-    // Must overlap or be very close – centroid within 7 km
-    if (dist > 7_000) continue;
-
-    zoneCandidates.push({
-      id: `zone-osm-${el.type}-${el.id}`,
+  const sectorCount = Math.max(6, Math.min(12, dedupAnchors.length || 6));
+  const coverageRadiusM = 2600;
+  const zones = Array.from({ length: sectorCount }, (_, idx) => {
+    const a0 = (Math.PI * 2 * idx) / sectorCount;
+    const a1 = (Math.PI * 2 * (idx + 1)) / sectorCount;
+    const mid = (a0 + a1) / 2;
+    const probe = offsetMeters(lat, lng, Math.cos(mid) * 900, Math.sin(mid) * 900);
+    const nearest =
+      dedupAnchors.length > 0
+        ? dedupAnchors.reduce((best, cur) => {
+            const db = distanceMeters(probe.lat, probe.lng, best.lat, best.lng);
+            const dc = distanceMeters(probe.lat, probe.lng, cur.lat, cur.lng);
+            return dc < db ? cur : best;
+          })
+        : null;
+    const name = nearest?.name ?? `Zone ${idx + 1}`;
+    const placeType = nearest?.placeType;
+    const adminLevel = nearest?.adminLevel;
+    return {
+      id: `zone-cover-${idx}`,
+      slug: name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, ""),
       name,
-      placeType: placeType ?? "administrative",
+      kind: "district" as const,
       color: zoneColor(placeType, adminLevel),
-      polygon: simplify(ring, 48), // keep detail but cap points
-      dist,
-    });
-  }
-
-  // Deduplicate by name, keep closest
-  const seenZones = new Map<string, (typeof zoneCandidates)[0]>();
-  for (const z of zoneCandidates.sort((a, b) => a.dist - b.dist)) {
-    const key = z.name.toLowerCase();
-    if (!seenZones.has(key)) seenZones.set(key, z);
-  }
-
-  const zones = [...seenZones.values()].slice(0, 8).map((z) => ({
-    id: z.id,
-    slug: z.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, ""),
-    name: z.name,
-    kind: "district" as const,
-    color: z.color,
-    isActive: true,
-    polygon: z.polygon,
-  }));
+      isActive: true,
+      polygon: simplify(sectorPolygon(lat, lng, a0, a1, coverageRadiusM, 10), 36),
+    };
+  });
 
   // ── Checkpoints / Tourist attractions ─────────────────────────────────────
 

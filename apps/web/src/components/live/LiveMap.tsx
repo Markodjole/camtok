@@ -51,6 +51,12 @@ export interface LiveMapProps {
   followMode?: boolean;
   /** Called when the user manually pans the map (dragstart) while interactive. */
   onUserInteract?: () => void;
+  turnTarget?: {
+    lat: number;
+    lng: number;
+    kind?: "left" | "right" | "straight";
+    label?: string;
+  } | null;
 }
 
 const C = {
@@ -84,6 +90,13 @@ function mapProfile(mode?: string): {
   return { zoom: 18, lineWeight: 3, showSpeed: false, speedUnit: "none" };
 }
 
+function normalizeAngleDeg(deg: number): number {
+  let v = deg;
+  while (v > 180) v -= 360;
+  while (v < -180) v += 360;
+  return v;
+}
+
 export function LiveMap({
   routePoints,
   className = "",
@@ -107,6 +120,7 @@ export function LiveMap({
   onCheckpointSelect,
   followMode = true,
   onUserInteract,
+  turnTarget = null,
 }: LiveMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<import("leaflet").Map | null>(null);
@@ -116,10 +130,12 @@ export function LiveMap({
   const arRef = useRef<import("leaflet").Marker | null>(null);
   const zoneLayerRef = useRef<import("leaflet").LayerGroup | null>(null);
   const checkpointLayerRef = useRef<import("leaflet").LayerGroup | null>(null);
+  const turnLayerRef = useRef<import("leaflet").LayerGroup | null>(null);
   const hasAppliedInitialZoomRef = useRef(false);
   const onUserInteractRef = useRef<(() => void) | undefined>(undefined);
   const motionRafRef = useRef<number | null>(null);
   const lastGpsAtMsRef = useRef<number | null>(null);
+  const smoothHeadingRef = useRef<number>(0);
   const [mapReady, setMapReady] = useState(0);
   const [rotationDeg, setRotationDeg] = useState(0);
   useEffect(() => {
@@ -168,6 +184,7 @@ export function LiveMap({
       t.addTo(m);
       zoneLayerRef.current = L.layerGroup().addTo(m);
       checkpointLayerRef.current = L.layerGroup().addTo(m);
+      turnLayerRef.current = L.layerGroup().addTo(m);
       layerRef.current = t;
       mapRef.current = m;
       setMapReady((n) => n + 1);
@@ -182,6 +199,7 @@ export function LiveMap({
       arRef.current = null;
       zoneLayerRef.current = null;
       checkpointLayerRef.current = null;
+      turnLayerRef.current = null;
       mapRef.current?.remove();
       mapRef.current = null;
       layerRef.current = null;
@@ -255,6 +273,60 @@ export function LiveMap({
   ]);
 
   useEffect(() => {
+    const group = turnLayerRef.current;
+    if (!group) return;
+    (async () => {
+      const L = (await import("leaflet")).default;
+      group.clearLayers();
+      if (!turnTarget) return;
+      const kind = turnTarget.kind ?? "straight";
+      const color =
+        kind === "left" ? "#22c55e" : kind === "right" ? "#10b981" : "#34d399";
+      const pos: [number, number] = [turnTarget.lat, turnTarget.lng];
+
+      // Destination-like target ring.
+      L.circle(pos, {
+        radius: 22,
+        color,
+        weight: 2,
+        fillColor: color,
+        fillOpacity: 0.22,
+        opacity: 0.95,
+      }).addTo(group);
+
+      L.circleMarker(pos, {
+        radius: 6,
+        color: "#ffffff",
+        weight: 2,
+        fillColor: color,
+        fillOpacity: 0.95,
+      }).addTo(group);
+
+      if (turnTarget.label) {
+        L.marker(pos, {
+          icon: L.divIcon({
+            className: "camtok-turn-target",
+            html: `<div style="
+              background: rgba(0,0,0,0.72);
+              color: #dcfce7;
+              border: 1px solid rgba(34,197,94,0.65);
+              border-radius: 9999px;
+              padding: 2px 8px;
+              font-size: 10px;
+              font-weight: 700;
+              text-transform: uppercase;
+              white-space: nowrap;
+              text-shadow: 0 0 4px #000;
+            ">${turnTarget.label}</div>`,
+            iconAnchor: [0, 24],
+          }),
+          interactive: false,
+        }).addTo(group);
+      }
+    })();
+  }, [turnTarget, mapReady]);
+
+  useEffect(() => {
     const m = mapRef.current;
     if (!m) return;
     (async () => {
@@ -318,8 +390,18 @@ export function LiveMap({
       // Rotation is applied to an oversized wrapper (see JSX), not the map box,
       // to avoid empty corners while preserving a fully filled frame.
       if (followMode && rotateWithHeading && last.heading != null) {
-        setRotationDeg(-last.heading);
+        const target = -last.heading;
+        if (!hasAppliedInitialZoomRef.current) {
+          smoothHeadingRef.current = target;
+        } else {
+          const delta = normalizeAngleDeg(target - smoothHeadingRef.current);
+          smoothHeadingRef.current = normalizeAngleDeg(
+            smoothHeadingRef.current + delta * 0.28,
+          );
+        }
+        setRotationDeg(smoothHeadingRef.current);
       } else if (followMode) {
+        smoothHeadingRef.current = 0;
         setRotationDeg(0);
       }
     })();
@@ -407,7 +489,7 @@ export function LiveMap({
                   inset: "-24%",
                   transform: `rotate(${rotationDeg}deg)`,
                   transformOrigin: "50% 50%",
-                  transition: "transform 240ms linear",
+                  transition: "transform 560ms cubic-bezier(0.22,0.61,0.36,1)",
                 }
               : {
                   position: "absolute",

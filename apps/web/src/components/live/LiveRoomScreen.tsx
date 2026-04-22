@@ -151,6 +151,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [mapFollow, setMapFollow] = useState(true);
   const [osmZones, setOsmZones] = useState<MapZone[]>([]);
   const [osmCheckpoints, setOsmCheckpoints] = useState<MapCheckpoint[]>([]);
+  const [geoLoadedOnce, setGeoLoadedOnce] = useState(false);
+  const [geoLoading, setGeoLoading] = useState(false);
   const lastGeoKeyRef = useRef<string | null>(null);
   const showLiveBets = true;
   const skillFeedbackTimerRef = { current: null as ReturnType<typeof setTimeout> | null };
@@ -240,8 +242,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     () => buildMapObjects(routePoints[routePoints.length - 1] ?? initialRoom.routePoints?.[0] ?? null),
     [routePoints, initialRoom.routePoints],
   );
-  const zones = osmZones.length > 0 ? osmZones : fallbackMapObjects.zones;
-  const checkpoints = osmCheckpoints.length > 0 ? osmCheckpoints : fallbackMapObjects.checkpoints;
+  const zones = geoLoadedOnce ? osmZones : fallbackMapObjects.zones;
+  const checkpoints = geoLoadedOnce ? osmCheckpoints : fallbackMapObjects.checkpoints;
   const selectedZone = zones.find((z) => z.id === selectedZoneId) ?? null;
   const selectedCheckpoint = checkpoints.find((c) => c.id === selectedCheckpointId) ?? null;
   const selectedTargetLabel = selectedZone?.name ?? selectedCheckpoint?.name ?? null;
@@ -264,19 +266,28 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
     const fetchGeoContext = async () => {
       try {
+        setGeoLoading(true);
         const res = await fetch(`/api/live/geo-context?lat=${lat}&lng=${lng}`, {
           cache: "no-store",
         });
-        if (!res.ok) return;
+        if (!res.ok) {
+          if (!cancelled) setGeoLoadedOnce(true);
+          return;
+        }
         const json = (await res.json()) as {
           zones?: MapZone[];
           checkpoints?: MapCheckpoint[];
         };
         if (cancelled) return;
-        setOsmZones(Array.isArray(json.zones) ? json.zones : []);
-        setOsmCheckpoints(Array.isArray(json.checkpoints) ? json.checkpoints : []);
+        const nextZones = Array.isArray(json.zones) ? json.zones : [];
+        const nextCheckpoints = Array.isArray(json.checkpoints) ? json.checkpoints : [];
+        setOsmZones(nextZones);
+        setOsmCheckpoints(nextCheckpoints);
+        setGeoLoadedOnce(true);
       } catch {
-        // Keep existing/fallback map objects if network call fails.
+        if (!cancelled) setGeoLoadedOnce(true);
+      } finally {
+        if (!cancelled) setGeoLoading(false);
       }
     };
 
@@ -435,6 +446,11 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           >
             {mapFollow ? "Following" : "Center"}
           </button>
+        </div>
+      ) : null}
+      {mapExpanded && geoLoading && !geoLoadedOnce ? (
+        <div className="pointer-events-none absolute left-4 right-4 top-40 z-40 rounded-xl border border-white/20 bg-black/45 px-3 py-2 text-[11px] text-white/80 backdrop-blur">
+          Loading zones…
         </div>
       ) : null}
       {mapExpanded && !mapFollow ? (
