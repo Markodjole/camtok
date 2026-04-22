@@ -131,6 +131,7 @@ export function LiveMap({
   const zoneLayerRef = useRef<import("leaflet").LayerGroup | null>(null);
   const checkpointLayerRef = useRef<import("leaflet").LayerGroup | null>(null);
   const turnLayerRef = useRef<import("leaflet").LayerGroup | null>(null);
+  const railLayerRef = useRef<import("leaflet").LayerGroup | null>(null);
   const hasAppliedInitialZoomRef = useRef(false);
   const onUserInteractRef = useRef<(() => void) | undefined>(undefined);
   const motionRafRef = useRef<number | null>(null);
@@ -184,6 +185,7 @@ export function LiveMap({
       t.addTo(m);
       zoneLayerRef.current = L.layerGroup().addTo(m);
       checkpointLayerRef.current = L.layerGroup().addTo(m);
+      railLayerRef.current = L.layerGroup().addTo(m);
       turnLayerRef.current = L.layerGroup().addTo(m);
       layerRef.current = t;
       mapRef.current = m;
@@ -199,6 +201,7 @@ export function LiveMap({
       arRef.current = null;
       zoneLayerRef.current = null;
       checkpointLayerRef.current = null;
+      railLayerRef.current = null;
       turnLayerRef.current = null;
       mapRef.current?.remove();
       mapRef.current = null;
@@ -274,12 +277,64 @@ export function LiveMap({
 
   useEffect(() => {
     const group = turnLayerRef.current;
-    if (!group) return;
+    const rail = railLayerRef.current;
+    if (!group || !rail) return;
     (async () => {
       const L = (await import("leaflet")).default;
       group.clearLayers();
+      rail.clearLayers();
       if (!turnTarget) return;
       const pos: [number, number] = [turnTarget.lat, turnTarget.lng];
+
+      // Draw a "rails"-style blue path from the driver through the turn point
+      // and ~50 m after it in the direction implied by the turn kind.
+      const last = routePoints[routePoints.length - 1];
+      if (last) {
+        const approachHeading = last.heading ?? 0;
+        const kind = turnTarget.kind ?? "straight";
+        const deltaDeg = kind === "left" ? -90 : kind === "right" ? 90 : 0;
+        const exitHeading = approachHeading + deltaDeg;
+        const metersToLatDeg = (m: number) => m / 111320;
+        const metersToLngDeg = (m: number, atLat: number) =>
+          m / (111320 * Math.cos((atLat * Math.PI) / 180));
+        const afterM = 50;
+        const rad = (exitHeading * Math.PI) / 180;
+        const afterLat =
+          turnTarget.lat + metersToLatDeg(afterM * Math.cos(rad));
+        const afterLng =
+          turnTarget.lng +
+          metersToLngDeg(afterM * Math.sin(rad), turnTarget.lat);
+
+        const railPts: [number, number][] = [
+          [last.lat, last.lng],
+          pos,
+          [afterLat, afterLng],
+        ];
+        // Outer halo for visibility.
+        L.polyline(railPts, {
+          color: "#1d4ed8",
+          weight: 10,
+          opacity: 0.35,
+          lineCap: "round",
+          lineJoin: "round",
+        }).addTo(rail);
+        // Solid blue "rail".
+        L.polyline(railPts, {
+          color: "#3b82f6",
+          weight: 6,
+          opacity: 0.95,
+          lineCap: "round",
+          lineJoin: "round",
+        }).addTo(rail);
+        // Small cap at the rail end to simulate a destination arrow.
+        L.circleMarker([afterLat, afterLng], {
+          radius: 5,
+          color: "#ffffff",
+          weight: 2,
+          fillColor: "#2563eb",
+          fillOpacity: 1,
+        }).addTo(rail);
+      }
 
       // Outer pulse ring – Google-Maps-style destination indicator in blue.
       L.circle(pos, {
@@ -300,7 +355,7 @@ export function LiveMap({
         fillOpacity: 1,
       }).addTo(group);
     })();
-  }, [turnTarget, mapReady]);
+  }, [turnTarget, routePoints, mapReady]);
 
   useEffect(() => {
     const m = mapRef.current;
@@ -378,8 +433,10 @@ export function LiveMap({
           smoothHeadingRef.current = target;
         } else {
           const delta = normalizeAngleDeg(target - smoothHeadingRef.current);
+          // Lower coefficient = slower rotation. This eases the map into the new
+          // heading over several GPS updates so turns feel gradual.
           smoothHeadingRef.current = normalizeAngleDeg(
-            smoothHeadingRef.current + delta * 0.28,
+            smoothHeadingRef.current + delta * 0.12,
           );
         }
         setRotationDeg(smoothHeadingRef.current);
@@ -414,7 +471,6 @@ export function LiveMap({
     const current = dot.getLatLng();
     const startPos: [number, number] = [current.lat, current.lng];
     const targetPos: [number, number] = [last.lat, last.lng];
-    const heading = last.heading ?? 0;
 
     const now = performance.now();
     const sinceLastGpsSec = lastGpsAtMsRef.current != null ? Math.max(0.7, Math.min(2.8, (now - lastGpsAtMsRef.current) / 1000)) : 1.2;
@@ -447,7 +503,8 @@ export function LiveMap({
       if (arRef.current) arRef.current.setLatLng(livePos);
       if (followMode) {
         m.setView(livePos, m.getZoom(), { animate: false });
-        if (rotateWithHeading) setRotationDeg(-heading);
+        // Rotation is smoothed in the GPS-update effect and eased by CSS;
+        // avoid per-frame snaps here so turns feel gradual.
       }
 
       if (t < totalMs) {
@@ -472,7 +529,7 @@ export function LiveMap({
                   inset: "-24%",
                   transform: `rotate(${rotationDeg}deg)`,
                   transformOrigin: "50% 50%",
-                  transition: "transform 560ms cubic-bezier(0.22,0.61,0.36,1)",
+                  transition: "transform 1100ms cubic-bezier(0.22,0.61,0.36,1)",
                 }
               : {
                   position: "absolute",

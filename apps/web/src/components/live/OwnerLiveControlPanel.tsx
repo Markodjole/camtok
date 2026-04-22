@@ -14,6 +14,24 @@ import { TurnBlinkOverlay, type TurnDirection } from "./TurnBlinkOverlay";
 import { computeStreamGuidance } from "@/lib/live/streamGuidance";
 
 const LiveMap = dynamic(() => import("./LiveMap").then((m) => m.LiveMap), { ssr: false });
+type MapZone = {
+  id: string;
+  slug: string;
+  name: string;
+  kind: "district" | "corridor" | "mission-zone" | "restricted-zone";
+  color: string;
+  isActive: boolean;
+  polygon: Array<{ lat: number; lng: number }>;
+};
+
+type MapCheckpoint = {
+  id: string;
+  name: string;
+  kind: "bridge" | "square" | "landmark" | "crossing" | "poi";
+  lat: number;
+  lng: number;
+  isActive: boolean;
+};
 
 /** Force rear camera first; fallback to selfie only if rear is unavailable. */
 async function openLiveCameraStream(): Promise<MediaStream> {
@@ -64,6 +82,12 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
   const [aiTurnDistanceM, setAiTurnDistanceM] = useState<number | null>(null);
   const [realTurnPoint, setRealTurnPoint] = useState<{ lat: number; lng: number } | null>(null);
   const [mapExpanded, setMapExpanded] = useState(false);
+  const [showZones, setShowZones] = useState(true);
+  const [showCheckpoints, setShowCheckpoints] = useState(true);
+  const [osmZones, setOsmZones] = useState<MapZone[]>([]);
+  const [osmCheckpoints, setOsmCheckpoints] = useState<MapCheckpoint[]>([]);
+  const [geoLoadedOnce, setGeoLoadedOnce] = useState(false);
+  const [geoLoading, setGeoLoading] = useState(false);
   const [pipPos, setPipPos] = useState({ top: 96, left: 12 });
   const [pipDragReady, setPipDragReady] = useState(false);
 
@@ -71,6 +95,7 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
   const heartbeatRef = useRef<NodeJS.Timeout | null>(null);
   const tickRef = useRef<NodeJS.Timeout | null>(null);
   const pipLongPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastGeoKeyRef = useRef<string | null>(null);
   const pipDragRef = useRef<{ pointerId: number | null; dx: number; dy: number }>({
     pointerId: null,
     dx: 0,
@@ -296,6 +321,47 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
     };
   }, [roomId, sessionId, routePoints]);
 
+  useEffect(() => {
+    const anchor = routePoints[routePoints.length - 1] ?? null;
+    if (!anchor) return;
+    const lat = Number(anchor.lat.toFixed(3));
+    const lng = Number(anchor.lng.toFixed(3));
+    const geoKey = `${lat},${lng}`;
+    if (lastGeoKeyRef.current === geoKey) return;
+    lastGeoKeyRef.current = geoKey;
+    let cancelled = false;
+
+    const fetchGeoContext = async () => {
+      try {
+        setGeoLoading(true);
+        const res = await fetch(`/api/live/geo-context?lat=${lat}&lng=${lng}`, {
+          cache: "no-store",
+        });
+        if (!res.ok) {
+          if (!cancelled) setGeoLoadedOnce(true);
+          return;
+        }
+        const json = (await res.json()) as {
+          zones?: MapZone[];
+          checkpoints?: MapCheckpoint[];
+        };
+        if (cancelled) return;
+        setOsmZones(Array.isArray(json.zones) ? json.zones : []);
+        setOsmCheckpoints(Array.isArray(json.checkpoints) ? json.checkpoints : []);
+        setGeoLoadedOnce(true);
+      } catch {
+        if (!cancelled) setGeoLoadedOnce(true);
+      } finally {
+        if (!cancelled) setGeoLoading(false);
+      }
+    };
+
+    void fetchGeoContext();
+    return () => {
+      cancelled = true;
+    };
+  }, [routePoints]);
+
   const onPipPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
     pipDragRef.current = {
@@ -329,7 +395,7 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
     const hintUpper = (aiTurnHint ?? "").toUpperCase();
     const hintIsLeft = hintUpper.includes("LEFT");
     const hintIsRight = hintUpper.includes("RIGHT");
-    const turnDirection: TurnDirection =
+    const rawTurnDirection: TurnDirection =
       hintIsLeft
         ? "left"
         : hintIsRight
@@ -339,6 +405,17 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
             : guidance?.kind === "right"
               ? "right"
               : null;
+    // Blink the "turn signal" only while approaching the turn. Hide it once
+    // the driver has effectively entered the turn (<=12 m or <=1.5 s remaining)
+    // or when the turn is still too far out to warrant visual commitment.
+    const etaInWindow =
+      aiTurnEtaSec == null ? true : aiTurnEtaSec > 1.5 && aiTurnEtaSec <= 22;
+    const distInWindow =
+      aiTurnDistanceM == null
+        ? true
+        : aiTurnDistanceM > 12 && aiTurnDistanceM <= 260;
+    const blinkArmed = etaInWindow && distInWindow;
+    const turnDirection: TurnDirection = blinkArmed ? rawTurnDirection : null;
     const urgent =
       (aiTurnEtaSec != null && aiTurnEtaSec <= 7) ||
       (aiTurnDistanceM != null && aiTurnDistanceM <= 40);
@@ -373,6 +450,10 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
               followMode={true}
               tileOpacity={1}
               mapCaption={"You \u00b7 follow green arrow"}
+              zones={geoLoadedOnce ? osmZones : []}
+              checkpoints={geoLoadedOnce ? osmCheckpoints : []}
+              showZones={showZones}
+              showCheckpoints={showCheckpoints}
               turnHint={aiTurnHint}
               turnHintEtaSec={aiTurnEtaSec}
               turnHintDistanceM={aiTurnDistanceM}
@@ -397,19 +478,36 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
 
         <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-28 bg-gradient-to-b from-black/75 to-transparent" />
 
-        <div className="absolute inset-x-0 top-0 z-20 flex items-center gap-2 px-4 py-3 text-sm">
-          <span className="animate-pulse rounded bg-red-500/30 px-2 py-0.5 text-[11px] font-bold text-red-400 tracking-wide">
+        <div className="absolute right-3 top-20 z-40 flex flex-col items-end gap-2">
+          <span className="animate-pulse rounded bg-red-500/30 px-2 py-0.5 text-[11px] font-bold text-red-400 tracking-wide shadow-md">
             LIVE
           </span>
-          <span className="text-white/70 text-xs drop-shadow">
+          <span className="rounded-full bg-black/45 px-2.5 py-1 text-[11px] text-white/85 shadow-md backdrop-blur">
             {transportEmoji(transportMode)} {transportMode}
           </span>
-          {statusText && (
-            <span className="ml-1 text-[11px] text-white/40 truncate max-w-[40%]">{statusText}</span>
-          )}
-          {routePoints.length > 0 && (
-            <span className="ml-auto text-[10px] text-white/30">{routePoints.length} pts</span>
-          )}
+          <button
+            type="button"
+            onClick={() => setShowZones((v) => !v)}
+            className={`rounded-full px-2.5 py-1 text-[11px] shadow-md ${
+              showZones ? "bg-cyan-500/30 text-cyan-100" : "bg-white/10 text-white/60"
+            }`}
+          >
+            Zones
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowCheckpoints((v) => !v)}
+            className={`rounded-full px-2.5 py-1 text-[11px] shadow-md ${
+              showCheckpoints ? "bg-fuchsia-500/30 text-fuchsia-100" : "bg-white/10 text-white/60"
+            }`}
+          >
+            Places
+          </button>
+          {geoLoading && !geoLoadedOnce ? (
+            <span className="rounded-full bg-black/45 px-2 py-0.5 text-[10px] text-white/70">
+              Loading…
+            </span>
+          ) : null}
         </div>
 
 
@@ -443,6 +541,10 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
                 followMode={true}
                 tileOpacity={0.65}
                 mapCaption={"You \u00b7 follow green arrow"}
+                zones={geoLoadedOnce ? osmZones : []}
+                checkpoints={geoLoadedOnce ? osmCheckpoints : []}
+                showZones={showZones}
+                showCheckpoints={showCheckpoints}
                 turnHint={aiTurnHint}
                 turnHintEtaSec={aiTurnEtaSec}
                 turnHintDistanceM={aiTurnDistanceM}

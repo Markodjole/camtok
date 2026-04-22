@@ -20,8 +20,12 @@ export function TurnBlinkOverlay({
   const [on, setOn] = useState(true);
 
   useEffect(() => {
-    if (!direction) return;
-    const interval = urgent ? 320 : 600;
+    if (!direction) {
+      setOn(true);
+      return;
+    }
+    // Turn-signal cadence: leisurely ~0.7 Hz normally, bumped a bit when urgent.
+    const interval = urgent ? 520 : 780;
     const id = setInterval(() => setOn((v) => !v), interval);
     return () => clearInterval(id);
   }, [direction, urgent]);
@@ -34,12 +38,12 @@ export function TurnBlinkOverlay({
   return (
     <div className="pointer-events-none absolute inset-0 z-[45]">
       <div
-        className="absolute top-0 bottom-0 flex items-center justify-center transition-opacity duration-200"
+        className="absolute top-0 bottom-0 flex items-center justify-center transition-opacity duration-[420ms]"
         style={{
           left: direction === "left" ? 0 : "50%",
           right: direction === "right" ? 0 : "50%",
           background: `linear-gradient(${direction === "left" ? "90deg" : "270deg"}, ${color} 0%, rgba(0,0,0,0) 100%)`,
-          opacity: on ? 1 : 0.1,
+          opacity: on ? 1 : 0.32,
           boxShadow: glow,
         }}
       >
