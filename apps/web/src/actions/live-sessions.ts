@@ -2,6 +2,7 @@
 
 import { unstable_noStore } from "next/cache";
 import { createServerClient, createServiceClient } from "@/lib/supabase/server";
+import { lockMarket, revealAndSettleMarket } from "@/actions/live-settlement";
 import {
   startSessionInputSchema,
   heartbeatInputSchema,
@@ -14,6 +15,39 @@ import {
 const STALE_SESSION_MS = 2 * 60 * 1000;
 
 type ServiceClient = Awaited<ReturnType<typeof createServiceClient>>;
+
+async function settleCurrentMarketOnSessionEnd(
+  service: ServiceClient,
+  roomId: string | null | undefined,
+) {
+  if (!roomId) return;
+  const { data: room } = await service
+    .from("live_rooms")
+    .select("current_market_id")
+    .eq("id", roomId)
+    .maybeSingle();
+  const marketId = (room as { current_market_id?: string | null } | null)?.current_market_id ?? null;
+  if (!marketId) return;
+
+  const { data: market } = await service
+    .from("live_betting_markets")
+    .select("status")
+    .eq("id", marketId)
+    .maybeSingle();
+  const status = (market as { status?: string } | null)?.status ?? null;
+  if (!status) return;
+
+  // Best-effort settle path:
+  // - open   -> lock, then reveal+settle
+  // - locked -> reveal+settle
+  // Other statuses are already finalized.
+  if (status === "open") {
+    await lockMarket(marketId);
+    await revealAndSettleMarket(marketId);
+  } else if (status === "locked") {
+    await revealAndSettleMarket(marketId);
+  }
+}
 
 async function ensureCamtokCharacterRows(
   service: ServiceClient,
@@ -342,6 +376,16 @@ export async function endLiveSession(sessionId: string) {
 
   if (!session || (session as { owner_user_id: string }).owner_user_id !== user.id) {
     return { error: "Session not found" };
+  }
+
+  // Settle currently active market first so viewers immediately see final outcomes.
+  try {
+    await settleCurrentMarketOnSessionEnd(
+      service,
+      (session as { current_room_id: string | null }).current_room_id,
+    );
+  } catch {
+    // Continue end flow even if settlement fails; session still must end.
   }
 
   const endedAt = new Date().toISOString();

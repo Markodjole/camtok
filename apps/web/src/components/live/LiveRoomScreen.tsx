@@ -153,7 +153,15 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [osmCheckpoints, setOsmCheckpoints] = useState<MapCheckpoint[]>([]);
   const [geoLoadedOnce, setGeoLoadedOnce] = useState(false);
   const [geoLoading, setGeoLoading] = useState(false);
+  const [pipPos, setPipPos] = useState({ top: 96, left: 12 });
+  const [pipDragReady, setPipDragReady] = useState(false);
   const lastGeoKeyRef = useRef<string | null>(null);
+  const pipLongPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pipDragRef = useRef<{ pointerId: number | null; dx: number; dy: number }>({
+    pointerId: null,
+    dx: 0,
+    dy: 0,
+  });
   const showLiveBets = true;
   const skillFeedbackTimerRef = { current: null as ReturnType<typeof setTimeout> | null };
   const { betPill, flash } = useBetPill();
@@ -300,6 +308,40 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     };
   }, [routePoints, initialRoom.routePoints]);
 
+  useEffect(() => {
+    return () => {
+      if (pipLongPressTimerRef.current) clearTimeout(pipLongPressTimerRef.current);
+    };
+  }, []);
+
+  const onPipPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    pipDragRef.current = {
+      pointerId: e.pointerId,
+      dx: e.clientX - rect.left,
+      dy: e.clientY - rect.top,
+    };
+    if (pipLongPressTimerRef.current) clearTimeout(pipLongPressTimerRef.current);
+    pipLongPressTimerRef.current = setTimeout(() => {
+      setPipDragReady(true);
+    }, 180);
+  };
+
+  const onPipPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!pipDragReady || pipDragRef.current.pointerId !== e.pointerId) return;
+    const boxW = Math.min(window.innerWidth * 0.56, 260);
+    const boxH = boxW;
+    const nextLeft = Math.max(8, Math.min(window.innerWidth - boxW - 8, e.clientX - pipDragRef.current.dx));
+    const nextTop = Math.max(56, Math.min(window.innerHeight - boxH - 92, e.clientY - pipDragRef.current.dy));
+    setPipPos({ top: nextTop, left: nextLeft });
+  };
+
+  const onPipPointerUp = () => {
+    if (pipLongPressTimerRef.current) clearTimeout(pipLongPressTimerRef.current);
+    pipDragRef.current.pointerId = null;
+    setPipDragReady(false);
+  };
+
   return (
     <div className="relative h-[100dvh] w-full overflow-hidden bg-black">
       <TopBar />
@@ -413,11 +455,11 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       </div>
 
       {mapExpanded ? (
-        <div className="absolute left-4 right-[40vw] top-28 z-40 flex items-center gap-2 overflow-x-auto pr-2">
+        <div className="absolute right-3 top-24 z-40 flex flex-col items-end gap-2">
           <button
             type="button"
             onClick={() => setShowZones((v) => !v)}
-            className={`rounded-full px-2.5 py-1 text-[11px] ${
+            className={`rounded-full px-2.5 py-1 text-[11px] shadow-md ${
               showZones ? "bg-cyan-500/30 text-cyan-100" : "bg-white/10 text-white/60"
             }`}
           >
@@ -426,7 +468,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           <button
             type="button"
             onClick={() => setShowCheckpoints((v) => !v)}
-            className={`rounded-full px-2.5 py-1 text-[11px] ${
+            className={`rounded-full px-2.5 py-1 text-[11px] shadow-md ${
               showCheckpoints ? "bg-fuchsia-500/30 text-fuchsia-100" : "bg-white/10 text-white/60"
             }`}
           >
@@ -434,14 +476,14 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           </button>
           <button
             type="button"
-            className="rounded-full bg-emerald-500/30 px-2.5 py-1 text-[11px] text-emerald-100"
+            className="rounded-full bg-emerald-500/30 px-2.5 py-1 text-[11px] text-emerald-100 shadow-md"
           >
             Live bets
           </button>
           <button
             type="button"
             onClick={() => setMapFollow(true)}
-            className={`rounded-full px-2.5 py-1 text-[11px] ${
+            className={`rounded-full px-2.5 py-1 text-[11px] shadow-md ${
               mapFollow
                 ? "bg-emerald-500/30 text-emerald-100"
                 : "bg-amber-500/30 text-amber-100"
@@ -521,14 +563,18 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       <div
         className="absolute z-30 overflow-hidden rounded-2xl border border-white/25 shadow-2xl"
         style={{
-          top: 108,
-          right: 12,
+          top: pipPos.top,
+          left: pipPos.left,
           width: "56vw",
           height: "56vw",
           maxWidth: 260,
           maxHeight: 260,
           opacity: 0.9,
         }}
+        onPointerDown={onPipPointerDown}
+        onPointerMove={onPipPointerMove}
+        onPointerUp={onPipPointerUp}
+        onPointerCancel={onPipPointerUp}
       >
         {mapExpanded ? (
           /* PiP shows the camera stream when map is fullscreen */
@@ -612,23 +658,6 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           }}
         />
       ) : null}
-
-      {/* ── Market title — floats above joystick, separate layer so it never moves the pad ── */}
-      <div className="pointer-events-none fixed inset-x-0 bottom-0 z-[61] flex flex-col items-center px-4 pb-[calc(4.25rem+env(safe-area-inset-bottom,0px)+158px)]">
-        <div
-          className="pointer-events-auto transition-all duration-300"
-          style={{ opacity: currentMarket ? 1 : 0 }}
-        >
-          {currentMarket && (
-            <div className="flex items-center gap-2 rounded-full bg-black/55 px-3 py-1.5 text-[11px] text-white/90 backdrop-blur-sm shadow-lg">
-              <span className="font-semibold leading-none drop-shadow">
-                {currentMarket.title}
-              </span>
-              <MarketTimer locksAt={currentMarket.locksAt} />
-            </div>
-          )}
-        </div>
-      </div>
 
       {/* ── Joystick — always at exact same position ── */}
       <div className="pointer-events-none fixed inset-x-0 bottom-0 z-[60] flex flex-col items-center px-4 pb-[calc(4.25rem+env(safe-area-inset-bottom,0px))]">

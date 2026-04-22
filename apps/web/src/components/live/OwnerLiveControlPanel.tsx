@@ -64,10 +64,18 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
   const [aiTurnDistanceM, setAiTurnDistanceM] = useState<number | null>(null);
   const [realTurnPoint, setRealTurnPoint] = useState<{ lat: number; lng: number } | null>(null);
   const [mapExpanded, setMapExpanded] = useState(false);
+  const [pipPos, setPipPos] = useState({ top: 96, left: 12 });
+  const [pipDragReady, setPipDragReady] = useState(false);
 
   const watchIdRef = useRef<number | null>(null);
   const heartbeatRef = useRef<NodeJS.Timeout | null>(null);
   const tickRef = useRef<NodeJS.Timeout | null>(null);
+  const pipLongPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pipDragRef = useRef<{ pointerId: number | null; dx: number; dy: number }>({
+    pointerId: null,
+    dx: 0,
+    dy: 0,
+  });
   const pendingLocationsRef = useRef<
     Array<{
       recordedAt: string;
@@ -197,6 +205,12 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
   useEffect(() => () => cleanup(), []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
+    return () => {
+      if (pipLongPressTimerRef.current) clearTimeout(pipLongPressTimerRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!sessionId || !stream) return;
     let active = true;
     const startDelay = setTimeout(() => {
@@ -281,6 +295,34 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
       clearInterval(id);
     };
   }, [roomId, sessionId, routePoints]);
+
+  const onPipPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    pipDragRef.current = {
+      pointerId: e.pointerId,
+      dx: e.clientX - rect.left,
+      dy: e.clientY - rect.top,
+    };
+    if (pipLongPressTimerRef.current) clearTimeout(pipLongPressTimerRef.current);
+    pipLongPressTimerRef.current = setTimeout(() => {
+      setPipDragReady(true);
+    }, 180);
+  };
+
+  const onPipPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!pipDragReady || pipDragRef.current.pointerId !== e.pointerId) return;
+    const boxW = Math.min(window.innerWidth * 0.42, 220);
+    const boxH = boxW;
+    const nextLeft = Math.max(8, Math.min(window.innerWidth - boxW - 8, e.clientX - pipDragRef.current.dx));
+    const nextTop = Math.max(56, Math.min(window.innerHeight - boxH - 92, e.clientY - pipDragRef.current.dy));
+    setPipPos({ top: nextTop, left: nextLeft });
+  };
+
+  const onPipPointerUp = () => {
+    if (pipLongPressTimerRef.current) clearTimeout(pipLongPressTimerRef.current);
+    pipDragRef.current.pointerId = null;
+    setPipDragReady(false);
+  };
 
   if (sessionId && stream) {
     const guidance = routePoints.length > 0 ? computeStreamGuidance(routePoints) : null;
@@ -374,14 +416,18 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
         <div
           className="absolute z-30 overflow-hidden rounded-2xl border border-white/25 shadow-2xl backdrop-blur-sm"
           style={{
-            top: 108,
-            right: 12,
+            top: pipPos.top,
+            left: pipPos.left,
             width: "42vw",
             height: "42vw",
             maxWidth: 220,
             maxHeight: 220,
             opacity: 0.9,
           }}
+          onPointerDown={onPipPointerDown}
+          onPointerMove={onPipPointerMove}
+          onPointerUp={onPipPointerUp}
+          onPointerCancel={onPipPointerUp}
         >
           {mapExpanded ? (
             <LiveVideoPlayer localStream={stream} className="h-full w-full" />
