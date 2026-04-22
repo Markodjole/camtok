@@ -266,12 +266,12 @@ export function LiveMap({
       const last = routePoints[routePoints.length - 1]!;
       const pos: [number, number] = [last.lat, last.lng];
       const latlngs: [number, number][] = routePoints.map((p) => [p.lat, p.lng]);
+      const isFirstFollowFrame = !hasAppliedInitialZoomRef.current;
       const targetZoom = interactive
         ? hasAppliedInitialZoomRef.current
           ? m.getZoom()
           : profile.zoom
         : profile.zoom;
-      hasAppliedInitialZoomRef.current = true;
 
       if (plRef.current) {
         plRef.current.setLatLngs(latlngs);
@@ -304,7 +304,13 @@ export function LiveMap({
         }).addTo(m);
       }
       if (followMode) {
-        m.setView(pos, targetZoom, { animate: true, duration: 0.4 });
+        const zoomChanged = Math.abs(m.getZoom() - targetZoom) > 0.01;
+        if (isFirstFollowFrame || zoomChanged) {
+          m.setView(pos, targetZoom, { animate: true, duration: 0.45 });
+        } else {
+          m.panTo(pos, { animate: true, duration: 2.2, easeLinearity: 0.2, noMoveStart: true });
+        }
+        hasAppliedInitialZoomRef.current = true;
       }
 
       // Rotate map opposite of heading so "forward" remains screen-up.
