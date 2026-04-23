@@ -5,6 +5,7 @@ import dynamic from "next/dynamic";
 import type { LiveFeedRow, RoutePoint } from "@/actions/live-feed";
 import { LiveVideoPlayer } from "./LiveVideoPlayer";
 import { DirectionalBetPad } from "./DirectionalBetPad";
+import { LiveDecisionStatusRibbon } from "./LiveDecisionStatusRibbon";
 import { useCountdown } from "./useCountdown";
 import { TransportModeIcon } from "./TransportModeIcon";
 import { BetPlacedPill, LiveEventToasts, useBetPill } from "./LiveEventToasts";
@@ -165,6 +166,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [driverRoute, setDriverRoute] = useState<Array<{ lat: number; lng: number }> | null>(null);
   const [driverCheckpoint, setDriverCheckpoint] = useState<{ lat: number; lng: number } | null>(null);
   const [nowTick, setNowTick] = useState(() => Date.now());
+  const [lastBetMarketId, setLastBetMarketId] = useState<string | null>(null);
+  const [lastBetOptionLabel, setLastBetOptionLabel] = useState<string | null>(null);
   const lastGeoKeyRef = useRef<string | null>(null);
   const pipLongPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pipDragRef = useRef<{
@@ -246,6 +249,12 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       });
       if (res.ok) {
         flash(betAmount);
+        const pickedLabel =
+          room.currentMarket.options.find((o) => o.id === optionId)?.shortLabel ??
+          room.currentMarket.options.find((o) => o.id === optionId)?.label ??
+          null;
+        setLastBetMarketId(room.currentMarket.id);
+        setLastBetOptionLabel(pickedLabel);
         return { ok: true as const };
       } else {
         const j = (await res.json().catch(() => ({}))) as { error?: string };
@@ -279,6 +288,19 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     }
     return Number.isFinite(locksAtMs) && nowTick >= locksAtMs ? "active" : "pending";
   })();
+  const viewerDriverPos =
+    routePoints.length > 0
+      ? { lat: routePoints[routePoints.length - 1]!.lat, lng: routePoints[routePoints.length - 1]!.lng }
+      : null;
+  // Keep the "your pick" tag only while the market you bet on is still live.
+  useEffect(() => {
+    if (!currentMarket || currentMarket.id !== lastBetMarketId) {
+      if (lastBetMarketId && currentMarket?.id !== lastBetMarketId) {
+        setLastBetMarketId(null);
+        setLastBetOptionLabel(null);
+      }
+    }
+  }, [currentMarket?.id, lastBetMarketId]);
   const fallbackMapObjects = useMemo(
     () => buildMapObjects(routePoints[routePoints.length - 1] ?? initialRoom.routePoints?.[0] ?? null),
     [routePoints, initialRoom.routePoints],
@@ -440,6 +462,19 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   return (
     <div className="relative h-[100dvh] w-full overflow-hidden bg-black">
       <TopBar />
+      <LiveDecisionStatusRibbon
+        phase={viewerRailPhase}
+        locksAt={currentMarket?.locksAt ?? null}
+        revealAt={currentMarket?.revealAt ?? null}
+        turnPoint={viewerTurnTarget ?? driverCheckpoint}
+        driverPos={viewerDriverPos}
+        betOptionLabel={
+          currentMarket && lastBetMarketId === currentMarket.id
+            ? lastBetOptionLabel
+            : null
+        }
+        nowTick={nowTick}
+      />
       <BottomNav />
       <LiveEventToasts
         roomId={room.roomId}

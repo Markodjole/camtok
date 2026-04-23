@@ -11,6 +11,7 @@ import { startBroadcasterP2p } from "./liveP2pBroadcast";
 import { TransportModeIcon } from "./TransportModeIcon";
 import { StreamGuidanceOverlay } from "./StreamGuidanceOverlay";
 import { TurnBlinkOverlay, type TurnDirection } from "./TurnBlinkOverlay";
+import { LiveDecisionStatusRibbon } from "./LiveDecisionStatusRibbon";
 import { computeStreamGuidance } from "@/lib/live/streamGuidance";
 
 const LiveMap = dynamic(() => import("./LiveMap").then((m) => m.LiveMap), { ssr: false });
@@ -581,6 +582,19 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
           distanceM={aiTurnDistanceM}
           label={blinkLabel}
           urgent={urgent}
+        />
+
+        <LiveDecisionStatusRibbon
+          phase={railPhase}
+          locksAt={marketLocksAt}
+          revealAt={marketRevealAt}
+          turnPoint={turnTarget ?? driverCheckpoint}
+          driverPos={
+            routePoints.length > 0
+              ? { lat: routePoints[routePoints.length - 1]!.lat, lng: routePoints[routePoints.length - 1]!.lng }
+              : null
+          }
+          nowTick={nowTick}
         />
 
         <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-28 bg-gradient-to-b from-black/75 to-transparent" />
