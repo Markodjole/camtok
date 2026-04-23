@@ -81,6 +81,8 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
   const [aiTurnEtaSec, setAiTurnEtaSec] = useState<number | null>(null);
   const [aiTurnDistanceM, setAiTurnDistanceM] = useState<number | null>(null);
   const [realTurnPoint, setRealTurnPoint] = useState<{ lat: number; lng: number } | null>(null);
+  const [driverRoute, setDriverRoute] = useState<Array<{ lat: number; lng: number }> | null>(null);
+  const [driverCheckpoint, setDriverCheckpoint] = useState<{ lat: number; lng: number } | null>(null);
   const [mapExpanded, setMapExpanded] = useState(true);
   const [osmZones, setOsmZones] = useState<MapZone[]>([]);
   const [osmCheckpoints, setOsmCheckpoints] = useState<MapCheckpoint[]>([]);
@@ -327,6 +329,44 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
     };
   }, [roomId, sessionId, routePoints]);
 
+  // Poll the driver-route endpoint which returns the road-snapped polyline
+  // from the current position to the AI checkpoint (a bit past the next
+  // turn). Backend caches by market + position bucket so this is cheap.
+  useEffect(() => {
+    if (!roomId || !sessionId) return;
+    let cancelled = false;
+    const fetchRoute = async () => {
+      try {
+        const r = await fetch(`/api/live/rooms/${roomId}/driver-route`, {
+          cache: "no-store",
+        });
+        if (!r.ok) return;
+        const j = (await r.json()) as {
+          instruction: {
+            routePolyline: Array<{ lat: number; lng: number }>;
+            checkpoint: { lat: number; lng: number };
+          } | null;
+        };
+        if (cancelled) return;
+        if (j.instruction && j.instruction.routePolyline.length >= 2) {
+          setDriverRoute(j.instruction.routePolyline);
+          setDriverCheckpoint(j.instruction.checkpoint);
+        } else {
+          setDriverRoute(null);
+          setDriverCheckpoint(null);
+        }
+      } catch {
+        /* transient */
+      }
+    };
+    void fetchRoute();
+    const id = setInterval(fetchRoute, 1500);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [roomId, sessionId]);
+
   useEffect(() => {
     const anchor = routePoints[routePoints.length - 1] ?? null;
     if (!anchor) return;
@@ -492,6 +532,8 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
               turnHintEtaSec={aiTurnEtaSec}
               turnHintDistanceM={aiTurnDistanceM}
               turnTarget={turnTarget}
+              driverRoute={driverRoute}
+              driverCheckpoint={driverCheckpoint}
             />
           ) : (
             <LiveVideoPlayer localStream={stream} className="h-full w-full" />
@@ -565,6 +607,8 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
                 turnHintEtaSec={aiTurnEtaSec}
                 turnHintDistanceM={aiTurnDistanceM}
                 turnTarget={turnTarget}
+                driverRoute={driverRoute}
+                driverCheckpoint={driverCheckpoint}
               />
               {routePoints.length === 0 && (
                 <div className="absolute inset-0 flex items-center justify-center bg-black/60 text-[9px] text-white/40">

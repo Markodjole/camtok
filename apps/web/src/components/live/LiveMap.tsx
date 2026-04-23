@@ -57,6 +57,15 @@ export interface LiveMapProps {
     kind?: "left" | "right" | "straight";
     label?: string;
   } | null;
+  /**
+   * Road-snapped driver route polyline from the current position to the next
+   * checkpoint, as returned by `/api/live/rooms/:id/driver-route`. When
+   * present the map renders it as the primary blue path — the synthetic
+   * approach/exit rails drawn from `turnTarget` are suppressed.
+   */
+  driverRoute?: Array<{ lat: number; lng: number }> | null;
+  /** Fixed checkpoint (the AI-chosen point a bit past the turn). */
+  driverCheckpoint?: { lat: number; lng: number } | null;
 }
 
 const C = {
@@ -125,6 +134,8 @@ export function LiveMap({
   followMode = true,
   onUserInteract,
   turnTarget = null,
+  driverRoute = null,
+  driverCheckpoint = null,
 }: LiveMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<import("leaflet").Map | null>(null);
@@ -287,6 +298,47 @@ export function LiveMap({
       const L = (await import("leaflet")).default;
       group.clearLayers();
       rail.clearLayers();
+
+      // Preferred path: render the backend-provided road-snapped driver route.
+      // This comes from a real routing engine and always follows streets, so
+      // it cannot point into empty space the way the heading-based synthetic
+      // rail could.
+      if (driverRoute && driverRoute.length >= 2) {
+        const pts = driverRoute.map((p) => [p.lat, p.lng] as [number, number]);
+        L.polyline(pts, {
+          color: "#1d4ed8",
+          weight: 12,
+          opacity: 0.3,
+          lineCap: "round",
+          lineJoin: "round",
+        }).addTo(rail);
+        L.polyline(pts, {
+          color: "#3b82f6",
+          weight: 7,
+          opacity: 0.95,
+          lineCap: "round",
+          lineJoin: "round",
+        }).addTo(rail);
+
+        const cp = driverCheckpoint ?? driverRoute[driverRoute.length - 1]!;
+        L.circle([cp.lat, cp.lng], {
+          radius: 14,
+          color: "#2563eb",
+          weight: 2,
+          fillColor: "#3b82f6",
+          fillOpacity: 0.22,
+          opacity: 0.9,
+        }).addTo(group);
+        L.circleMarker([cp.lat, cp.lng], {
+          radius: 6,
+          color: "#ffffff",
+          weight: 2,
+          fillColor: "#2563eb",
+          fillOpacity: 1,
+        }).addTo(group);
+        return;
+      }
+
       if (!turnTarget) return;
       const pos: [number, number] = [turnTarget.lat, turnTarget.lng];
 
@@ -410,7 +462,7 @@ export function LiveMap({
         fillOpacity: 1,
       }).addTo(rail);
     })();
-  }, [turnTarget, routePoints, mapReady]);
+  }, [turnTarget, driverRoute, driverCheckpoint, routePoints, mapReady]);
 
   useEffect(() => {
     const m = mapRef.current;

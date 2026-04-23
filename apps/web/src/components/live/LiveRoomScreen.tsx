@@ -162,6 +162,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [geoLoading, setGeoLoading] = useState(false);
   const [pipPos, setPipPos] = useState({ top: 58, left: 12 });
   const [pipDragReady, setPipDragReady] = useState(false);
+  const [driverRoute, setDriverRoute] = useState<Array<{ lat: number; lng: number }> | null>(null);
+  const [driverCheckpoint, setDriverCheckpoint] = useState<{ lat: number; lng: number } | null>(null);
   const lastGeoKeyRef = useRef<string | null>(null);
   const pipLongPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pipDragRef = useRef<{
@@ -329,6 +331,40 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    const fetchRoute = async () => {
+      try {
+        const r = await fetch(`/api/live/rooms/${room.roomId}/driver-route`, {
+          cache: "no-store",
+        });
+        if (!r.ok) return;
+        const j = (await r.json()) as {
+          instruction: {
+            routePolyline: Array<{ lat: number; lng: number }>;
+            checkpoint: { lat: number; lng: number };
+          } | null;
+        };
+        if (cancelled) return;
+        if (j.instruction && j.instruction.routePolyline.length >= 2) {
+          setDriverRoute(j.instruction.routePolyline);
+          setDriverCheckpoint(j.instruction.checkpoint);
+        } else {
+          setDriverRoute(null);
+          setDriverCheckpoint(null);
+        }
+      } catch {
+        /* transient */
+      }
+    };
+    void fetchRoute();
+    const id = setInterval(fetchRoute, 1500);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [room.roomId]);
+
   const onPipPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;
     if (target.closest("[data-pip-no-drag]")) return;
@@ -431,6 +467,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             showZones={showZones}
             showCheckpoints={showCheckpoints}
             turnTarget={viewerTurnTarget}
+            driverRoute={driverRoute}
+            driverCheckpoint={driverCheckpoint}
             onZoneSelect={(id) => {
               setSelectedZoneId(id);
               if (id) setSelectedCheckpointId(null);
@@ -633,6 +671,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               showZones={showZones}
               showCheckpoints={showCheckpoints}
               turnTarget={viewerTurnTarget}
+              driverRoute={driverRoute}
+              driverCheckpoint={driverCheckpoint}
             />
             {routePoints.length === 0 && (
               <div className="absolute inset-0 flex items-center justify-center bg-black/30 text-[9px] text-white/70">
