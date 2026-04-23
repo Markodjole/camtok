@@ -268,7 +268,10 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     ? new Date(currentMarket.locksAt) <= new Date()
     : true;
   const viewerRailPhase: "none" | "pending" | "active" = (() => {
-    if (!currentMarket || !viewerTurnTarget) return "none";
+    // Viewer should always see the next decision marker (blue dot) when we
+    // have either a market turn-point or a checkpoint from driver-route.
+    if (!viewerTurnTarget && !driverCheckpoint) return "none";
+    if (!currentMarket || !viewerTurnTarget) return "pending";
     const locksAtMs = Date.parse(currentMarket.locksAt);
     if (currentMarket.revealAt) {
       const revealMs = Date.parse(currentMarket.revealAt);

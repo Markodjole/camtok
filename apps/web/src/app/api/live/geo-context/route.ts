@@ -141,40 +141,84 @@ function zoneColor(placeType: string | undefined, adminLevel: string | undefined
   return "#60a5fa";
 }
 
-function radialPolygon(lat: number, lng: number, radiusM: number, points = 10): GeoPoint[] {
-  const out: GeoPoint[] = [];
-  for (let i = 0; i < points; i++) {
-    const angle = (Math.PI * 2 * i) / points;
-    const dy = (Math.sin(angle) * radiusM) / 111_320;
-    const dx = (Math.cos(angle) * radiusM) / (111_320 * Math.cos((lat * Math.PI) / 180));
-    out.push({ lat: lat + dy, lng: lng + dx });
+// --- Local planar geometry (equirectangular around a reference point) ------
+//
+// Voronoi is much cleaner in planar meters, so we project points to/from a
+// local 2-D plane anchored at the streamer's position.
+
+type Pt = { x: number; y: number };
+
+const EARTH = 111_320;
+
+function toMeters(refLat: number, refLng: number, g: GeoPoint): Pt {
+  const cos = Math.cos((refLat * Math.PI) / 180);
+  return {
+    x: (g.lng - refLng) * EARTH * cos,
+    y: (g.lat - refLat) * EARTH,
+  };
+}
+
+function toGeo(refLat: number, refLng: number, p: Pt): GeoPoint {
+  const cos = Math.cos((refLat * Math.PI) / 180);
+  return {
+    lat: refLat + p.y / EARTH,
+    lng: refLng + p.x / (EARTH * cos),
+  };
+}
+
+/**
+ * Clip `polygon` (in local meters, CCW) by the perpendicular-bisector
+ * half-plane that keeps only points strictly closer to `a` than to `b`.
+ * Uses Sutherland–Hodgman clipping.
+ *
+ * Derivation of the "inside" test:
+ *   keep p iff |p − a|² ≤ |p − b|²
+ *   ⇔ 2·p·(b − a) ≤ |b|² − |a|²
+ */
+function clipHalfPlaneCloserTo(polygon: Pt[], a: Pt, b: Pt): Pt[] {
+  const nx = b.x - a.x;
+  const ny = b.y - a.y;
+  const rhs = b.x * b.x + b.y * b.y - (a.x * a.x + a.y * a.y);
+  const valueOf = (p: Pt) => 2 * (p.x * nx + p.y * ny);
+  const inside = (p: Pt) => valueOf(p) <= rhs;
+  const intersect = (p: Pt, q: Pt): Pt => {
+    const vp = valueOf(p);
+    const vq = valueOf(q);
+    const denom = vq - vp;
+    const t = denom === 0 ? 0 : (rhs - vp) / denom;
+    return { x: p.x + t * (q.x - p.x), y: p.y + t * (q.y - p.y) };
+  };
+
+  const out: Pt[] = [];
+  const n = polygon.length;
+  if (n === 0) return out;
+  for (let i = 0; i < n; i++) {
+    const curr = polygon[i]!;
+    const prev = polygon[(i + n - 1) % n]!;
+    const ci = inside(curr);
+    const pi = inside(prev);
+    if (ci) {
+      if (!pi) out.push(intersect(prev, curr));
+      out.push(curr);
+    } else if (pi) {
+      out.push(intersect(prev, curr));
+    }
   }
   return out;
 }
 
-function offsetMeters(lat: number, lng: number, dxMeters: number, dyMeters: number): GeoPoint {
-  const dy = dyMeters / 111_320;
-  const dx = dxMeters / (111_320 * Math.cos((lat * Math.PI) / 180));
-  return { lat: lat + dy, lng: lng + dx };
-}
-
-function sectorPolygon(
-  lat: number,
-  lng: number,
-  startRad: number,
-  endRad: number,
-  outerRadiusM: number,
-  arcSteps = 8,
-): GeoPoint[] {
-  const ring: GeoPoint[] = [{ lat, lng }];
-  for (let i = 0; i <= arcSteps; i++) {
-    const t = i / arcSteps;
-    const a = startRad + (endRad - startRad) * t;
-    const dx = Math.cos(a) * outerRadiusM;
-    const dy = Math.sin(a) * outerRadiusM;
-    ring.push(offsetMeters(lat, lng, dx, dy));
+/**
+ * Build a Voronoi cell for `anchor` within `bounds` by successively clipping
+ * against the perpendicular bisector with every other anchor. O(N²) overall
+ * but N is small (≤ ~30 anchors in a city).
+ */
+function voronoiCell(anchor: Pt, others: Pt[], bounds: Pt[]): Pt[] {
+  let poly = bounds.slice();
+  for (const other of others) {
+    if (poly.length === 0) break;
+    poly = clipHalfPlaneCloserTo(poly, anchor, other);
   }
-  return ring;
+  return poly;
 }
 
 // --- Route ------------------------------------------------------------------
@@ -226,9 +270,15 @@ out geom 120;
 
   const elements = payload?.elements ?? [];
 
-  // ── Zones (full-map coverage using real place anchors) ───────────────────
-  // We use real OSM place names/centers, then generate contiguous sectors that
-  // cover the visible map area around the streamer so there are no "holes".
+  // ── Zones (full-map coverage via Voronoi tessellation) ───────────────────
+  //
+  // Gather every real OSM place anchor near the streamer — neighbourhoods,
+  // suburbs, quarters, districts, boroughs, city_blocks, plus admin-level
+  // 9/10/11 boundaries. Each anchor contributes its centroid as a Voronoi
+  // site. We clip the resulting tessellation against a square around the
+  // streamer so the whole visible city is carved into named cells with no
+  // holes and no overlaps. Each cell is labelled after the closest real
+  // place, so the names stay meaningful.
   const placeAnchors = elements
     .map((el) => {
       const tags = el.tags ?? {};
@@ -275,37 +325,122 @@ out geom 120;
     if (seenAnchorNames.has(key)) continue;
     seenAnchorNames.add(key);
     dedupAnchors.push(a);
-    if (dedupAnchors.length >= 18) break;
+    if (dedupAnchors.length >= 30) break;
   }
 
-  const sectorCount = Math.max(6, Math.min(12, dedupAnchors.length || 6));
-  const coverageRadiusM = 2600;
-  const zones = Array.from({ length: sectorCount }, (_, idx) => {
-    const a0 = (Math.PI * 2 * idx) / sectorCount;
-    const a1 = (Math.PI * 2 * (idx + 1)) / sectorCount;
-    const mid = (a0 + a1) / 2;
-    const probe = offsetMeters(lat, lng, Math.cos(mid) * 900, Math.sin(mid) * 900);
-    const nearest =
-      dedupAnchors.length > 0
-        ? dedupAnchors.reduce((best, cur) => {
-            const db = distanceMeters(probe.lat, probe.lng, best.lat, best.lng);
-            const dc = distanceMeters(probe.lat, probe.lng, cur.lat, cur.lng);
-            return dc < db ? cur : best;
-          })
-        : null;
-    const name = nearest?.name ?? `Zone ${idx + 1}`;
-    const placeType = nearest?.placeType;
-    const adminLevel = nearest?.adminLevel;
-    return {
-      id: `zone-cover-${idx}`,
-      slug: name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, ""),
-      name,
-      kind: "district" as const,
-      color: zoneColor(placeType, adminLevel),
+  // Synthetic fallback anchors: if OSM returns very few places (e.g. small
+  // town or rural area), sprinkle a ring around the user so we still produce
+  // several cells rather than 1-3 giant ones. These get generic names.
+  const fallbackAnchors: typeof placeAnchors = [];
+  if (dedupAnchors.length < 6) {
+    const ringRadii = [1600, 3000, 4500];
+    const perRing = 6;
+    let idx = 0;
+    for (const r of ringRadii) {
+      for (let i = 0; i < perRing; i++) {
+        const angle = (Math.PI * 2 * i) / perRing + (idx * 0.37);
+        const cos = Math.cos((lat * Math.PI) / 180);
+        fallbackAnchors.push({
+          name: `Area ${idx + 1}`,
+          placeType: "administrative",
+          adminLevel: "",
+          lat: lat + (Math.sin(angle) * r) / EARTH,
+          lng: lng + (Math.cos(angle) * r) / (EARTH * cos),
+          dist: r,
+        });
+        idx += 1;
+      }
+    }
+  }
+
+  // Coverage square: 6 km radius → 12 km side. Voronoi cells are clipped to
+  // this square so they don't extend to infinity.
+  const coverageHalfM = 6_000;
+  const bounds: Pt[] = [
+    { x: -coverageHalfM, y: -coverageHalfM },
+    { x:  coverageHalfM, y: -coverageHalfM },
+    { x:  coverageHalfM, y:  coverageHalfM },
+    { x: -coverageHalfM, y:  coverageHalfM },
+  ];
+
+  const allAnchors = [...dedupAnchors, ...fallbackAnchors];
+  const anchorPts: Array<{ pt: Pt; meta: (typeof allAnchors)[number] }> = allAnchors.map((a) => ({
+    pt: toMeters(lat, lng, { lat: a.lat, lng: a.lng }),
+    meta: a,
+  }));
+
+  // Merge anchors that are extremely close — redundant sites would produce
+  // slivers. 250 m threshold keeps micro-places out of separate cells.
+  const mergedAnchors: typeof anchorPts = [];
+  for (const a of anchorPts) {
+    const tooClose = mergedAnchors.some((m) => {
+      const dx = m.pt.x - a.pt.x;
+      const dy = m.pt.y - a.pt.y;
+      return Math.hypot(dx, dy) < 250;
+    });
+    if (!tooClose) mergedAnchors.push(a);
+  }
+
+  let zones: Array<{
+    id: string;
+    slug: string;
+    name: string;
+    kind: "district";
+    color: string;
+    isActive: boolean;
+    polygon: GeoPoint[];
+  }> = [];
+
+  if (mergedAnchors.length === 0) {
+    // Nothing to work with — emit a single coverage rectangle so the map
+    // still has a tap-target layer.
+    const polyGeo = bounds.map((p) => toGeo(lat, lng, p));
+    zones = [{
+      id: "zone-area-0",
+      slug: "area",
+      name: "Area",
+      kind: "district",
+      color: zoneColor(undefined, undefined),
       isActive: true,
-      polygon: simplify(sectorPolygon(lat, lng, a0, a1, coverageRadiusM, 10), 36),
-    };
-  });
+      polygon: simplify(polyGeo, 36),
+    }];
+  } else if (mergedAnchors.length === 1) {
+    const onlyAnchor = mergedAnchors[0]!;
+    const polyGeo = bounds.map((p) => toGeo(lat, lng, p));
+    zones = [{
+      id: "zone-solo-0",
+      slug: onlyAnchor.meta.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, ""),
+      name: onlyAnchor.meta.name,
+      kind: "district",
+      color: zoneColor(onlyAnchor.meta.placeType, onlyAnchor.meta.adminLevel),
+      isActive: true,
+      polygon: simplify(polyGeo, 36),
+    }];
+  } else {
+    const allPts = mergedAnchors.map((a) => a.pt);
+    zones = mergedAnchors
+      .map((anchor, i) => {
+        const others = allPts.filter((_, j) => j !== i);
+        const cellMeters = voronoiCell(anchor.pt, others, bounds);
+        if (cellMeters.length < 3) return null;
+        const polygon = cellMeters.map((p) => toGeo(lat, lng, p));
+        const area = polygonAreaM2(polygon);
+        if (area < 5_000) return null; // drop sliver cells < 0.005 km²
+        return {
+          id: `zone-v-${i}`,
+          slug: anchor.meta.name
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, "-")
+            .replace(/(^-|-$)/g, "") || `zone-${i}`,
+          name: anchor.meta.name,
+          kind: "district" as const,
+          color: zoneColor(anchor.meta.placeType, anchor.meta.adminLevel),
+          isActive: true,
+          polygon: simplify(polygon, 48),
+        };
+      })
+      .filter((z): z is NonNullable<typeof z> => z !== null);
+  }
 
   // ── Checkpoints / Tourist attractions ─────────────────────────────────────
 
