@@ -332,10 +332,79 @@ export async function openSystemMarketForRoom(roomId: string) {
     ? buildMidRangeMarketDraft(baseDraft, characterName, midRangeIdx)
     : baseDraft;
 
-  // Project the real turn point from the latest GPS position + heading + distance
+  // Project the real turn point from the latest GPS position + heading.
+  //
+  // Device heading is unreliable at low speed or when the OS stops reporting
+  // a compass value (common on phones in cars). Previously we fell back to
+  // heading = 0 (due north) which caused the blue dot / rails to appear in
+  // the opposite direction of travel. We instead derive heading from the
+  // actual path: walk backwards through the recent points until we've
+  // accumulated at least ~6 m of displacement, then take that vector as the
+  // movement bearing. Only fall back to the GPS-reported heading if the
+  // vehicle really hasn't moved.
   const latestGps = points[points.length - 1];
-  const headingRad = ((latestGps.headingDeg ?? 0) * Math.PI) / 180;
+
+  const metersBetweenPoints = (
+    a: { lat: number; lng: number },
+    b: { lat: number; lng: number },
+  ): number => {
+    const latAvg = (a.lat + b.lat) / 2;
+    const dy = (b.lat - a.lat) * 111_320;
+    const dx =
+      (b.lng - a.lng) * 111_320 * Math.cos((latAvg * Math.PI) / 180);
+    return Math.hypot(dx, dy);
+  };
+  const bearingDeg = (
+    a: { lat: number; lng: number },
+    b: { lat: number; lng: number },
+  ): number => {
+    const aLatRad = (a.lat * Math.PI) / 180;
+    const bLatRad = (b.lat * Math.PI) / 180;
+    const dLng = ((b.lng - a.lng) * Math.PI) / 180;
+    const y = Math.sin(dLng) * Math.cos(bLatRad);
+    const x =
+      Math.cos(aLatRad) * Math.sin(bLatRad) -
+      Math.sin(aLatRad) * Math.cos(bLatRad) * Math.cos(dLng);
+    return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+  };
+
+  // Find the furthest-back point that still sits within ~12 s of the latest
+  // so we capture recent motion, not ancient history. Require ≥ 6 m of
+  // displacement to build a reliable bearing.
+  let motionBearing: number | null = null;
+  const latestTime = Date.parse(latestGps.recordedAt);
+  for (let i = points.length - 2; i >= 0; i -= 1) {
+    const p = points[i]!;
+    const age = Number.isFinite(latestTime)
+      ? (latestTime - Date.parse(p.recordedAt)) / 1000
+      : 0;
+    if (age > 12) break;
+    const d = metersBetweenPoints(p, latestGps);
+    if (d >= 6) {
+      motionBearing = bearingDeg(p, latestGps);
+      break;
+    }
+  }
+
+  // Final heading preference: motion-derived > device-reported > skip.
+  let headingDeg: number;
+  if (motionBearing != null) {
+    headingDeg = motionBearing;
+  } else if (
+    latestGps.headingDeg != null &&
+    Number.isFinite(latestGps.headingDeg) &&
+    (latestGps.speedMps ?? 0) > 1.0
+  ) {
+    headingDeg = latestGps.headingDeg;
+  } else {
+    // Vehicle effectively stationary — do not open a market because we
+    // cannot place the turn point in a meaningful direction.
+    return { error: "Vehicle stationary: cannot determine heading" };
+  }
+
+  const headingRad = (headingDeg * Math.PI) / 180;
   const dist = Math.max(15, Math.min(400, decision.triggerDistanceMeters));
+  // Standard compass-bearing projection: 0° = north (↑ lat), 90° = east (↑ lng).
   const turnPointLat =
     latestGps.lat + (Math.cos(headingRad) * dist) / 111_320;
   const turnPointLng =
