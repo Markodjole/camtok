@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { RoutePoint } from "@/actions/live-feed";
+import { trimPolylineAhead } from "@/lib/live/routing/geometry";
 
 export interface LiveMapProps {
   routePoints: RoutePoint[];
@@ -66,6 +67,16 @@ export interface LiveMapProps {
   driverRoute?: Array<{ lat: number; lng: number }> | null;
   /** Fixed checkpoint (the AI-chosen point a bit past the turn). */
   driverCheckpoint?: { lat: number; lng: number } | null;
+  /**
+   * Lifecycle state of the current AI decision point. Controls whether the
+   * map draws a blue marker only (bets open), a full rail (bets closed /
+   * turn pending), or nothing (no active decision).
+   *
+   *  - "none"    → no active decision; map shows only the normal green trail.
+   *  - "pending" → decision chosen, bets open: blue dot at the crossroad, no rail.
+   *  - "active"  → bets closed, turn coming: rail (driver → checkpoint) + dot.
+   */
+  railPhase?: "none" | "pending" | "active";
 }
 
 const C = {
@@ -136,6 +147,7 @@ export function LiveMap({
   turnTarget = null,
   driverRoute = null,
   driverCheckpoint = null,
+  railPhase = "none",
 }: LiveMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<import("leaflet").Map | null>(null);
@@ -299,170 +311,65 @@ export function LiveMap({
       group.clearLayers();
       rail.clearLayers();
 
-      // Preferred path: render the backend-provided road-snapped driver route.
-      // This comes from a real routing engine and always follows streets, so
-      // it cannot point into empty space the way the heading-based synthetic
-      // rail could.
-      if (driverRoute && driverRoute.length >= 2) {
-        const pts = driverRoute.map((p) => [p.lat, p.lng] as [number, number]);
-        L.polyline(pts, {
-          color: "#1d4ed8",
-          weight: 12,
-          opacity: 0.3,
-          lineCap: "round",
-          lineJoin: "round",
-        }).addTo(rail);
-        L.polyline(pts, {
-          color: "#3b82f6",
-          weight: 7,
-          opacity: 0.95,
-          lineCap: "round",
-          lineJoin: "round",
-        }).addTo(rail);
+      // `railPhase === "none"` clears any lingering decoration. We still exit
+      // below if we have no turn target at all.
+      if (railPhase === "none") return;
 
-        const cp = driverCheckpoint ?? driverRoute[driverRoute.length - 1]!;
-        L.circle([cp.lat, cp.lng], {
-          radius: 14,
+      // A single blue dot always marks the AI-chosen crossroad while the
+      // decision is live — both while bets are open and during the turn.
+      const dotAt = driverCheckpoint ?? (turnTarget ? { lat: turnTarget.lat, lng: turnTarget.lng } : null);
+      if (dotAt) {
+        L.circle([dotAt.lat, dotAt.lng], {
+          radius: 16,
           color: "#2563eb",
           weight: 2,
           fillColor: "#3b82f6",
           fillOpacity: 0.22,
           opacity: 0.9,
         }).addTo(group);
-        L.circleMarker([cp.lat, cp.lng], {
-          radius: 6,
+        L.circleMarker([dotAt.lat, dotAt.lng], {
+          radius: 7,
           color: "#ffffff",
           weight: 2,
           fillColor: "#2563eb",
           fillOpacity: 1,
         }).addTo(group);
-        return;
       }
 
-      if (!turnTarget) return;
-      const pos: [number, number] = [turnTarget.lat, turnTarget.lng];
+      // While bets are open we show ONLY the dot — no rail. This matches the
+      // product decision: the driver sees where the AI is about to ask them
+      // to go, but the navigation path reveals only after bets close.
+      if (railPhase === "pending") return;
 
-      // Approximate meters between two coordinates using equirectangular math
-      // (accurate enough at < 200 m scale used for rail / gating below).
-      const metersBetween = (
-        a: { lat: number; lng: number },
-        b: { lat: number; lng: number },
-      ) => {
-        const latAvg = (a.lat + b.lat) / 2;
-        const dy = (b.lat - a.lat) * 111320;
-        const dx =
-          (b.lng - a.lng) * 111320 * Math.cos((latAvg * Math.PI) / 180);
-        return Math.hypot(dx, dy);
-      };
-      // Compass bearing a → b in degrees (0 = north, clockwise).
-      const bearingDeg = (
-        a: { lat: number; lng: number },
-        b: { lat: number; lng: number },
-      ) => {
-        const latAvg = (a.lat + b.lat) / 2;
-        const dy = (b.lat - a.lat) * 111320;
-        const dx =
-          (b.lng - a.lng) * 111320 * Math.cos((latAvg * Math.PI) / 180);
-        return (Math.atan2(dx, dy) * 180) / Math.PI;
-      };
-
-      // Always show the blue destination pin at the fixed turn point so the
-      // driver can see where the AI decided, even when far away.
-      L.circle(pos, {
-        radius: 14,
-        color: "#2563eb",
-        weight: 2,
-        fillColor: "#3b82f6",
-        fillOpacity: 0.22,
-        opacity: 0.9,
-      }).addTo(group);
-      L.circleMarker(pos, {
-        radius: 6,
-        color: "#ffffff",
-        weight: 2,
-        fillColor: "#2563eb",
-        fillOpacity: 1,
-      }).addTo(group);
-
-      // The "rails" must only appear just before the turn (like Google Maps
-      // highlighting the next maneuver), otherwise random blue lines far away
-      // look like noise. Gate on proximity to the fixed turn point.
+      // `railPhase === "active"`: draw the road-snapped rail from the driver's
+      // current position forward. Anything already behind the driver is
+      // dropped so the past route keeps its normal (green) appearance.
+      if (!driverRoute || driverRoute.length < 2) return;
       const last = routePoints[routePoints.length - 1];
-      if (!last) return;
-      const distToTurn = metersBetween(last, turnTarget);
-      const RAIL_ARM_M = 75; // start drawing when we're this close
-      const RAIL_DISARM_M = 8; // drop when we've effectively hit the turn
-      if (distToTurn > RAIL_ARM_M || distToTurn < RAIL_DISARM_M) return;
-
-      // Derive a stable approach heading from the route history: find a point
-      // roughly 20–40 m before the turn and take the bearing from there to the
-      // turn. This smooths out per-GPS noise and single-sample heading jitter.
-      let approachBearing: number | null = null;
-      for (let i = routePoints.length - 1; i >= 0; i -= 1) {
-        const rp = routePoints[i]!;
-        const d = metersBetween(rp, turnTarget);
-        if (d >= 20 && d <= 60) {
-          approachBearing = bearingDeg(rp, turnTarget);
-          break;
-        }
-      }
-      if (approachBearing == null) {
-        // Fallback: bearing from current position → turn (acceptable at < 75 m).
-        approachBearing = bearingDeg(last, turnTarget);
-      }
-
-      const kind = turnTarget.kind ?? "straight";
-      const deltaDeg = kind === "left" ? -90 : kind === "right" ? 90 : 0;
-      const exitBearing = approachBearing + deltaDeg;
-
-      const metersToLatDeg = (mm: number) => mm / 111320;
-      const metersToLngDeg = (mm: number, atLat: number) =>
-        mm / (111320 * Math.cos((atLat * Math.PI) / 180));
-      const pointAt = (
-        from: [number, number],
-        bearing: number,
-        meters: number,
-      ): [number, number] => {
-        const rad = (bearing * Math.PI) / 180;
-        return [
-          from[0] + metersToLatDeg(meters * Math.cos(rad)),
-          from[1] + metersToLngDeg(meters * Math.sin(rad), from[0]),
-        ];
-      };
-
-      // Short "approach" stub anchored to the turn point going back 22 m
-      // along the road, then a 50 m "exit" rail in the new direction.
-      const approachStart = pointAt(pos, approachBearing + 180, 22);
-      const exitEnd = pointAt(pos, exitBearing, 50);
-
-      const railPts: [number, number][] = [approachStart, pos, exitEnd];
-
-      // Outer halo.
-      L.polyline(railPts, {
+      const ahead = last
+        ? trimPolylineAhead(driverRoute, { lat: last.lat, lng: last.lng }, {
+            doneMeters: 6,
+            maxOffRouteMeters: 35,
+          })
+        : driverRoute;
+      if (ahead.length < 2) return; // turn complete — clear silently
+      const pts = ahead.map((p) => [p.lat, p.lng] as [number, number]);
+      L.polyline(pts, {
         color: "#1d4ed8",
-        weight: 11,
+        weight: 12,
         opacity: 0.3,
         lineCap: "round",
         lineJoin: "round",
       }).addTo(rail);
-      // Solid rail.
-      L.polyline(railPts, {
+      L.polyline(pts, {
         color: "#3b82f6",
-        weight: 6,
+        weight: 7,
         opacity: 0.95,
         lineCap: "round",
         lineJoin: "round",
       }).addTo(rail);
-      // End cap at the exit to hint destination direction.
-      L.circleMarker(exitEnd, {
-        radius: 5,
-        color: "#ffffff",
-        weight: 2,
-        fillColor: "#2563eb",
-        fillOpacity: 1,
-      }).addTo(rail);
     })();
-  }, [turnTarget, driverRoute, driverCheckpoint, routePoints, mapReady]);
+  }, [railPhase, turnTarget, driverRoute, driverCheckpoint, routePoints, mapReady]);
 
   useEffect(() => {
     const m = mapRef.current;

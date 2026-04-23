@@ -83,6 +83,9 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
   const [realTurnPoint, setRealTurnPoint] = useState<{ lat: number; lng: number } | null>(null);
   const [driverRoute, setDriverRoute] = useState<Array<{ lat: number; lng: number }> | null>(null);
   const [driverCheckpoint, setDriverCheckpoint] = useState<{ lat: number; lng: number } | null>(null);
+  const [marketLocksAt, setMarketLocksAt] = useState<string | null>(null);
+  const [marketRevealAt, setMarketRevealAt] = useState<string | null>(null);
+  const [nowTick, setNowTick] = useState(() => Date.now());
   const [mapExpanded, setMapExpanded] = useState(true);
   const [osmZones, setOsmZones] = useState<MapZone[]>([]);
   const [osmCheckpoints, setOsmCheckpoints] = useState<MapCheckpoint[]>([]);
@@ -243,6 +246,12 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
     };
   }, []);
 
+  // Drive rail-phase transitions smoothly between GPS polls.
+  useEffect(() => {
+    const id = setInterval(() => setNowTick(Date.now()), 500);
+    return () => clearInterval(id);
+  }, []);
+
   useEffect(() => {
     if (!sessionId || !stream) return;
     let active = true;
@@ -304,6 +313,8 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
         } else {
           setRealTurnPoint(null);
         }
+        setMarketLocksAt(mkt?.locksAt ?? null);
+        setMarketRevealAt(mkt?.revealAt ?? null);
         if (!hint.label || !hint.locksAt) {
           setAiTurnEtaSec(null);
           setAiTurnDistanceM(null);
@@ -488,6 +499,8 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
       aiTurnDistanceM == null
         ? true
         : aiTurnDistanceM > 12 && aiTurnDistanceM <= 260;
+    // The blink only makes sense in the "turn coming" phase — during the
+    // bets-open window we just show the blue dot and no blink at all.
     const blinkArmed = etaInWindow && distInWindow;
     const turnDirection: TurnDirection = blinkArmed ? rawTurnDirection : null;
     const urgent =
@@ -509,6 +522,23 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
           label: "",
         }
       : null;
+
+    // Rail phase is tied to the betting market lifecycle:
+    //   - market exists, bets still open     → "pending" (blue dot only)
+    //   - market exists, bets locked         → "active"  (blue rail + dot)
+    //   - market settled / no turn point set → "none"
+    const railPhase: "none" | "pending" | "active" = (() => {
+      if (!turnTarget || !marketLocksAt) return "none";
+      const locksAtMs = Date.parse(marketLocksAt);
+      if (!Number.isFinite(locksAtMs)) return "pending";
+      // Once the reveal time passes (market settled) drop everything: the AI
+      // hasn't committed a new decision yet.
+      if (marketRevealAt) {
+        const revealMs = Date.parse(marketRevealAt);
+        if (Number.isFinite(revealMs) && nowTick > revealMs + 1500) return "none";
+      }
+      return nowTick >= locksAtMs ? "active" : "pending";
+    })();
 
     return (
       <div className="relative h-full min-h-0 w-full flex-1 overflow-hidden bg-black">
@@ -534,6 +564,7 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
               turnTarget={turnTarget}
               driverRoute={driverRoute}
               driverCheckpoint={driverCheckpoint}
+              railPhase={railPhase}
             />
           ) : (
             <LiveVideoPlayer localStream={stream} className="h-full w-full" />
@@ -545,7 +576,7 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
         ) : null}
 
         <TurnBlinkOverlay
-          direction={turnDirection}
+          direction={railPhase === "active" ? turnDirection : null}
           etaSec={aiTurnEtaSec}
           distanceM={aiTurnDistanceM}
           label={blinkLabel}
@@ -609,6 +640,7 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
                 turnTarget={turnTarget}
                 driverRoute={driverRoute}
                 driverCheckpoint={driverCheckpoint}
+                railPhase={railPhase}
               />
               {routePoints.length === 0 && (
                 <div className="absolute inset-0 flex items-center justify-center bg-black/60 text-[9px] text-white/40">

@@ -164,6 +164,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [pipDragReady, setPipDragReady] = useState(false);
   const [driverRoute, setDriverRoute] = useState<Array<{ lat: number; lng: number }> | null>(null);
   const [driverCheckpoint, setDriverCheckpoint] = useState<{ lat: number; lng: number } | null>(null);
+  const [nowTick, setNowTick] = useState(() => Date.now());
   const lastGeoKeyRef = useRef<string | null>(null);
   const pipLongPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pipDragRef = useRef<{
@@ -266,6 +267,15 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const isLocked = currentMarket
     ? new Date(currentMarket.locksAt) <= new Date()
     : true;
+  const viewerRailPhase: "none" | "pending" | "active" = (() => {
+    if (!currentMarket || !viewerTurnTarget) return "none";
+    const locksAtMs = Date.parse(currentMarket.locksAt);
+    if (currentMarket.revealAt) {
+      const revealMs = Date.parse(currentMarket.revealAt);
+      if (Number.isFinite(revealMs) && nowTick > revealMs + 1500) return "none";
+    }
+    return Number.isFinite(locksAtMs) && nowTick >= locksAtMs ? "active" : "pending";
+  })();
   const fallbackMapObjects = useMemo(
     () => buildMapObjects(routePoints[routePoints.length - 1] ?? initialRoom.routePoints?.[0] ?? null),
     [routePoints, initialRoom.routePoints],
@@ -329,6 +339,11 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     return () => {
       if (pipLongPressTimerRef.current) clearTimeout(pipLongPressTimerRef.current);
     };
+  }, []);
+
+  useEffect(() => {
+    const id = setInterval(() => setNowTick(Date.now()), 500);
+    return () => clearInterval(id);
   }, []);
 
   useEffect(() => {
@@ -469,6 +484,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             turnTarget={viewerTurnTarget}
             driverRoute={driverRoute}
             driverCheckpoint={driverCheckpoint}
+            railPhase={viewerRailPhase}
             onZoneSelect={(id) => {
               setSelectedZoneId(id);
               if (id) setSelectedCheckpointId(null);
@@ -673,6 +689,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               turnTarget={viewerTurnTarget}
               driverRoute={driverRoute}
               driverCheckpoint={driverCheckpoint}
+              railPhase={viewerRailPhase}
             />
             {routePoints.length === 0 && (
               <div className="absolute inset-0 flex items-center justify-center bg-black/30 text-[9px] text-white/70">

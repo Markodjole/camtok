@@ -287,6 +287,33 @@ export async function openSystemMarketForRoom(roomId: string) {
   const decision = RouteState.detectNextDecision(points, transportMode);
   if (!decision) return { error: "No decision node detected" };
 
+  // Enforce minimum spacing between betting crosses. If the last market in
+  // this room opened or settled recently we skip — a fresh market every
+  // crossroad is noise when intersections are dense (one-way clusters etc).
+  {
+    const { data: prevMkt } = await service
+      .from("live_betting_markets")
+      .select("opens_at, reveal_at, status")
+      .eq("room_id", roomId)
+      .order("opens_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (prevMkt) {
+      const nowMs = Date.now();
+      const prevRevealMs = (prevMkt as { reveal_at: string | null }).reveal_at
+        ? Date.parse((prevMkt as { reveal_at: string }).reveal_at)
+        : null;
+      const prevOpensMs = Date.parse((prevMkt as { opens_at: string }).opens_at);
+      const referenceMs = Number.isFinite(prevRevealMs as number)
+        ? (prevRevealMs as number)
+        : prevOpensMs;
+      // 12 s minimum gap between any two markets in the same room.
+      if (Number.isFinite(referenceMs) && nowMs - referenceMs < 12_000) {
+        return { error: "Spacing: previous decision too recent" };
+      }
+    }
+  }
+
   // Count settled markets to vary framing: every 3rd market use a mid-range template
   const { count: settledCount } = await service
     .from("live_betting_markets")
@@ -316,11 +343,40 @@ export async function openSystemMarketForRoom(roomId: string) {
     (Math.sin(headingRad) * dist) /
       (111_320 * Math.cos((latestGps.lat * Math.PI) / 180));
 
+  // Compute a speed-adaptive betting window. The product contract is:
+  //   · bets stay open 4-8 s after the dot appears
+  //   · bets close 4-8 s before the turn so the driver has a clear runway
+  // The decision detector gives us `triggerEtaSeconds` (total time to the
+  // turn). We split that budget between a bet-open window and a pre-turn
+  // buffer. If the detector's ETA is too short for a safe split we bail —
+  // better to skip than to open a market the driver can't react to.
+  const speedMps = latestGps.speedMps ?? 0;
+  const { betOpenSec, preTurnBufferSec } = (() => {
+    if (speedMps > 12) return { betOpenSec: 4, preTurnBufferSec: 8 }; // fast car
+    if (speedMps > 6) return { betOpenSec: 5, preTurnBufferSec: 6 }; // city drive
+    if (speedMps > 2) return { betOpenSec: 6, preTurnBufferSec: 5 }; // bike / scooter
+    return { betOpenSec: 5, preTurnBufferSec: 4 }; // walking / crawl
+  })();
+  const minTotal = betOpenSec + preTurnBufferSec;
+  if (decision.triggerEtaSeconds < minTotal) {
+    return { error: "ETA too short for safe betting window" };
+  }
+  // Anchor the lock to the turn minus the pre-turn buffer. This keeps the
+  // promised "bets close N s before the turn" contract even when the
+  // detector picks an ETA longer than betOpenSec + preTurnBufferSec.
+  const effectiveBetOpenSec = Math.max(
+    betOpenSec,
+    decision.triggerEtaSeconds - preTurnBufferSec,
+  );
   const now = new Date();
   const opensAt = now;
-  const locksAtMs = now.getTime() + decision.triggerEtaSeconds * 1000;
+  const locksAtMs = now.getTime() + effectiveBetOpenSec * 1000;
   const locksAt = new Date(locksAtMs);
-  const revealAt = new Date(locksAtMs + 4000);
+  // Reveal lines up with the expected turn completion so UI drops the rail
+  // shortly after the driver passes the point.
+  const revealAt = new Date(
+    now.getTime() + (decision.triggerEtaSeconds + 2) * 1000,
+  );
 
   const { data: decisionRow, error: decisionError } = await service
     .from("route_decision_nodes")
