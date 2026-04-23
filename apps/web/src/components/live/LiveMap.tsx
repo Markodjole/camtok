@@ -311,12 +311,11 @@ export function LiveMap({
       group.clearLayers();
       rail.clearLayers();
 
-      // `railPhase === "none"` clears any lingering decoration. We still exit
-      // below if we have no turn target at all.
-      if (railPhase === "none") return;
+      // Simple, road-accurate mode: whenever the backend gives us a crossroad
+      // and a snapped polyline we draw them. No phase gating — the rail is
+      // always "the next crossroad ahead of me", which matches what a driver
+      // expects from Google-Maps-style guidance.
 
-      // A single blue dot always marks the AI-chosen crossroad while the
-      // decision is live — both while bets are open and during the turn.
       const dotAt = driverCheckpoint ?? (turnTarget ? { lat: turnTarget.lat, lng: turnTarget.lng } : null);
       if (dotAt) {
         L.circle([dotAt.lat, dotAt.lng], {
@@ -336,23 +335,15 @@ export function LiveMap({
         }).addTo(group);
       }
 
-      // While bets are open we show ONLY the dot — no rail. This matches the
-      // product decision: the driver sees where the AI is about to ask them
-      // to go, but the navigation path reveals only after bets close.
-      if (railPhase === "pending") return;
-
-      // `railPhase === "active"`: draw the road-snapped rail from the driver's
-      // current position forward. Anything already behind the driver is
-      // dropped so the past route keeps its normal (green) appearance.
       if (!driverRoute || driverRoute.length < 2) return;
       const last = routePoints[routePoints.length - 1];
       const ahead = last
         ? trimPolylineAhead(driverRoute, { lat: last.lat, lng: last.lng }, {
-            doneMeters: 6,
-            maxOffRouteMeters: 35,
+            doneMeters: 4,
+            maxOffRouteMeters: 40,
           })
         : driverRoute;
-      if (ahead.length < 2) return; // turn complete — clear silently
+      if (ahead.length < 2) return;
       const pts = ahead.map((p) => [p.lat, p.lng] as [number, number]);
       L.polyline(pts, {
         color: "#1d4ed8",
@@ -369,7 +360,7 @@ export function LiveMap({
         lineJoin: "round",
       }).addTo(rail);
     })();
-  }, [railPhase, turnTarget, driverRoute, driverCheckpoint, routePoints, mapReady]);
+  }, [turnTarget, driverRoute, driverCheckpoint, routePoints, mapReady]);
 
   useEffect(() => {
     const m = mapRef.current;

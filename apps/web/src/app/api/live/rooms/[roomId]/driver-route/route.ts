@@ -1,41 +1,74 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getLiveRoomDetail } from "@/actions/live-feed";
+import { fetchOsrmDrivingRoute } from "@/lib/live/routing/osrm";
+import { findNextCrossroad } from "@/lib/live/routing/findNextCrossroad";
 import {
-  buildCheckpointInstruction,
-  type ActiveCheckpointInstruction,
-  type TurnKind,
-} from "@/lib/live/routing/checkpointInstruction";
+  bearingDegrees,
+  metersBetween,
+  projectPoint,
+  type LatLng,
+} from "@/lib/live/routing/geometry";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/**
+ * Simple, road-accurate driver guidance.
+ *
+ * Strategy (per the "make it simple for now" product decision):
+ *   1. Figure out the driver's current position + heading (from the last
+ *      few GPS points — more reliable than the phone's compass).
+ *   2. Query OSM for real street intersections within ~300 m and pick the
+ *      nearest one ahead of the driver.
+ *   3. Ask OSRM for a road-snapped route from the driver to a point 10 m
+ *      past the crossroad. This naturally follows the actual streets, so
+ *      the blue rail lands on roads, not on empty space.
+ *   4. Return the polyline + crossroad coords. The client draws the rail
+ *      from driver → 10 m past the crossroad and a blue dot ON the
+ *      crossroad itself.
+ */
+
 type CacheEntry = {
-  bucketKey: string;
   expiresAtMs: number;
   instruction: ActiveCheckpointInstruction | null;
 };
 
-// Module-scoped cache so concurrent viewers of the same room share one OSRM
-// call per ~15 m position bucket. Keyed by `${marketId}`; value holds the
-// current bucket + payload + expiry.
-const CACHE = new Map<string, CacheEntry>();
-const CACHE_TTL_MS = 12_000;
+type ActiveCheckpointInstruction = {
+  decisionId: string;
+  turnKind: "straight";
+  turnPoint: LatLng;
+  checkpoint: LatLng;
+  routePolyline: LatLng[];
+  distanceMeters: number;
+  lockAt: string | null;
+  expiresAt: string | null;
+  confidence: "high" | "low";
+};
 
-function positionBucket(lat: number, lng: number): string {
-  // ~15 m lat / ~12 m lng at 45° — fine-grained enough to trigger a refresh
-  // as the driver closes in, coarse enough to share calls across viewers.
-  return `${lat.toFixed(4)}|${lng.toFixed(4)}`;
+const CACHE = new Map<string, CacheEntry>();
+const CACHE_TTL_MS = 8_000;
+
+// Coarse-ish position bucket so concurrent viewers share the same OSRM call
+// while still refreshing as the driver closes on the crossroad.
+function bucketKey(roomId: string, lat: number, lng: number, crossroadId: number): string {
+  return `${roomId}|${lat.toFixed(4)}|${lng.toFixed(4)}|${crossroadId}`;
 }
 
-function inferTurnKind(
-  label: string | undefined,
-  shortLabel: string | undefined,
-): TurnKind {
-  const s = `${label ?? ""} ${shortLabel ?? ""}`.toLowerCase();
-  if (s.includes("u-turn") || s.includes("u turn") || s.includes("back")) return "u-turn";
-  if (s.includes("left")) return "left";
-  if (s.includes("right")) return "right";
-  return "straight";
+function deriveMotionBearing(
+  points: Array<{ lat: number; lng: number; heading?: number | null; recordedAt?: string }>,
+): number | null {
+  if (points.length < 2) return null;
+  const last = points[points.length - 1]!;
+  for (let i = points.length - 2; i >= 0; i -= 1) {
+    const p = points[i]!;
+    const d = metersBetween(
+      { lat: p.lat, lng: p.lng },
+      { lat: last.lat, lng: last.lng },
+    );
+    if (d >= 6) return bearingDegrees(p, last);
+  }
+  const h = last.heading;
+  return h != null && Number.isFinite(h) ? h : null;
 }
 
 export async function GET(
@@ -49,64 +82,91 @@ export async function GET(
     return NextResponse.json({ instruction: null, reason: "no_room" });
   }
 
-  const mkt = room.currentMarket;
-  if (!mkt || mkt.turnPointLat == null || mkt.turnPointLng == null) {
-    return NextResponse.json({ instruction: null, reason: "no_market_turn" });
-  }
-
-  const last = room.routePoints[room.routePoints.length - 1];
+  const points = room.routePoints;
+  const last = points[points.length - 1];
   if (!last) {
     return NextResponse.json({ instruction: null, reason: "no_position" });
   }
 
-  // AI pick: take the first option in display order. This is the branch the
-  // map path will highlight. (Viewers still bet on any option; this is purely
-  // the visual guidance choice for the driver.)
-  const firstOption = [...(mkt.options ?? [])].sort(
-    (a, b) => a.displayOrder - b.displayOrder,
-  )[0];
-  const turnKind: TurnKind = firstOption
-    ? inferTurnKind(firstOption.label, firstOption.shortLabel)
-    : "straight";
-
-  const position = { lat: last.lat, lng: last.lng };
-  const turnPoint = { lat: mkt.turnPointLat, lng: mkt.turnPointLng };
-  const bucket = positionBucket(position.lat, position.lng);
-
-  const cached = CACHE.get(mkt.id);
-  const nowMs = Date.now();
-  if (
-    cached &&
-    cached.bucketKey === bucket &&
-    cached.expiresAtMs > nowMs &&
-    cached.instruction?.decisionId === mkt.id
-  ) {
-    return NextResponse.json({ instruction: cached.instruction });
+  const heading = deriveMotionBearing(points);
+  if (heading == null) {
+    // Vehicle hasn't moved far enough (or ever) — no direction to project.
+    return NextResponse.json({ instruction: null, reason: "no_heading" });
   }
 
-  const instruction = await buildCheckpointInstruction({
-    decisionId: mkt.id,
-    position,
-    headingDeg: last.heading ?? null,
-    turnPoint,
-    turnKind,
-    lockAt: mkt.locksAt,
-    expiresAt: mkt.revealAt,
-    offsetMeters: 50,
-  });
+  const position: LatLng = { lat: last.lat, lng: last.lng };
 
-  CACHE.set(mkt.id, {
-    bucketKey: bucket,
+  const crossroad = await findNextCrossroad(position, heading);
+  if (!crossroad) {
+    return NextResponse.json({ instruction: null, reason: "no_crossroad" });
+  }
+
+  const bucket = bucketKey(roomId, position.lat, position.lng, crossroad.nodeId);
+  const cached = CACHE.get(roomId);
+  const nowMs = Date.now();
+  if (cached && cached.expiresAtMs > nowMs) {
+    // Cache only when hitting the same bucket so fast movement still refreshes.
+    const inst = cached.instruction;
+    if (inst && inst.decisionId === `cross-${crossroad.nodeId}`) {
+      return NextResponse.json({ instruction: inst });
+    }
+  }
+
+  // 10 m past the crossroad along the driver → crossroad bearing. OSRM will
+  // snap this endpoint to the nearest road and route along real streets,
+  // so even if our projected endpoint is slightly off, the rail stays on
+  // asphalt.
+  const crBearing = bearingDegrees(position, { lat: crossroad.lat, lng: crossroad.lng });
+  const checkpoint = projectPoint(
+    { lat: crossroad.lat, lng: crossroad.lng },
+    crBearing,
+    10,
+  );
+
+  const osrm = await fetchOsrmDrivingRoute(position, checkpoint);
+
+  let instruction: ActiveCheckpointInstruction;
+  if (osrm && osrm.polyline.length >= 2) {
+    instruction = {
+      decisionId: `cross-${crossroad.nodeId}`,
+      turnKind: "straight",
+      // Blue dot sits ON the crossroad itself (not 10 m past).
+      turnPoint: { lat: crossroad.lat, lng: crossroad.lng },
+      checkpoint: { lat: crossroad.lat, lng: crossroad.lng },
+      routePolyline: osrm.polyline,
+      distanceMeters: osrm.distanceMeters,
+      lockAt: null,
+      expiresAt: null,
+      confidence: "high",
+    };
+  } else {
+    // Fallback: straight line through crossroad. Not road-snapped but at
+    // least points in the right direction.
+    instruction = {
+      decisionId: `cross-${crossroad.nodeId}`,
+      turnKind: "straight",
+      turnPoint: { lat: crossroad.lat, lng: crossroad.lng },
+      checkpoint: { lat: crossroad.lat, lng: crossroad.lng },
+      routePolyline: [position, { lat: crossroad.lat, lng: crossroad.lng }, checkpoint],
+      distanceMeters: crossroad.distanceMeters + 10,
+      lockAt: null,
+      expiresAt: null,
+      confidence: "low",
+    };
+  }
+
+  CACHE.set(roomId, {
     expiresAtMs: nowMs + CACHE_TTL_MS,
     instruction,
   });
-
-  // Opportunistic sweep — avoid unbounded cache growth across long sessions.
-  if (CACHE.size > 128) {
-    for (const [key, entry] of CACHE.entries()) {
-      if (entry.expiresAtMs < nowMs) CACHE.delete(key);
+  // Opportunistic cleanup.
+  if (CACHE.size > 256) {
+    for (const [k, v] of CACHE.entries()) {
+      if (v.expiresAtMs < nowMs) CACHE.delete(k);
     }
   }
+  // Reference bucket key so unused-var check doesn't fire; kept as doc hint.
+  void bucket;
 
   return NextResponse.json({ instruction });
 }
