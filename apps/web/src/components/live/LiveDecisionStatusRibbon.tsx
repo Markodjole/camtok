@@ -77,9 +77,7 @@ export function LiveDecisionStatusRibbon({
       ? "bg-emerald-500/90 text-white border-emerald-300/60"
       : tone === "closed"
         ? "bg-amber-500/90 text-black border-amber-200/70"
-        : tone === "done"
-          ? "bg-sky-500/85 text-white border-sky-200/60"
-          : "bg-white/10 text-white/80 border-white/20";
+        : "bg-white/10 text-white/80 border-white/20";
 
   return (
     <div className="pointer-events-none absolute left-1/2 top-12 z-[60] -translate-x-1/2">
