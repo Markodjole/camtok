@@ -91,7 +91,7 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
   const [osmCheckpoints, setOsmCheckpoints] = useState<MapCheckpoint[]>([]);
   const [geoLoadedOnce, setGeoLoadedOnce] = useState(false);
   const [geoLoading, setGeoLoading] = useState(false);
-  const [pipPos, setPipPos] = useState({ top: 58, left: 12 });
+  const [pipPos, setPipPos] = useState({ top: 48, left: 12 });
   const [pipDragReady, setPipDragReady] = useState(false);
 
   const watchIdRef = useRef<number | null>(null);
@@ -458,7 +458,7 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
       Math.min(window.innerWidth - boxW - 8, pipDragRef.current.baseLeft + dx),
     );
     const nextTop = Math.max(
-      58,
+      48,
       Math.min(window.innerHeight - boxH - 92, pipDragRef.current.baseTop + dy),
     );
     setPipPos({ top: nextTop, left: nextLeft });
