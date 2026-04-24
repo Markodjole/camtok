@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ingestLocationBatch } from "@/actions/live-location";
+import {
+  ingestLocationBatch,
+  ingestLocationBatchForUser,
+} from "@/actions/live-location";
 import { locationBatchInputSchema } from "@bettok/live";
+import { getBearerUser } from "@/lib/api-auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -21,9 +25,15 @@ export async function POST(
       { status: 400 },
     );
   }
-  const res = await ingestLocationBatch(parsed.data);
+
+  const bearerUser = await getBearerUser(req);
+  const res = bearerUser
+    ? await ingestLocationBatchForUser(bearerUser.id, parsed.data)
+    : await ingestLocationBatch(parsed.data);
+
   if ("error" in res) {
-    return NextResponse.json({ error: res.error }, { status: 400 });
+    const status = res.error === "Not authenticated" ? 401 : 400;
+    return NextResponse.json({ error: res.error }, { status });
   }
   return NextResponse.json(res);
 }

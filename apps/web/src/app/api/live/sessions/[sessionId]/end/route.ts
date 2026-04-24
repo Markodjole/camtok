@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  heartbeatLiveSession,
-  heartbeatLiveSessionForUser,
+  endLiveSession,
+  endLiveSessionForUser,
 } from "@/actions/live-sessions";
 import { getBearerUser } from "@/lib/api-auth";
 
@@ -13,13 +13,11 @@ export async function POST(
   ctx: { params: Promise<{ sessionId: string }> },
 ) {
   const { sessionId } = await ctx.params;
-  const body = await req.json().catch(() => ({}));
 
   const bearerUser = await getBearerUser(req);
-  const payload = { sessionId, ...body };
   const res = bearerUser
-    ? await heartbeatLiveSessionForUser(bearerUser.id, payload)
-    : await heartbeatLiveSession(payload);
+    ? await endLiveSessionForUser(bearerUser.id, sessionId)
+    : await endLiveSession(sessionId);
 
   if ("error" in res) {
     const status = res.error === "Not authenticated" ? 401 : 400;

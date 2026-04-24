@@ -10,14 +10,20 @@ import {
 } from "@bettok/live";
 
 export async function ingestLocationBatch(input: LocationBatchInput) {
+  const supabase = await createServerClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { error: "Not authenticated" };
+  return ingestLocationBatchForUser(user.id, input);
+}
+
+export async function ingestLocationBatchForUser(
+  userId: string,
+  input: LocationBatchInput,
+) {
   unstable_noStore();
 
   const parsed = locationBatchInputSchema.safeParse(input);
   if (!parsed.success) return { error: "Invalid input" };
-
-  const supabase = await createServerClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return { error: "Not authenticated" };
 
   const service = await createServiceClient();
   const { data: session } = await service
@@ -27,7 +33,7 @@ export async function ingestLocationBatch(input: LocationBatchInput) {
     .maybeSingle();
 
   if (!session) return { error: "Session not found" };
-  if ((session as { owner_user_id: string }).owner_user_id !== user.id) {
+  if ((session as { owner_user_id: string }).owner_user_id !== userId) {
     return { error: "Not your session" };
   }
   if ((session as { status: string }).status !== "live") {

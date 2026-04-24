@@ -185,30 +185,45 @@ async function forceEndLiveSession(
 export async function startLiveSession(input: StartSessionInput) {
   unstable_noStore();
 
-  const parsed = startSessionInputSchema.safeParse(input);
-  if (!parsed.success) return { error: "Invalid input" };
-
   const supabase = await createServerClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return { error: "Not authenticated" };
 
-  const { data: character } = await supabase
+  return startLiveSessionForUser(user.id, input);
+}
+
+/**
+ * Same as `startLiveSession` but authenticates via an explicit userId
+ * instead of the cookie-backed session. Used by API routes that take a
+ * `Authorization: Bearer` token (mobile clients).
+ */
+export async function startLiveSessionForUser(
+  userId: string,
+  input: StartSessionInput,
+) {
+  unstable_noStore();
+
+  const parsed = startSessionInputSchema.safeParse(input);
+  if (!parsed.success) return { error: "Invalid input" };
+
+  const service = await createServiceClient();
+
+  const { data: character } = await service
     .from("characters")
     .select("id, creator_user_id, name")
     .eq("id", parsed.data.characterId)
     .maybeSingle();
 
   if (!character) return { error: "Character not found" };
-  if ((character as { creator_user_id: string | null }).creator_user_id !== user.id) {
+  if ((character as { creator_user_id: string | null }).creator_user_id !== userId) {
     return { error: "Not your character" };
   }
 
+  const user = { id: userId };
   const policy = Safety.policyFor(parsed.data.transportMode);
   if (policy.safetyLevel === "blocked") {
     return { error: "Transport mode not allowed" };
   }
-
-  const service = await createServiceClient();
 
   const { data: existing } = await service
     .from("character_live_sessions")
@@ -314,12 +329,21 @@ export async function startLiveSession(input: StartSessionInput) {
 export async function heartbeatLiveSession(input: HeartbeatInput) {
   unstable_noStore();
 
-  const parsed = heartbeatInputSchema.safeParse(input);
-  if (!parsed.success) return { error: "Invalid input" };
-
   const supabase = await createServerClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return { error: "Not authenticated" };
+
+  return heartbeatLiveSessionForUser(user.id, input);
+}
+
+export async function heartbeatLiveSessionForUser(
+  userId: string,
+  input: HeartbeatInput,
+) {
+  unstable_noStore();
+
+  const parsed = heartbeatInputSchema.safeParse(input);
+  if (!parsed.success) return { error: "Invalid input" };
 
   const service = await createServiceClient();
   const { data: session } = await service
@@ -328,7 +352,7 @@ export async function heartbeatLiveSession(input: HeartbeatInput) {
     .eq("id", parsed.data.sessionId)
     .maybeSingle();
 
-  if (!session || (session as { owner_user_id: string }).owner_user_id !== user.id) {
+  if (!session || (session as { owner_user_id: string }).owner_user_id !== userId) {
     return { error: "Session not found" };
   }
 
@@ -367,6 +391,12 @@ export async function endLiveSession(sessionId: string) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return { error: "Not authenticated" };
 
+  return endLiveSessionForUser(user.id, sessionId);
+}
+
+export async function endLiveSessionForUser(userId: string, sessionId: string) {
+  unstable_noStore();
+
   const service = await createServiceClient();
   const { data: session } = await service
     .from("character_live_sessions")
@@ -374,7 +404,7 @@ export async function endLiveSession(sessionId: string) {
     .eq("id", sessionId)
     .maybeSingle();
 
-  if (!session || (session as { owner_user_id: string }).owner_user_id !== user.id) {
+  if (!session || (session as { owner_user_id: string }).owner_user_id !== userId) {
     return { error: "Session not found" };
   }
 

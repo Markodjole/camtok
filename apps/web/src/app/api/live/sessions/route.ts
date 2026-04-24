@@ -1,25 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  heartbeatLiveSession,
-  heartbeatLiveSessionForUser,
+  startLiveSession,
+  startLiveSessionForUser,
 } from "@/actions/live-sessions";
 import { getBearerUser } from "@/lib/api-auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function POST(
-  req: NextRequest,
-  ctx: { params: Promise<{ sessionId: string }> },
-) {
-  const { sessionId } = await ctx.params;
+export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
 
   const bearerUser = await getBearerUser(req);
-  const payload = { sessionId, ...body };
   const res = bearerUser
-    ? await heartbeatLiveSessionForUser(bearerUser.id, payload)
-    : await heartbeatLiveSession(payload);
+    ? await startLiveSessionForUser(bearerUser.id, body)
+    : await startLiveSession(body);
 
   if ("error" in res) {
     const status = res.error === "Not authenticated" ? 401 : 400;
