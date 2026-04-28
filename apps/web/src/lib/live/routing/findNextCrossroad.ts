@@ -62,7 +62,7 @@ const DRIVABLE_CLASSES = [
   "service",
 ].join("|");
 
-async function fetchNearbyCrossroads(
+export async function fetchNearbyCrossroads(
   lat: number,
   lng: number,
   radiusMeters: number,

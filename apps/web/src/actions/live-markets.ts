@@ -2,6 +2,7 @@
 
 import { unstable_noStore } from "next/cache";
 import { createServerClient, createServiceClient } from "@/lib/supabase/server";
+import { metersBetween } from "@/lib/live/routing/geometry";
 import {
   proposeMarketInputSchema,
   placeLiveBetInputSchema,
@@ -13,6 +14,19 @@ import {
   type TransportMode,
   type LiveMarketOption,
 } from "@bettok/live";
+
+/**
+ * Distance (meters) at which betting must close — the driver/AI need a
+ * runway to actually execute the turn safely. Mirrored on the client so
+ * the bet UI disables at the same threshold.
+ *
+ * We use straight-line haversine here as a simple gate. It is always
+ * shorter than or equal to the road-distance from the same two points,
+ * so this gate fires *no later* than the equivalent road-distance check
+ * on the client (where we have the OSRM-derived value). Acceptable for
+ * MVP; can be tightened later by sharing the road-distance value.
+ */
+const BET_LOCK_DISTANCE_M = 60;
 
 /**
  * Propose a user market on top of the current live room context.
@@ -91,7 +105,9 @@ export async function placeLiveBet(input: PlaceLiveBetInput) {
   const service = await createServiceClient();
   const { data: market } = await service
     .from("live_betting_markets")
-    .select("id, room_id, status, locks_at, option_set")
+    .select(
+      "id, room_id, status, locks_at, option_set, turn_point_lat, turn_point_lng, live_session_id",
+    )
     .eq("id", parsed.data.marketId)
     .maybeSingle();
   if (!market) return { error: "Market not found" };
@@ -102,6 +118,42 @@ export async function placeLiveBet(input: PlaceLiveBetInput) {
   const locksAt = new Date((market as { locks_at: string }).locks_at).getTime();
   if (Date.now() >= locksAt) {
     return { error: "Market has locked" };
+  }
+
+  // Distance gate: bets close when the vehicle is within
+  // `BET_LOCK_DISTANCE_M` of the turn point so the driver has a clear
+  // runway. We approximate with straight-line distance from the latest
+  // GPS snapshot. If we cannot read a position we fall through and
+  // accept the bet — the time-based lock and tick-route distance lock
+  // act as additional safety nets.
+  const turnLat = (market as { turn_point_lat: number | null }).turn_point_lat;
+  const turnLng = (market as { turn_point_lng: number | null }).turn_point_lng;
+  const sessionId = (market as { live_session_id: string | null }).live_session_id;
+  if (turnLat != null && turnLng != null && sessionId) {
+    const { data: latestGps } = await service
+      .from("live_route_snapshots")
+      .select("normalized_lat,normalized_lng,raw_lat,raw_lng")
+      .eq("live_session_id", sessionId)
+      .order("recorded_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (latestGps) {
+      const gps = latestGps as {
+        normalized_lat: number | null;
+        normalized_lng: number | null;
+        raw_lat: number;
+        raw_lng: number;
+      };
+      const lat = gps.normalized_lat ?? gps.raw_lat;
+      const lng = gps.normalized_lng ?? gps.raw_lng;
+      const dist = metersBetween(
+        { lat, lng },
+        { lat: turnLat, lng: turnLng },
+      );
+      if (dist <= BET_LOCK_DISTANCE_M) {
+        return { error: "Too close to turn — betting closed" };
+      }
+    }
   }
 
   const options = (market as { option_set: LiveMarketOption[] }).option_set;
@@ -430,12 +482,18 @@ export async function openSystemMarketForRoom(roomId: string) {
   if (decision.triggerEtaSeconds < minTotal) {
     return { error: "ETA too short for safe betting window" };
   }
-  // Anchor the lock to the turn minus the pre-turn buffer. This keeps the
-  // promised "bets close N s before the turn" contract even when the
-  // detector picks an ETA longer than betOpenSec + preTurnBufferSec.
+  // The "betting window" is now driven by *distance* — bets close when
+  // the vehicle reaches `BET_LOCK_DISTANCE_M` from the turn point
+  // (handled in the tick route + placeLiveBet). We still need a
+  // `locks_at` timestamp because downstream code (state machine, UI
+  // countdown) depends on it, but we set it to a generous upper bound
+  // so the distance-based trigger fires first under normal driving. If
+  // the distance trigger never fires (e.g. GPS lost, vehicle stopped),
+  // this acts as a safety timeout.
   const effectiveBetOpenSec = Math.max(
     betOpenSec,
     decision.triggerEtaSeconds - preTurnBufferSec,
+    600,
   );
   const now = new Date();
   const opensAt = now;

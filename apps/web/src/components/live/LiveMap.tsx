@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { RoutePoint } from "@/actions/live-feed";
-import { trimPolylineAhead } from "@/lib/live/routing/geometry";
 
 export interface LiveMapProps {
   routePoints: RoutePoint[];
@@ -59,14 +58,17 @@ export interface LiveMapProps {
     label?: string;
   } | null;
   /**
-   * Road-snapped driver route polyline from the current position to the next
-   * checkpoint, as returned by `/api/live/rooms/:id/driver-route`. When
-   * present the map renders it as the primary blue path — the synthetic
-   * approach/exit rails drawn from `turnTarget` are suppressed.
+   * Up to 3 AI-chosen pins ahead of the driver, ordered by road distance.
+   * Each pin is a crossroad the vehicle will physically reach; the first
+   * one is the next decision point. Pins persist until the vehicle passes
+   * them, so they are stable from the moment they appear.
    */
-  driverRoute?: Array<{ lat: number; lng: number }> | null;
-  /** Fixed checkpoint (the AI-chosen point a bit past the turn). */
-  driverCheckpoint?: { lat: number; lng: number } | null;
+  driverPins?: Array<{ lat: number; lng: number; id?: number | string }> | null;
+  /**
+   * Already-trimmed 50 m road segment ending at the first pin. The backend
+   * does the slicing so the client just renders this as-is.
+   */
+  approachLine?: Array<{ lat: number; lng: number }> | null;
   /**
    * Lifecycle state of the current AI decision point. Controls whether the
    * map draws a blue marker only (bets open), a full rail (bets closed /
@@ -145,8 +147,8 @@ export function LiveMap({
   followMode = true,
   onUserInteract,
   turnTarget = null,
-  driverRoute = null,
-  driverCheckpoint = null,
+  driverPins = null,
+  approachLine = null,
   railPhase = "none",
 }: LiveMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -311,14 +313,19 @@ export function LiveMap({
       group.clearLayers();
       rail.clearLayers();
 
-      // Simple, road-accurate mode: whenever the backend gives us a crossroad
-      // and a snapped polyline we draw them. No phase gating — the rail is
-      // always "the next crossroad ahead of me", which matches what a driver
-      // expects from Google-Maps-style guidance.
+      // The backend decides 3 pins ahead for stable lookahead, but the
+      // user explicitly asked to *show* only the next one. We render
+      // pins[0] only; the rest are kept server-side and used internally.
 
-      const dotAt = driverCheckpoint ?? (turnTarget ? { lat: turnTarget.lat, lng: turnTarget.lng } : null);
-      if (dotAt) {
-        L.circle([dotAt.lat, dotAt.lng], {
+      const nextPin =
+        driverPins && driverPins.length > 0
+          ? driverPins[0]!
+          : turnTarget
+            ? { lat: turnTarget.lat, lng: turnTarget.lng }
+            : null;
+
+      if (nextPin) {
+        L.circle([nextPin.lat, nextPin.lng], {
           radius: 16,
           color: "#2563eb",
           weight: 2,
@@ -326,7 +333,7 @@ export function LiveMap({
           fillOpacity: 0.22,
           opacity: 0.9,
         }).addTo(group);
-        L.circleMarker([dotAt.lat, dotAt.lng], {
+        L.circleMarker([nextPin.lat, nextPin.lng], {
           radius: 7,
           color: "#ffffff",
           weight: 2,
@@ -335,16 +342,12 @@ export function LiveMap({
         }).addTo(group);
       }
 
-      if (!driverRoute || driverRoute.length < 2) return;
-      const last = routePoints[routePoints.length - 1];
-      const ahead = last
-        ? trimPolylineAhead(driverRoute, { lat: last.lat, lng: last.lng }, {
-            doneMeters: 4,
-            maxOffRouteMeters: 40,
-          })
-        : driverRoute;
-      if (ahead.length < 2) return;
-      const pts = ahead.map((p) => [p.lat, p.lng] as [number, number]);
+      // Approach line: backend hands us the exact 50 m road segment that
+      // ends at the first pin. We draw it directly (no client-side trim)
+      // so it always matches the road and disappears the moment the
+      // vehicle moves past the pin.
+      if (!approachLine || approachLine.length < 2) return;
+      const pts = approachLine.map((p) => [p.lat, p.lng] as [number, number]);
       L.polyline(pts, {
         color: "#1d4ed8",
         weight: 12,
@@ -360,7 +363,7 @@ export function LiveMap({
         lineJoin: "round",
       }).addTo(rail);
     })();
-  }, [turnTarget, driverRoute, driverCheckpoint, routePoints, mapReady]);
+  }, [turnTarget, driverPins, approachLine, mapReady]);
 
   useEffect(() => {
     const m = mapRef.current;

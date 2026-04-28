@@ -88,6 +88,74 @@ export function polylineLengthMeters(polyline: LatLng[]): number {
 }
 
 /**
+ * Cumulative meters from the start of `polyline` up to a projected point on
+ * segment `segmentIndex` at fractional position `t` ∈ [0,1].
+ */
+export function cumulativeMetersAt(
+  polyline: LatLng[],
+  segmentIndex: number,
+  t: number,
+): number {
+  if (polyline.length < 2 || segmentIndex < 0) return 0;
+  let total = 0;
+  const lastIdx = Math.min(segmentIndex, polyline.length - 2);
+  for (let i = 1; i <= lastIdx; i += 1) {
+    total += metersBetween(polyline[i - 1]!, polyline[i]!);
+  }
+  const a = polyline[lastIdx]!;
+  const b = polyline[lastIdx + 1]!;
+  total += metersBetween(a, b) * Math.max(0, Math.min(1, t));
+  return total;
+}
+
+/**
+ * Return the sub-polyline between two cumulative road distances measured
+ * from the start. Useful for cutting a 50 m approach segment that ends at
+ * a pin sitting somewhere along the route.
+ */
+export function slicePolylineByDistance(
+  polyline: LatLng[],
+  startMeters: number,
+  endMeters: number,
+): LatLng[] {
+  if (polyline.length < 2) return [];
+  const start = Math.max(0, Math.min(startMeters, endMeters));
+  const end = Math.max(start, endMeters);
+  const out: LatLng[] = [];
+  let acc = 0;
+  let started = false;
+  for (let i = 1; i < polyline.length; i += 1) {
+    const a = polyline[i - 1]!;
+    const b = polyline[i]!;
+    const segLen = metersBetween(a, b);
+    if (segLen === 0) continue;
+    const segStart = acc;
+    const segEnd = acc + segLen;
+    if (segEnd >= start && !started) {
+      const t = (start - segStart) / segLen;
+      out.push({
+        lat: a.lat + (b.lat - a.lat) * t,
+        lng: a.lng + (b.lng - a.lng) * t,
+      });
+      started = true;
+    }
+    if (started) {
+      if (end <= segEnd) {
+        const t = (end - segStart) / segLen;
+        out.push({
+          lat: a.lat + (b.lat - a.lat) * t,
+          lng: a.lng + (b.lng - a.lng) * t,
+        });
+        return out;
+      }
+      out.push(b);
+    }
+    acc = segEnd;
+  }
+  return out;
+}
+
+/**
  * Project a point onto a polyline, returning the nearest segment index, the
  * fractional position along that segment (0–1), the perpendicular distance
  * in meters, and the projected point itself.

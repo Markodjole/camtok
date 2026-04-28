@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import dynamic from "next/dynamic";
 import type { LiveFeedRow, RoutePoint } from "@/actions/live-feed";
+import { metersBetween } from "@/lib/live/routing/geometry";
 import { LiveVideoPlayer } from "./LiveVideoPlayer";
 import { DirectionalBetPad } from "./DirectionalBetPad";
 import { LiveDecisionStatusRibbon } from "./LiveDecisionStatusRibbon";
@@ -163,8 +164,12 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [geoLoading, setGeoLoading] = useState(false);
   const [pipPos, setPipPos] = useState({ top: 48, left: 12 });
   const [pipDragReady, setPipDragReady] = useState(false);
-  const [driverRoute, setDriverRoute] = useState<Array<{ lat: number; lng: number }> | null>(null);
-  const [driverCheckpoint, setDriverCheckpoint] = useState<{ lat: number; lng: number } | null>(null);
+  const [driverPins, setDriverPins] = useState<
+    Array<{ lat: number; lng: number; id?: number | string }> | null
+  >(null);
+  const [approachLine, setApproachLine] = useState<
+    Array<{ lat: number; lng: number }> | null
+  >(null);
   const [nowTick, setNowTick] = useState(() => Date.now());
   const [lastBetMarketId, setLastBetMarketId] = useState<string | null>(null);
   const [lastBetOptionLabel, setLastBetOptionLabel] = useState<string | null>(null);
@@ -273,13 +278,32 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const viewerTurnTarget = currentMarket?.turnPointLat != null && currentMarket?.turnPointLng != null
     ? { lat: currentMarket.turnPointLat, lng: currentMarket.turnPointLng, kind: "straight" as const, label: "" }
     : null;
-  const isLocked = currentMarket
+  // Distance gate: betting closes when the vehicle is within 60 m of the
+  // turn point. We prefer the road-distance value coming from
+  // /driver-route (driverPins[0].distanceMeters) when the active pin
+  // matches the market's turn point; otherwise fall back to a quick
+  // straight-line distance to the market's turn point.
+  const isDistanceLocked = (() => {
+    const last = routePoints[routePoints.length - 1];
+    if (!last) return false;
+    const turnPoint =
+      currentMarket?.turnPointLat != null && currentMarket?.turnPointLng != null
+        ? { lat: currentMarket.turnPointLat, lng: currentMarket.turnPointLng }
+        : driverPins && driverPins.length > 0
+          ? { lat: driverPins[0]!.lat, lng: driverPins[0]!.lng }
+          : null;
+    if (!turnPoint) return false;
+    const dist = metersBetween({ lat: last.lat, lng: last.lng }, turnPoint);
+    return dist <= 60;
+  })();
+  const isTimeLocked = currentMarket
     ? new Date(currentMarket.locksAt) <= new Date()
     : true;
+  const isLocked = isTimeLocked || isDistanceLocked;
   const viewerRailPhase: "none" | "pending" | "active" = (() => {
     // Viewer should always see the next decision marker (blue dot) when we
     // have either a market turn-point or a checkpoint from driver-route.
-    if (!viewerTurnTarget && !driverCheckpoint) return "none";
+    if (!viewerTurnTarget && (!driverPins || driverPins.length === 0)) return "none";
     if (!currentMarket || !viewerTurnTarget) return "pending";
     const locksAtMs = Date.parse(currentMarket.locksAt);
     if (currentMarket.revealAt) {
@@ -381,17 +405,21 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         if (!r.ok) return;
         const j = (await r.json()) as {
           instruction: {
-            routePolyline: Array<{ lat: number; lng: number }>;
-            checkpoint: { lat: number; lng: number };
+            pins: Array<{ id: number; lat: number; lng: number }>;
+            approachLine: Array<{ lat: number; lng: number }>;
           } | null;
         };
         if (cancelled) return;
-        if (j.instruction && j.instruction.routePolyline.length >= 2) {
-          setDriverRoute(j.instruction.routePolyline);
-          setDriverCheckpoint(j.instruction.checkpoint);
+        if (j.instruction && j.instruction.pins.length > 0) {
+          setDriverPins(j.instruction.pins);
+          setApproachLine(
+            j.instruction.approachLine.length >= 2
+              ? j.instruction.approachLine
+              : null,
+          );
         } else {
-          setDriverRoute(null);
-          setDriverCheckpoint(null);
+          setDriverPins(null);
+          setApproachLine(null);
         }
       } catch {
         /* transient */
@@ -466,7 +494,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         phase={viewerRailPhase}
         locksAt={currentMarket?.locksAt ?? null}
         revealAt={currentMarket?.revealAt ?? null}
-        turnPoint={viewerTurnTarget ?? driverCheckpoint}
+        turnPoint={viewerTurnTarget ?? (driverPins && driverPins[0]) ?? null}
         driverPos={viewerDriverPos}
         betOptionLabel={
           currentMarket && lastBetMarketId === currentMarket.id
@@ -520,8 +548,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             showZones={showZones}
             showCheckpoints={showCheckpoints}
             turnTarget={viewerTurnTarget}
-            driverRoute={driverRoute}
-            driverCheckpoint={driverCheckpoint}
+            driverPins={driverPins}
+            approachLine={approachLine}
             railPhase={viewerRailPhase}
             onZoneSelect={(id) => {
               setSelectedZoneId(id);
@@ -725,8 +753,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               showZones={showZones}
               showCheckpoints={showCheckpoints}
               turnTarget={viewerTurnTarget}
-              driverRoute={driverRoute}
-              driverCheckpoint={driverCheckpoint}
+              driverPins={driverPins}
+              approachLine={approachLine}
               railPhase={viewerRailPhase}
             />
             {routePoints.length === 0 && (

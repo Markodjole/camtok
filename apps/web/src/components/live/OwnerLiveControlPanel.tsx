@@ -82,8 +82,12 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
   const [aiTurnEtaSec, setAiTurnEtaSec] = useState<number | null>(null);
   const [aiTurnDistanceM, setAiTurnDistanceM] = useState<number | null>(null);
   const [realTurnPoint, setRealTurnPoint] = useState<{ lat: number; lng: number } | null>(null);
-  const [driverRoute, setDriverRoute] = useState<Array<{ lat: number; lng: number }> | null>(null);
-  const [driverCheckpoint, setDriverCheckpoint] = useState<{ lat: number; lng: number } | null>(null);
+  const [driverPins, setDriverPins] = useState<
+    Array<{ lat: number; lng: number; id?: number | string }> | null
+  >(null);
+  const [approachLine, setApproachLine] = useState<
+    Array<{ lat: number; lng: number }> | null
+  >(null);
   const [marketLocksAt, setMarketLocksAt] = useState<string | null>(null);
   const [marketRevealAt, setMarketRevealAt] = useState<string | null>(null);
   const [nowTick, setNowTick] = useState(() => Date.now());
@@ -355,17 +359,21 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
         if (!r.ok) return;
         const j = (await r.json()) as {
           instruction: {
-            routePolyline: Array<{ lat: number; lng: number }>;
-            checkpoint: { lat: number; lng: number };
+            pins: Array<{ id: number; lat: number; lng: number }>;
+            approachLine: Array<{ lat: number; lng: number }>;
           } | null;
         };
         if (cancelled) return;
-        if (j.instruction && j.instruction.routePolyline.length >= 2) {
-          setDriverRoute(j.instruction.routePolyline);
-          setDriverCheckpoint(j.instruction.checkpoint);
+        if (j.instruction && j.instruction.pins.length > 0) {
+          setDriverPins(j.instruction.pins);
+          setApproachLine(
+            j.instruction.approachLine.length >= 2
+              ? j.instruction.approachLine
+              : null,
+          );
         } else {
-          setDriverRoute(null);
-          setDriverCheckpoint(null);
+          setDriverPins(null);
+          setApproachLine(null);
         }
       } catch {
         /* transient */
@@ -563,8 +571,8 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
               turnHintEtaSec={aiTurnEtaSec}
               turnHintDistanceM={aiTurnDistanceM}
               turnTarget={turnTarget}
-              driverRoute={driverRoute}
-              driverCheckpoint={driverCheckpoint}
+              driverPins={driverPins}
+              approachLine={approachLine}
               railPhase={railPhase}
             />
           ) : (
@@ -588,7 +596,7 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
           phase={railPhase}
           locksAt={marketLocksAt}
           revealAt={marketRevealAt}
-          turnPoint={turnTarget ?? driverCheckpoint}
+          turnPoint={turnTarget ?? (driverPins && driverPins[0]) ?? null}
           driverPos={
             routePoints.length > 0
               ? { lat: routePoints[routePoints.length - 1]!.lat, lng: routePoints[routePoints.length - 1]!.lng }
@@ -652,8 +660,8 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
                 turnHintEtaSec={aiTurnEtaSec}
                 turnHintDistanceM={aiTurnDistanceM}
                 turnTarget={turnTarget}
-                driverRoute={driverRoute}
-                driverCheckpoint={driverCheckpoint}
+                driverPins={driverPins}
+                approachLine={approachLine}
                 railPhase={railPhase}
               />
               {routePoints.length === 0 && (
