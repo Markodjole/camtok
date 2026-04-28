@@ -324,9 +324,9 @@ export function LiveMap({
             ? { lat: turnTarget.lat, lng: turnTarget.lng }
             : null;
       const nextDistance = driverPins?.[0]?.distanceMeters ?? null;
-      const showPin =
-        nextPin &&
-        (nextDistance == null || (nextDistance >= 50 && nextDistance <= 250));
+      // Keep the blue pin visible from appearance until the backend removes it
+      // after the vehicle has passed it.
+      const showPin = nextPin;
       const showDriverLine =
         audienceRole === "streamer" &&
         nextDistance != null &&
