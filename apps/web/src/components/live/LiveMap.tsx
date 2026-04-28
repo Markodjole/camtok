@@ -63,7 +63,7 @@ export interface LiveMapProps {
    * one is the next decision point. Pins persist until the vehicle passes
    * them, so they are stable from the moment they appear.
    */
-  driverPins?: Array<{ lat: number; lng: number; id?: number | string }> | null;
+  driverPins?: Array<{ lat: number; lng: number; id?: number | string; distanceMeters?: number }> | null;
   /**
    * Already-trimmed 50 m road segment ending at the first pin. The backend
    * does the slicing so the client just renders this as-is.
@@ -323,8 +323,16 @@ export function LiveMap({
           : turnTarget
             ? { lat: turnTarget.lat, lng: turnTarget.lng }
             : null;
+      const nextDistance = driverPins?.[0]?.distanceMeters ?? null;
+      const showPin =
+        nextPin &&
+        (nextDistance == null || (nextDistance >= 50 && nextDistance <= 250));
+      const showDriverLine =
+        audienceRole === "streamer" &&
+        nextDistance != null &&
+        nextDistance < 50;
 
-      if (nextPin) {
+      if (showPin) {
         L.circle([nextPin.lat, nextPin.lng], {
           radius: 16,
           color: "#2563eb",
@@ -346,7 +354,7 @@ export function LiveMap({
       // ends at the first pin. We draw it directly (no client-side trim)
       // so it always matches the road and disappears the moment the
       // vehicle moves past the pin.
-      if (!approachLine || approachLine.length < 2) return;
+      if (!showDriverLine || !approachLine || approachLine.length < 2) return;
       const pts = approachLine.map((p) => [p.lat, p.lng] as [number, number]);
       L.polyline(pts, {
         color: "#1d4ed8",
@@ -363,7 +371,7 @@ export function LiveMap({
         lineJoin: "round",
       }).addTo(rail);
     })();
-  }, [turnTarget, driverPins, approachLine, mapReady]);
+  }, [turnTarget, driverPins, approachLine, mapReady, audienceRole]);
 
   useEffect(() => {
     const m = mapRef.current;

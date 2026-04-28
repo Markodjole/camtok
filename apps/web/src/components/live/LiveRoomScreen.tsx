@@ -165,7 +165,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [pipPos, setPipPos] = useState({ top: 48, left: 12 });
   const [pipDragReady, setPipDragReady] = useState(false);
   const [driverPins, setDriverPins] = useState<
-    Array<{ lat: number; lng: number; id?: number | string }> | null
+    Array<{ lat: number; lng: number; id?: number | string; distanceMeters?: number }> | null
   >(null);
   const [approachLine, setApproachLine] = useState<
     Array<{ lat: number; lng: number }> | null
@@ -405,7 +405,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         if (!r.ok) return;
         const j = (await r.json()) as {
           instruction: {
-            pins: Array<{ id: number; lat: number; lng: number }>;
+            pins: Array<{ id: number; lat: number; lng: number; distanceMeters: number }>;
             approachLine: Array<{ lat: number; lng: number }>;
           } | null;
         };

@@ -75,8 +75,6 @@ const ROOM_STATE = new Map<string, RoomState>();
 const ROOM_STATE_TTL_MS = 5 * 60_000;
 
 const TARGET_PIN_COUNT = 3;
-const MIN_SPACING_M = 200;
-const MAX_SPACING_M = 400;
 const APPROACH_LINE_M = 50;
 /** Pin is treated as "passed" once its road distance from vehicle is below this. */
 const PASSED_THRESHOLD_M = 5;
@@ -86,6 +84,17 @@ const ON_ROUTE_THRESHOLD_M = 14;
 const FORWARD_PROBE_M = 1500;
 /** Search this far for OSM crossroad candidates. */
 const CROSSROAD_SEARCH_RADIUS_M = 1500;
+
+function spacingWindowForSpeed(speedMps: number | null | undefined): {
+  minSpacingM: number;
+  maxSpacingM: number;
+} {
+  const s = speedMps ?? 0;
+  if (s <= 2) return { minSpacingM: 150, maxSpacingM: 180 };
+  if (s <= 6) return { minSpacingM: 170, maxSpacingM: 210 };
+  if (s <= 12) return { minSpacingM: 190, maxSpacingM: 230 };
+  return { minSpacingM: 210, maxSpacingM: 250 };
+}
 
 function deriveMotionBearing(
   points: Array<{ lat: number; lng: number; heading?: number | null; recordedAt?: string }>,
@@ -146,15 +155,18 @@ function projectCrossroadsOntoRoute(
  * each pin sits 200–400 m of road distance past the previous (or past the
  * vehicle for the first pin).
  */
-function buildFreshQueue(candidates: RoutePinCandidate[]): RoutePinCandidate[] {
+function buildFreshQueue(
+  candidates: RoutePinCandidate[],
+  spacing: { minSpacingM: number; maxSpacingM: number },
+): RoutePinCandidate[] {
   const queue: RoutePinCandidate[] = [];
   let cursor = 0;
   while (queue.length < TARGET_PIN_COUNT) {
     const baseM = queue.length === 0 ? 0 : queue[queue.length - 1]!.cumulativeM;
     const next = candidates.find(
       (c) =>
-        c.cumulativeM - baseM >= MIN_SPACING_M &&
-        c.cumulativeM - baseM <= MAX_SPACING_M &&
+        c.cumulativeM - baseM >= spacing.minSpacingM &&
+        c.cumulativeM - baseM <= spacing.maxSpacingM &&
         !queue.some((q) => q.id === c.id),
     );
     if (!next) break;
@@ -172,14 +184,15 @@ function buildFreshQueue(candidates: RoutePinCandidate[]): RoutePinCandidate[] {
 function topUpQueue(
   surviving: RoutePinCandidate[],
   candidates: RoutePinCandidate[],
+  spacing: { minSpacingM: number; maxSpacingM: number },
 ): RoutePinCandidate[] {
   const queue = surviving.slice();
   while (queue.length < TARGET_PIN_COUNT) {
     const baseM = queue.length === 0 ? 0 : queue[queue.length - 1]!.cumulativeM;
     const next = candidates.find(
       (c) =>
-        c.cumulativeM - baseM >= MIN_SPACING_M &&
-        c.cumulativeM - baseM <= MAX_SPACING_M &&
+        c.cumulativeM - baseM >= spacing.minSpacingM &&
+        c.cumulativeM - baseM <= spacing.maxSpacingM &&
         !queue.some((q) => q.id === c.id),
     );
     if (!next) break;
@@ -211,6 +224,7 @@ export async function GET(
   }
 
   const position: LatLng = { lat: last.lat, lng: last.lng };
+  const spacing = spacingWindowForSpeed(last.speedMps);
   const farTarget = projectPoint(position, heading, FORWARD_PROBE_M);
 
   const [osrm, crossroads] = await Promise.all([
@@ -244,8 +258,8 @@ export async function GET(
   // If we have nothing, start a fresh queue. Otherwise, top up.
   const queue =
     survivingFromState.length === 0
-      ? buildFreshQueue(candidates)
-      : topUpQueue(survivingFromState, candidates);
+      ? buildFreshQueue(candidates, spacing)
+      : topUpQueue(survivingFromState, candidates, spacing);
 
   ROOM_STATE.set(roomId, {
     pinIds: queue.map((p) => p.id),

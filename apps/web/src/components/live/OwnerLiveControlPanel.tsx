@@ -83,7 +83,7 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
   const [aiTurnDistanceM, setAiTurnDistanceM] = useState<number | null>(null);
   const [realTurnPoint, setRealTurnPoint] = useState<{ lat: number; lng: number } | null>(null);
   const [driverPins, setDriverPins] = useState<
-    Array<{ lat: number; lng: number; id?: number | string }> | null
+    Array<{ lat: number; lng: number; id?: number | string; distanceMeters?: number }> | null
   >(null);
   const [approachLine, setApproachLine] = useState<
     Array<{ lat: number; lng: number }> | null
@@ -359,7 +359,7 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
         if (!r.ok) return;
         const j = (await r.json()) as {
           instruction: {
-            pins: Array<{ id: number; lat: number; lng: number }>;
+            pins: Array<{ id: number; lat: number; lng: number; distanceMeters: number }>;
             approachLine: Array<{ lat: number; lng: number }>;
           } | null;
         };
