@@ -1,6 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  type CityGridSpecCompact,
+  cellLabel,
+  cellsInLatLngBounds,
+  parseGridOptionId,
+} from "@/lib/live/grid/cityGrid500";
 import dynamic from "next/dynamic";
 import type { LiveFeedRow, RoutePoint } from "@/actions/live-feed";
 import { metersBetween } from "@/lib/live/routing/geometry";
@@ -64,10 +70,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [showZones, setShowZones] = useState(true);
   const [showCheckpoints, setShowCheckpoints] = useState(true);
   const [mapFollow, setMapFollow] = useState(true);
-  const [osmZones, setOsmZones] = useState<MapZone[]>([]);
   const [osmCheckpoints, setOsmCheckpoints] = useState<MapCheckpoint[]>([]);
-  const [geoLoadedOnce, setGeoLoadedOnce] = useState(false);
-  const [geoLoading, setGeoLoading] = useState(false);
   const [pipPos, setPipPos] = useState({ top: 48, left: 12 });
   const [pipDragReady, setPipDragReady] = useState(false);
   const [driverPins, setDriverPins] = useState<
@@ -79,7 +82,6 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [nowTick, setNowTick] = useState(() => Date.now());
   const [lastBetMarketId, setLastBetMarketId] = useState<string | null>(null);
   const [lastBetOptionLabel, setLastBetOptionLabel] = useState<string | null>(null);
-  const lastGeoKeyRef = useRef<string | null>(null);
   const pipLongPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pipDragRef = useRef<{
     pointerId: number | null;
@@ -160,10 +162,17 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       });
       if (res.ok) {
         flash(betAmount);
-        const pickedLabel =
-          room.currentMarket.options.find((o) => o.id === optionId)?.shortLabel ??
-          room.currentMarket.options.find((o) => o.id === optionId)?.label ??
-          null;
+        let pickedLabel: string | null = null;
+        if (room.currentMarket.marketType === "city_grid") {
+          const spec = room.currentMarket.cityGridSpec;
+          const p = parseGridOptionId(optionId);
+          pickedLabel = p && spec ? cellLabel(p.row, p.col) : optionId;
+        } else {
+          pickedLabel =
+            room.currentMarket.options.find((o) => o.id === optionId)?.shortLabel ??
+            room.currentMarket.options.find((o) => o.id === optionId)?.label ??
+            null;
+        }
         setLastBetMarketId(room.currentMarket.id);
         setLastBetOptionLabel(pickedLabel);
         return { ok: true as const };
@@ -184,29 +193,63 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const viewerTurnTarget = currentMarket?.turnPointLat != null && currentMarket?.turnPointLng != null
     ? { lat: currentMarket.turnPointLat, lng: currentMarket.turnPointLng, kind: "straight" as const, label: "" }
     : null;
+
+  const cityGridSpec =
+    currentMarket?.marketType === "city_grid"
+      ? (currentMarket.cityGridSpec as CityGridSpecCompact | null | undefined)
+      : null;
+
+  const zones: MapZone[] = useMemo(() => {
+    if (!cityGridSpec) return [];
+    const last = routePoints[routePoints.length - 1];
+    const lat = last?.lat ?? initialRoom.routePoints?.[0]?.lat ?? 44.8125;
+    const lng = last?.lng ?? initialRoom.routePoints?.[0]?.lng ?? 20.4612;
+    const pad = 0.008;
+    const cells = cellsInLatLngBounds(
+      cityGridSpec,
+      lat - pad,
+      lng - pad,
+      lat + pad,
+      lng + pad,
+    );
+    return cells.map((c) => ({
+      id: c.id,
+      slug: c.id,
+      name: c.label,
+      kind: "district" as const,
+      color: `hsl(${(c.col * 37 + c.row * 17) % 360} 52% 42%)`,
+      isActive: true,
+      polygon: c.polygon,
+    }));
+  }, [cityGridSpec, routePoints, initialRoom.routePoints]);
+
   // Distance gate: betting closes when the vehicle is within 60 m of the
   // turn point. We prefer the road-distance value coming from
   // /driver-route (driverPins[0].distanceMeters) when the active pin
   // matches the market's turn point; otherwise fall back to a quick
   // straight-line distance to the market's turn point.
-  const isDistanceLocked = (() => {
-    const last = routePoints[routePoints.length - 1];
-    if (!last) return false;
-    const turnPoint =
-      currentMarket?.turnPointLat != null && currentMarket?.turnPointLng != null
-        ? { lat: currentMarket.turnPointLat, lng: currentMarket.turnPointLng }
-        : driverPins && driverPins.length > 0
-          ? { lat: driverPins[0]!.lat, lng: driverPins[0]!.lng }
-          : null;
-    if (!turnPoint) return false;
-    const dist = metersBetween({ lat: last.lat, lng: last.lng }, turnPoint);
-    return dist <= 60;
-  })();
+  const isDistanceLocked =
+    currentMarket?.marketType === "city_grid"
+      ? false
+      : (() => {
+          const last = routePoints[routePoints.length - 1];
+          if (!last) return false;
+          const turnPoint =
+            currentMarket?.turnPointLat != null && currentMarket?.turnPointLng != null
+              ? { lat: currentMarket.turnPointLat, lng: currentMarket.turnPointLng }
+              : driverPins && driverPins.length > 0
+                ? { lat: driverPins[0]!.lat, lng: driverPins[0]!.lng }
+                : null;
+          if (!turnPoint) return false;
+          const dist = metersBetween({ lat: last.lat, lng: last.lng }, turnPoint);
+          return dist <= 60;
+        })();
   const isTimeLocked = currentMarket
     ? new Date(currentMarket.locksAt) <= new Date()
     : true;
   const isLocked = isTimeLocked || isDistanceLocked;
   const viewerRailPhase: "none" | "pending" | "active" = (() => {
+    if (currentMarket?.marketType === "city_grid") return "none";
     // Viewer should always see the next decision marker (blue dot) when we
     // have either a market turn-point or a checkpoint from driver-route.
     if (!viewerTurnTarget && (!driverPins || driverPins.length === 0)) return "none";
@@ -231,71 +274,28 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       }
     }
   }, [currentMarket?.id, lastBetMarketId]);
-  const zones = osmZones;
   const checkpoints = osmCheckpoints;
   const selectedZone = zones.find((z) => z.id === selectedZoneId) ?? null;
   const selectedCheckpoint = checkpoints.find((c) => c.id === selectedCheckpointId) ?? null;
   const selectedTargetLabel = selectedZone?.name ?? selectedCheckpoint?.name ?? null;
 
   useEffect(() => {
-    // Keep map-sheet bet option in sync with the currently active market
+    if (currentMarket?.marketType === "city_grid") {
+      setSelectedMapOptionId(selectedZoneId);
+      return;
+    }
     const first = currentMarket?.options?.[0]?.id ?? null;
     setSelectedMapOptionId(first);
-  }, [currentMarket?.id, selectedZoneId, selectedCheckpointId]);
+  }, [
+    currentMarket?.id,
+    currentMarket?.marketType,
+    selectedZoneId,
+    selectedCheckpointId,
+  ]);
 
   useEffect(() => {
-    const lastPt = routePoints[routePoints.length - 1] ?? initialRoom.routePoints?.[0] ?? null;
-    const turnPt =
-      room.currentMarket?.turnPointLat != null && room.currentMarket?.turnPointLng != null
-        ? { lat: room.currentMarket.turnPointLat, lng: room.currentMarket.turnPointLng }
-        : null;
-    const anchor = lastPt ?? turnPt ?? { lat: 44.8125, lng: 20.4612 };
-    const lat = Number(anchor.lat.toFixed(3));
-    const lng = Number(anchor.lng.toFixed(3));
-    const geoKey = `${lat},${lng}`;
-    if (lastGeoKeyRef.current === geoKey) return;
-    lastGeoKeyRef.current = geoKey;
-    const fetchGeoContext = async () => {
-      try {
-        if (!geoLoadedOnce) setGeoLoading(true);
-        const res = await fetch(`/api/live/google-geo-context?lat=${lat}&lng=${lng}`, {
-          cache: "no-store",
-        });
-        if (!res.ok) {
-          setGeoLoadedOnce(true);
-          return;
-        }
-        const json = (await res.json()) as {
-          zones?: MapZone[];
-          checkpoints?: MapCheckpoint[];
-          source?: string;
-          reason?: string;
-        };
-        const nextZones = Array.isArray(json.zones) ? json.zones : [];
-        const nextCheckpoints = Array.isArray(json.checkpoints) ? json.checkpoints : [];
-        console.log("[google-geo-context][viewer]", {
-          lat,
-          lng,
-          source: json.source ?? "unknown",
-          reason: json.reason ?? "unknown",
-          zonesCount: nextZones.length,
-          checkpointsCount: nextCheckpoints.length,
-          zones: nextZones,
-          checkpoints: nextCheckpoints,
-        });
-        setOsmZones(nextZones);
-        setOsmCheckpoints(nextCheckpoints);
-        setGeoLoadedOnce(true);
-      } catch {
-        setGeoLoadedOnce(true);
-      } finally {
-        setGeoLoading(false);
-      }
-    };
-
-    void fetchGeoContext();
-    return () => undefined;
-  }, [routePoints, initialRoom.routePoints, geoLoadedOnce, room.currentMarket?.turnPointLat, room.currentMarket?.turnPointLng]);
+    setOsmCheckpoints([]);
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -563,11 +563,6 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           </IconRailButton>
         </div>
       ) : null}
-      {mapExpanded && geoLoading && !geoLoadedOnce ? (
-        <div className="pointer-events-none absolute left-4 right-4 top-40 z-40 rounded-xl border border-white/20 bg-black/45 px-3 py-2 text-[11px] text-white/80 backdrop-blur">
-          Loading zones…
-        </div>
-      ) : null}
       {mapExpanded && !mapFollow ? (
         <button
           type="button"
@@ -706,7 +701,38 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       {/* ── Bottom gradient scrim ────────────────────────── */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-44 bg-gradient-to-t from-black/70 to-transparent" />
 
-      {mapExpanded && showLiveBets && selectedTargetLabel ? (
+      {mapExpanded && showLiveBets && currentMarket?.marketType === "city_grid" && selectedZoneId ? (
+        <MapSelectionBottomSheet
+          selectedLabel={selectedZone?.name ?? selectedZoneId}
+          marketTitle={currentMarket?.title ?? "Live market"}
+          marketOptions={[]}
+          selectedOptionId={selectedZoneId}
+          onSelectOption={() => undefined}
+          bettingClosed={isLocked || !currentMarket}
+          isPlacing={!!placingOptionId}
+          error={mapSheetError}
+          countdown={currentMarket ? <MarketTimer locksAt={currentMarket.locksAt} /> : null}
+          onClose={() => {
+            setSelectedZoneId(null);
+            setSelectedCheckpointId(null);
+            setMapSheetError(null);
+          }}
+          onPlaceBet={async () => {
+            if (!selectedZoneId) return;
+            const result = await placeBet(selectedZoneId);
+            if (result?.ok) {
+              setSelectedZoneId(null);
+              setSelectedCheckpointId(null);
+              setMapSheetError(null);
+            }
+          }}
+          gridMode
+        />
+      ) : null}
+      {mapExpanded &&
+      showLiveBets &&
+      currentMarket?.marketType !== "city_grid" &&
+      selectedTargetLabel ? (
         <MapSelectionBottomSheet
           selectedLabel={selectedTargetLabel}
           marketTitle={currentMarket?.title ?? "Live market"}
@@ -737,15 +763,17 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       {/* ── Joystick — always at exact same position ── */}
       <div className="pointer-events-none fixed inset-x-0 bottom-0 z-[60] flex flex-col items-center px-4 pb-[calc(4.25rem+env(safe-area-inset-bottom,0px))]">
         <div className="pointer-events-auto flex flex-col items-center">
-          <DirectionalBetPad
-            options={currentMarket?.options ?? []}
-            betAmount={betAmount}
-            onBet={async (optionId) => {
-              await placeBet(optionId);
-            }}
-            locked={isLocked || !currentMarket || !!placingOptionId}
-            routePoints={routePoints}
-          />
+          {currentMarket && currentMarket.marketType !== "city_grid" ? (
+            <DirectionalBetPad
+              options={currentMarket.options}
+              betAmount={betAmount}
+              onBet={async (optionId) => {
+                await placeBet(optionId);
+              }}
+              locked={isLocked || !currentMarket || !!placingOptionId}
+              routePoints={routePoints}
+            />
+          ) : null}
           {error && <div className="mt-1 text-[10px] text-red-400">{error}</div>}
         </div>
       </div>
@@ -783,6 +811,7 @@ function MapSelectionBottomSheet({
   countdown,
   onClose,
   onPlaceBet,
+  gridMode = false,
 }: {
   selectedLabel: string;
   marketTitle: string;
@@ -795,6 +824,7 @@ function MapSelectionBottomSheet({
   countdown: ReactNode;
   onClose: () => void;
   onPlaceBet: () => Promise<void>;
+  gridMode?: boolean;
 }) {
   const sorted = [...marketOptions].sort((a, b) => a.displayOrder - b.displayOrder);
   return (
@@ -812,25 +842,31 @@ function MapSelectionBottomSheet({
           </button>
         </div>
         <div className="mb-2 text-[10px] text-white/65">{marketTitle}</div>
-        <div className="space-y-1">
-          {sorted.map((opt) => {
-            const active = selectedOptionId === opt.id;
-            return (
-              <button
-                key={opt.id}
-                type="button"
-                onClick={() => onSelectOption(opt.id)}
-                className={`block w-full rounded-lg px-2 py-1.5 text-left text-[11px] ${
-                  active
-                    ? "border border-red-400/60 bg-red-500/20 text-white"
-                    : "border border-transparent bg-white/5 text-white/85"
-                }`}
-              >
-                {opt.shortLabel ?? opt.label}
-              </button>
-            );
-          })}
-        </div>
+        {gridMode ? (
+          <div className="rounded-lg border border-cyan-500/40 bg-cyan-500/15 px-2 py-2 text-[11px] text-cyan-50">
+            500 m cell · tap map to change
+          </div>
+        ) : (
+          <div className="space-y-1">
+            {sorted.map((opt) => {
+              const active = selectedOptionId === opt.id;
+              return (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => onSelectOption(opt.id)}
+                  className={`block w-full rounded-lg px-2 py-1.5 text-left text-[11px] ${
+                    active
+                      ? "border border-red-400/60 bg-red-500/20 text-white"
+                      : "border border-transparent bg-white/5 text-white/85"
+                  }`}
+                >
+                  {opt.shortLabel ?? opt.label}
+                </button>
+              );
+            })}
+          </div>
+        )}
         {error ? <div className="mt-2 text-[10px] text-red-300">{error}</div> : null}
         <button
           type="button"
@@ -843,8 +879,12 @@ function MapSelectionBottomSheet({
             : isPlacing
               ? "Placing..."
               : !selectedOptionId
-                ? "Select option"
-                : "Place bet"}
+                ? gridMode
+                  ? "Select a square"
+                  : "Select option"
+                : gridMode
+                  ? `Place bet on ${selectedLabel}`
+                  : "Place bet"}
         </button>
       </div>
     </div>

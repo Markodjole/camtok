@@ -14,6 +14,7 @@ import {
   type TransportMode,
   type LiveMarketOption,
 } from "@bettok/live";
+import { isValidGridOptionForSpec, type CityGridSpecCompact } from "@/lib/live/grid/cityGrid500";
 
 /**
  * Distance (meters) at which betting must close — the driver/AI need a
@@ -106,7 +107,7 @@ export async function placeLiveBet(input: PlaceLiveBetInput) {
   const { data: market } = await service
     .from("live_betting_markets")
     .select(
-      "id, room_id, status, locks_at, option_set, turn_point_lat, turn_point_lng, live_session_id",
+      "id, room_id, status, locks_at, option_set, turn_point_lat, turn_point_lng, live_session_id, market_type, city_grid_spec",
     )
     .eq("id", parsed.data.marketId)
     .maybeSingle();
@@ -156,9 +157,18 @@ export async function placeLiveBet(input: PlaceLiveBetInput) {
     }
   }
 
-  const options = (market as { option_set: LiveMarketOption[] }).option_set;
-  if (!options.some((o) => o.id === parsed.data.optionId)) {
-    return { error: "Invalid option" };
+  const marketType = (market as { market_type?: string }).market_type ?? "";
+  const gridSpec = (market as { city_grid_spec: CityGridSpecCompact | null })
+    .city_grid_spec;
+  if (marketType === "city_grid") {
+    if (!gridSpec || !isValidGridOptionForSpec(gridSpec, parsed.data.optionId)) {
+      return { error: "Invalid grid square" };
+    }
+  } else {
+    const options = (market as { option_set: LiveMarketOption[] }).option_set;
+    if (!options.some((o) => o.id === parsed.data.optionId)) {
+      return { error: "Invalid option" };
+    }
   }
 
   if (parsed.data.stakeAmount > 50) {

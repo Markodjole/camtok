@@ -8,6 +8,10 @@ import {
   type LiveMarketOption,
   type RouteDecisionOption,
 } from "@bettok/live";
+import {
+  cellIdForPosition,
+  type CityGridSpecCompact,
+} from "@/lib/live/grid/cityGrid500";
 
 type LockEvidence = {
   currentNodeId: string;
@@ -156,7 +160,9 @@ export async function lockMarket(marketId: string) {
 
   const { data: market } = await service
     .from("live_betting_markets")
-    .select("id, room_id, live_session_id, status, option_set, decision_node_id, locks_at")
+    .select(
+      "id, room_id, live_session_id, status, option_set, decision_node_id, locks_at, market_type, city_grid_spec",
+    )
     .eq("id", marketId)
     .maybeSingle();
   if (!market) return { error: "Market not found" };
@@ -166,14 +172,33 @@ export async function lockMarket(marketId: string) {
 
   const { data: snapshot } = await service
     .from("live_route_snapshots")
-    .select("id, recorded_at, normalized_lat, normalized_lng, speed_mps, heading_deg, confidence_score")
+    .select(
+      "id, recorded_at, normalized_lat, normalized_lng, raw_lat, raw_lng, speed_mps, heading_deg, confidence_score",
+    )
     .eq("live_session_id", (market as { live_session_id: string }).live_session_id)
     .order("recorded_at", { ascending: false })
     .limit(1)
     .maybeSingle();
 
   const options = (market as { option_set: LiveMarketOption[] }).option_set;
-  const selected = options[0].id;
+  const marketType = (market as { market_type?: string }).market_type ?? "";
+  const gridSpec = (market as { city_grid_spec: CityGridSpecCompact | null })
+    .city_grid_spec;
+
+  let selected = options[0]?.id ?? "unknown";
+  if (marketType === "city_grid" && gridSpec && snapshot) {
+    const lat =
+      (snapshot as { normalized_lat: number | null }).normalized_lat ??
+      (snapshot as { raw_lat?: number }).raw_lat;
+    const lng =
+      (snapshot as { normalized_lng: number | null }).normalized_lng ??
+      (snapshot as { raw_lng?: number }).raw_lng;
+    if (typeof lat === "number" && typeof lng === "number") {
+      const cell = cellIdForPosition(gridSpec, lat, lng);
+      if (cell) selected = cell;
+    }
+  }
+
   const candidateOptionIds = options.map((o) => o.id);
 
   const evidence: LockEvidence = {
@@ -247,7 +272,9 @@ export async function revealAndSettleMarket(marketId: string) {
 
   const { data: market } = await service
     .from("live_betting_markets")
-    .select("id, room_id, live_session_id, status, option_set, decision_node_id, reveal_at")
+    .select(
+      "id, room_id, live_session_id, status, option_set, decision_node_id, reveal_at, market_type, city_grid_spec",
+    )
     .eq("id", marketId)
     .maybeSingle();
   if (!market) return { error: "Market not found" };
@@ -255,33 +282,60 @@ export async function revealAndSettleMarket(marketId: string) {
     return { error: "Market not locked" };
   }
 
-  const { data: decision } = await service
-    .from("route_decision_nodes")
-    .select("options")
-    .eq("id", (market as { decision_node_id: string | null }).decision_node_id ?? "")
-    .maybeSingle();
+  const marketType = (market as { market_type?: string }).market_type ?? "";
+  const gridSpec = (market as { city_grid_spec: CityGridSpecCompact | null })
+    .city_grid_spec;
 
   const revealAtMs = new Date((market as { reveal_at: string }).reveal_at).getTime();
   const since = new Date(revealAtMs - 15_000).toISOString();
 
   const { data: points } = await service
     .from("live_route_snapshots")
-    .select("recorded_at, normalized_lat, normalized_lng, speed_mps, heading_deg, confidence_score")
+    .select(
+      "recorded_at, normalized_lat, normalized_lng, raw_lat, raw_lng, speed_mps, heading_deg, confidence_score",
+    )
     .eq("live_session_id", (market as { live_session_id: string }).live_session_id)
     .gte("recorded_at", since)
     .order("recorded_at", { ascending: true });
 
-  const committed = (points ?? []).map((r) => ({
-    recordedAt: r.recorded_at as string,
-    lat: r.normalized_lat as number,
-    lng: r.normalized_lng as number,
-    speedMps: (r.speed_mps as number | null) ?? undefined,
-    headingDeg: (r.heading_deg as number | null) ?? undefined,
-    normalizedLat: r.normalized_lat as number,
-    normalizedLng: r.normalized_lng as number,
-    confidence: (r.confidence_score as number | null) ?? 0.5,
-    discarded: false,
-  }));
+  const committed = (points ?? []).map((r) => {
+    const lat = (r.normalized_lat ?? r.raw_lat) as number;
+    const lng = (r.normalized_lng ?? r.raw_lng) as number;
+    return {
+      recordedAt: r.recorded_at as string,
+      lat,
+      lng,
+      speedMps: (r.speed_mps as number | null) ?? undefined,
+      headingDeg: (r.heading_deg as number | null) ?? undefined,
+      normalizedLat: lat,
+      normalizedLng: lng,
+      confidence: (r.confidence_score as number | null) ?? 0.5,
+      discarded: false,
+    };
+  });
+
+  if (marketType === "city_grid" && gridSpec) {
+    const usable = committed.filter(
+      (p) => Number.isFinite(p.lat) && Number.isFinite(p.lng),
+    );
+    if (!usable.length) {
+      await refundMarket(marketId, "city_grid_no_gps");
+      return { status: "insufficient_confidence", reason: "city_grid_no_gps" };
+    }
+    const last = usable[usable.length - 1]!;
+    const win = cellIdForPosition(gridSpec, last.lat, last.lng);
+    if (!win) {
+      await refundMarket(marketId, "city_grid_outside_cells");
+      return { status: "ambiguous", reason: "city_grid_outside_cells" };
+    }
+    return await settleMarketWithWinner(marketId, win, "gps_cell_enter");
+  }
+
+  const { data: decision } = await service
+    .from("route_decision_nodes")
+    .select("options")
+    .eq("id", (market as { decision_node_id: string | null }).decision_node_id ?? "")
+    .maybeSingle();
 
   const options = (market as { option_set: LiveMarketOption[] }).option_set;
   const decisionOptions = (decision as { options: RouteDecisionOption[] } | null)?.options ?? [];

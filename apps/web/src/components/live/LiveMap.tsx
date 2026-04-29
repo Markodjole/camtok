@@ -291,17 +291,16 @@ export function LiveMap({
               poly.on("click", () => onZoneSelect(selected ? null : zone.id));
             }
             poly.addTo(group);
+            if (/^[A-Z][A-Z]*\d+$/.test(zone.name) && zones.length <= 140) {
+              poly.bindTooltip(zone.name, {
+                permanent: true,
+                direction: "center",
+                className: "camtok-grid-cell-lbl",
+              });
+            }
             added++;
           });
         }
-        console.log("[LiveMap] render zones", {
-          role: audienceRole,
-          showZones,
-          zonesCount: zones.length,
-          added,
-          skipped,
-          ids: zones.map((z) => z.id),
-        });
       } catch (err) {
         console.error("[LiveMap] zone render failed", err);
       }
@@ -320,11 +319,6 @@ export function LiveMap({
         const L = (await import("leaflet")).default;
         if (aborted) return;
         group.clearLayers();
-        console.log("[LiveMap] render checkpoints", {
-          role: audienceRole,
-          showCheckpoints,
-          checkpointsCount: checkpoints.length,
-        });
         if (!showCheckpoints) return;
         checkpoints.forEach((cp) => {
           const selected = selectedCheckpointId === cp.id;

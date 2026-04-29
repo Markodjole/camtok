@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { openSystemMarketForRoom } from "@/actions/live-markets";
+import { openCityGridMarketForRoom } from "@/actions/live-city-grid-market";
 import { lockMarket, revealAndSettleMarket } from "@/actions/live-settlement";
 import { metersBetween } from "@/lib/live/routing/geometry";
 
@@ -37,8 +38,19 @@ export async function POST(
   const marketId = (room as { current_market_id: string | null }).current_market_id;
 
   if (phase === "waiting_for_next_market") {
+    const grid = await openCityGridMarketForRoom(roomId);
+    if ("marketId" in grid && grid.marketId) {
+      return NextResponse.json({
+        action: "try_open_city_grid",
+        marketId: grid.marketId,
+      });
+    }
     const r = await openSystemMarketForRoom(roomId);
-    return NextResponse.json({ action: "try_open_market", ...r });
+    return NextResponse.json({
+      action: "try_open_market",
+      cityGridSkippedReason: "error" in grid ? grid.error : null,
+      ...r,
+    });
   }
 
   if ((phase === "market_open" || phase === "market_locked") && marketId) {

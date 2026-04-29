@@ -2,6 +2,7 @@
 
 import { unstable_noStore } from "next/cache";
 import { createServiceClient } from "@/lib/supabase/server";
+import type { CityGridSpecCompact } from "@/lib/live/grid/cityGrid500";
 
 export type RoutePoint = {
   lat: number;
@@ -37,6 +38,8 @@ export type LiveFeedRow = {
     participantCount: number;
     turnPointLat: number | null;
     turnPointLng: number | null;
+    /** Present when `marketType === "city_grid"` — compact grid spec (no per-cell list on the wire). */
+    cityGridSpec: CityGridSpecCompact | null;
   } | null;
   sessionStartedAt: string;
   lastHeartbeatAt: string | null;
@@ -74,12 +77,21 @@ export async function getLiveFeed(): Promise<{ items: LiveFeedRow[] }> {
           marketType: (r.current_market_type as string) ?? "",
           locksAt: (r.current_market_locks_at as string) ?? "",
           revealAt: (r.current_market_reveal_at as string) ?? "",
-          options: (r.current_market_options as LiveFeedRow["currentMarket"] extends null
-            ? never
-            : NonNullable<LiveFeedRow["currentMarket"]>["options"]) ?? [],
+          options:
+            (r.current_market_type as string) === "city_grid"
+              ? []
+              : (((r.current_market_options as LiveFeedRow["currentMarket"] extends null
+                  ? never
+                  : NonNullable<LiveFeedRow["currentMarket"]>["options"]) ?? []) as NonNullable<
+                  LiveFeedRow["currentMarket"]
+                >["options"]),
           participantCount: (r.current_market_participants as number) ?? 0,
           turnPointLat: (r.current_market_turn_point_lat as number | null) ?? null,
           turnPointLng: (r.current_market_turn_point_lng as number | null) ?? null,
+          cityGridSpec:
+            (r.current_market_type as string) === "city_grid"
+              ? ((r.current_market_city_grid_spec as CityGridSpecCompact | null) ?? null)
+              : null,
         }
       : null,
     sessionStartedAt: r.session_started_at as string,

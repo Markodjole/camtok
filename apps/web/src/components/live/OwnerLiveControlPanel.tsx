@@ -94,8 +94,6 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
   const [mapExpanded, setMapExpanded] = useState(true);
   const [osmZones, setOsmZones] = useState<MapZone[]>([]);
   const [osmCheckpoints, setOsmCheckpoints] = useState<MapCheckpoint[]>([]);
-  const [geoLoadedOnce, setGeoLoadedOnce] = useState(false);
-  const [geoLoading, setGeoLoading] = useState(false);
   const [pipPos, setPipPos] = useState({ top: 48, left: 12 });
   const [pipDragReady, setPipDragReady] = useState(false);
 
@@ -103,7 +101,6 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
   const heartbeatRef = useRef<NodeJS.Timeout | null>(null);
   const tickRef = useRef<NodeJS.Timeout | null>(null);
   const pipLongPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastGeoKeyRef = useRef<string | null>(null);
   const pipDragRef = useRef<{
     pointerId: number | null;
     startX: number;
@@ -388,60 +385,9 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
   }, [roomId, sessionId]);
 
   useEffect(() => {
-    const lastPt = routePoints[routePoints.length - 1] ?? null;
-    const turnPt = realTurnPoint ?? null;
-    const anchor = lastPt ?? turnPt ?? { lat: 44.8125, lng: 20.4612 };
-    const lat = Number(anchor.lat.toFixed(3));
-    const lng = Number(anchor.lng.toFixed(3));
-    const geoKey = `${lat},${lng}`;
-    if (lastGeoKeyRef.current === geoKey) return;
-    lastGeoKeyRef.current = geoKey;
-    let cancelled = false;
-
-    const fetchGeoContext = async () => {
-      try {
-        if (!geoLoadedOnce) setGeoLoading(true);
-        const res = await fetch(`/api/live/google-geo-context?lat=${lat}&lng=${lng}`, {
-          cache: "no-store",
-        });
-        if (!res.ok) {
-          setGeoLoadedOnce(true);
-          return;
-        }
-        const json = (await res.json()) as {
-          zones?: MapZone[];
-          checkpoints?: MapCheckpoint[];
-          source?: string;
-          reason?: string;
-        };
-        if (cancelled) return;
-        const nextZones = Array.isArray(json.zones) ? json.zones : [];
-        const nextCheckpoints = Array.isArray(json.checkpoints) ? json.checkpoints : [];
-        console.log("[google-geo-context][streamer]", {
-          lat,
-          lng,
-          source: json.source ?? "unknown",
-          reason: json.reason ?? "unknown",
-          zonesCount: nextZones.length,
-          checkpointsCount: nextCheckpoints.length,
-          zones: nextZones,
-          checkpoints: nextCheckpoints,
-        });
-        setOsmZones(nextZones);
-        setOsmCheckpoints(nextCheckpoints);
-        setGeoLoadedOnce(true);
-      } catch {
-        setGeoLoadedOnce(true);
-      } finally {
-        setGeoLoading(false);
-      }
-    };
-
-    void fetchGeoContext();
-    return () => {
-      cancelled = true;
-    };
-  }, [routePoints, geoLoadedOnce, realTurnPoint]);
+    setOsmZones([]);
+    setOsmCheckpoints([]);
+  }, []);
 
   const onPipPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;

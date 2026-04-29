@@ -41,6 +41,7 @@ export type LiveMarketType =
   | "left_right_split"
   | "continue_vs_turn"
   | "route_choice"
+  | "city_grid"
   | "custom_validated";
 
 export type LiveMarketStatus =
