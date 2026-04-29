@@ -400,7 +400,7 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
     const fetchGeoContext = async () => {
       try {
         setGeoLoading(true);
-        const res = await fetch(`/api/live/geo-context?lat=${lat}&lng=${lng}`, {
+        const res = await fetch(`/api/live/google-geo-context?lat=${lat}&lng=${lng}`, {
           cache: "no-store",
         });
         if (!res.ok) {
