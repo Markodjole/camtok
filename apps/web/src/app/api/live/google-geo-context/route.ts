@@ -49,6 +49,47 @@ function viewportToPolygon(viewport: {
   ];
 }
 
+function debugFallback(lat: number, lng: number): { zones: Zone[]; checkpoints: Checkpoint[] } {
+  const dLat = 0.0028;
+  const dLng = 0.0038;
+  return {
+    zones: [
+      {
+        id: "dbg-zone-1",
+        slug: "debug-north",
+        name: "Debug North",
+        kind: "district",
+        color: "#60a5fa",
+        isActive: true,
+        polygon: [
+          { lat: lat + dLat * 1.2, lng: lng - dLng * 0.9 },
+          { lat: lat + dLat * 1.2, lng: lng + dLng * 0.9 },
+          { lat: lat + dLat * 0.2, lng: lng + dLng * 0.9 },
+          { lat: lat + dLat * 0.2, lng: lng - dLng * 0.9 },
+        ],
+      },
+      {
+        id: "dbg-zone-2",
+        slug: "debug-south",
+        name: "Debug South",
+        kind: "district",
+        color: "#a78bfa",
+        isActive: true,
+        polygon: [
+          { lat: lat - dLat * 0.2, lng: lng - dLng * 1.1 },
+          { lat: lat - dLat * 0.2, lng: lng + dLng * 1.1 },
+          { lat: lat - dLat * 1.2, lng: lng + dLng * 1.1 },
+          { lat: lat - dLat * 1.2, lng: lng - dLng * 1.1 },
+        ],
+      },
+    ],
+    checkpoints: [
+      { id: "dbg-cp-1", name: "Debug POI A", kind: "poi", lat: lat + dLat * 0.4, lng: lng + dLng * 0.4, isActive: true },
+      { id: "dbg-cp-2", name: "Debug POI B", kind: "landmark", lat: lat - dLat * 0.5, lng: lng - dLng * 0.5, isActive: true },
+    ],
+  };
+}
+
 export async function GET(req: NextRequest) {
   const lat = parseCoord(req.nextUrl.searchParams.get("lat"));
   const lng = parseCoord(req.nextUrl.searchParams.get("lng"));
@@ -60,8 +101,44 @@ export async function GET(req: NextRequest) {
     process.env.GOOGLE_MAPS_API_KEY ||
     process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ||
     "";
+  const fallbackToOsm = async (reason: string) => {
+    const origin = req.nextUrl.origin;
+    const url = `${origin}/api/live/geo-context?lat=${lat}&lng=${lng}`;
+    const res = await fetch(url, { cache: "no-store" }).catch(() => null);
+    if (!res?.ok) {
+      return NextResponse.json({
+        zones: [],
+        checkpoints: [],
+        source: "google",
+        reason,
+      });
+    }
+    const j = (await res.json().catch(() => null)) as
+      | {
+          zones?: Zone[];
+          checkpoints?: Checkpoint[];
+        }
+      | null;
+    const zones = Array.isArray(j?.zones) ? j!.zones : [];
+    const checkpoints = Array.isArray(j?.checkpoints) ? j!.checkpoints : [];
+    if (zones.length === 0 && checkpoints.length === 0) {
+      const dbg = debugFallback(lat, lng);
+      return NextResponse.json({
+        zones: dbg.zones,
+        checkpoints: dbg.checkpoints,
+        source: "debug_fallback",
+        reason,
+      });
+    }
+    return NextResponse.json({
+      zones,
+      checkpoints,
+      source: "osm_fallback",
+      reason,
+    });
+  };
   if (!key) {
-    return NextResponse.json({ zones: [], checkpoints: [], source: "google", reason: "missing_api_key" });
+    return fallbackToOsm("missing_api_key");
   }
 
   const zones: Zone[] = [];
@@ -169,7 +246,9 @@ export async function GET(req: NextRequest) {
   const dedupCheckpoints = Array.from(
     new Map(checkpoints.map((c) => [c.id, c])).values(),
   ).slice(0, 16);
-
+  if (dedupZones.length === 0 && dedupCheckpoints.length === 0) {
+    return fallbackToOsm("google_empty");
+  }
   return NextResponse.json({
     zones: dedupZones,
     checkpoints: dedupCheckpoints,
