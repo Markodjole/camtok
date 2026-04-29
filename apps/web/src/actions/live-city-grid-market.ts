@@ -109,7 +109,7 @@ export async function openCityGridMarketForRoom(roomId: string) {
     viewport.neLng,
     viewport.cityLabel,
     500,
-    1800,
+    12000,
   );
   if ("error" in built) {
     return { error: `City grid: ${built.error}` };

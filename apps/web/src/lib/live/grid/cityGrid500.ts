@@ -62,13 +62,8 @@ export function buildCityGrid500(
   const lngSpan = neLng - swLng;
   if (latSpan <= 0 || lngSpan <= 0) return { error: "invalid_bbox" };
 
-  let nCols = Math.ceil(lngSpan / dLng);
-  let nRows = Math.ceil(latSpan / dLat);
-  if (nCols * nRows > maxCells) {
-    const scale = Math.sqrt((nCols * nRows) / maxCells);
-    nCols = Math.max(1, Math.floor(nCols / scale));
-    nRows = Math.max(1, Math.floor(nRows / scale));
-  }
+  const nCols = Math.ceil(lngSpan / dLng);
+  const nRows = Math.ceil(latSpan / dLat);
   if (nCols * nRows > maxCells) {
     return { error: "grid_too_large" };
   }

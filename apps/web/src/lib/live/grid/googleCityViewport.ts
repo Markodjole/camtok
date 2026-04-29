@@ -75,31 +75,14 @@ export async function fetchCityViewportFromGoogle(
 
   const ne = bounds.northeast;
   const sw = bounds.southwest;
-  let swLat = sw.lat;
-  let swLng = sw.lng;
-  let neLat = ne.lat;
-  let neLng = ne.lng;
-
-  // Cap very large admin boxes so the grid stays usable.
-  const maxSpanDeg = 0.12;
-  const latMid = (swLat + neLat) / 2;
-  const lngMid = (swLng + neLng) / 2;
-  if (neLat - swLat > maxSpanDeg || neLng - swLng > maxSpanDeg) {
-    const h = maxSpanDeg / 2;
-    const w = maxSpanDeg / 2;
-    swLat = latMid - h;
-    neLat = latMid + h;
-    swLng = lngMid - w;
-    neLng = lngMid + w;
-  }
 
   return {
     ok: true,
     viewport: {
-      swLat,
-      swLng,
-      neLat,
-      neLng,
+      swLat: sw.lat,
+      swLng: sw.lng,
+      neLat: ne.lat,
+      neLng: ne.lng,
       cityLabel: pick?.formatted_address ?? null,
     },
   };

@@ -53,7 +53,7 @@ export async function GET(req: NextRequest) {
     viewport.neLng,
     viewport.cityLabel,
     500,
-    1800,
+    12000,
   );
   if ("error" in built) {
     return NextResponse.json({
