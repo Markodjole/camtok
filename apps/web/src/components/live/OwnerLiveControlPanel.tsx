@@ -580,8 +580,8 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
               mapCaption={"You \u00b7 follow green arrow"}
               zones={osmZones}
               checkpoints={osmCheckpoints}
-              showZones={true}
-              showCheckpoints={true}
+              showZones={false}
+              showCheckpoints={false}
               turnHint={aiTurnHint}
               turnHintEtaSec={aiTurnEtaSec}
               turnHintDistanceM={aiTurnDistanceM}
@@ -669,8 +669,8 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
                 mapCaption={"You \u00b7 follow green arrow"}
                 zones={osmZones}
                 checkpoints={osmCheckpoints}
-                showZones={true}
-                showCheckpoints={true}
+                showZones={false}
+                showCheckpoints={false}
                 turnHint={aiTurnHint}
                 turnHintEtaSec={aiTurnEtaSec}
                 turnHintDistanceM={aiTurnDistanceM}
