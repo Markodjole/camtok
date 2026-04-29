@@ -139,6 +139,7 @@ export async function GET(req: NextRequest) {
   const rev = await fetch(revUrl, { cache: "no-store" }).then((r) => r.json()).catch(() => null) as
     | {
         status?: string;
+        error_message?: string;
         results?: Array<{
           formatted_address?: string;
           types?: string[];
@@ -158,6 +159,8 @@ export async function GET(req: NextRequest) {
       checkpoints: [],
       source: "google",
       reason: "request_denied",
+      googleStatus: rev?.status ?? "NO_RESPONSE",
+      googleError: rev?.error_message ?? null,
     });
   }
 
@@ -201,6 +204,7 @@ export async function GET(req: NextRequest) {
     const g = await fetch(url, { cache: "no-store" }).then((r) => r.json()).catch(() => null) as
       | {
           status?: string;
+          error_message?: string;
           results?: Array<{
             geometry?: {
               viewport?: {
@@ -211,7 +215,9 @@ export async function GET(req: NextRequest) {
           }>;
         }
       | null;
-    if (!g || g.status === "REQUEST_DENIED") continue;
+    if (!g || g.status === "REQUEST_DENIED") {
+      continue;
+    }
     const vp = g.results?.[0]?.geometry?.viewport;
     if (!vp) continue;
     zones.push({
@@ -243,6 +249,7 @@ export async function GET(req: NextRequest) {
     const p = await fetch(nearbyUrl, { cache: "no-store" }).then((r) => r.json()).catch(() => null) as
       | {
           status?: string;
+          error_message?: string;
           results?: Array<{
             place_id?: string;
             name?: string;
@@ -331,6 +338,7 @@ export async function GET(req: NextRequest) {
     zones: dedupZones,
     checkpoints: dedupCheckpoints,
     source: "google",
+    reason: "ok",
   });
 }
 
