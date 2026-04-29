@@ -219,6 +219,13 @@ export function LiveMap({
       layerRef.current = t;
       mapRef.current = m;
       setMapReady((n) => n + 1);
+      setTimeout(() => {
+        try {
+          m.invalidateSize(false);
+        } catch {
+          /* noop */
+        }
+      }, 50);
     })();
     return () => {
       done = true;
@@ -245,67 +252,104 @@ export function LiveMap({
   useEffect(() => {
     const group = zoneLayerRef.current;
     if (!group) return;
+    let aborted = false;
     (async () => {
-      const L = (await import("leaflet")).default;
-      group.clearLayers();
-      console.log("[LiveMap] render zones", {
-        role: audienceRole,
-        showZones,
-        zonesCount: zones.length,
-        ids: zones.map((z) => z.id),
-      });
-      if (!showZones) return;
-      zones.forEach((zone) => {
-        const selected = selectedZoneId === zone.id;
-        const isActive = zone.isActive !== false;
-        const color = zone.color ?? "#60a5fa";
-        const poly = L.polygon(
-          zone.polygon.map((p) => [p.lat, p.lng] as [number, number]),
-          {
-            color: selected ? "#ffffff" : color,
-            weight: selected ? 4 : 3,
-            fillColor: color,
-            fillOpacity: isActive ? (selected ? 0.5 : 0.35) : 0.14,
-            opacity: isActive ? 0.9 : 0.35,
-          },
-        );
-        if (interactive && onZoneSelect) {
-          poly.on("click", () => onZoneSelect(selected ? null : zone.id));
+      try {
+        const L = (await import("leaflet")).default;
+        if (aborted) return;
+        group.clearLayers();
+        let added = 0;
+        let skipped = 0;
+        if (showZones) {
+          zones.forEach((zone) => {
+            if (!zone.polygon || zone.polygon.length < 3) {
+              skipped++;
+              return;
+            }
+            const selected = selectedZoneId === zone.id;
+            const isActive = zone.isActive !== false;
+            const color = zone.color ?? "#60a5fa";
+            const latlngs = zone.polygon
+              .map((p) => [p.lat, p.lng] as [number, number])
+              .filter(
+                ([la, ln]) =>
+                  Number.isFinite(la) && Number.isFinite(ln),
+              );
+            if (latlngs.length < 3) {
+              skipped++;
+              return;
+            }
+            const poly = L.polygon(latlngs, {
+              color: selected ? "#ffffff" : color,
+              weight: selected ? 5 : 4,
+              fillColor: color,
+              fillOpacity: isActive ? (selected ? 0.55 : 0.4) : 0.15,
+              opacity: 1,
+              dashArray: selected ? undefined : "6 4",
+            });
+            if (interactive && onZoneSelect) {
+              poly.on("click", () => onZoneSelect(selected ? null : zone.id));
+            }
+            poly.addTo(group);
+            added++;
+          });
         }
-        poly.addTo(group);
-      });
+        console.log("[LiveMap] render zones", {
+          role: audienceRole,
+          showZones,
+          zonesCount: zones.length,
+          added,
+          skipped,
+          ids: zones.map((z) => z.id),
+        });
+      } catch (err) {
+        console.error("[LiveMap] zone render failed", err);
+      }
     })();
+    return () => {
+      aborted = true;
+    };
   }, [zones, selectedZoneId, showZones, interactive, onZoneSelect, mapReady, audienceRole]);
 
   useEffect(() => {
     const group = checkpointLayerRef.current;
     if (!group) return;
+    let aborted = false;
     (async () => {
-      const L = (await import("leaflet")).default;
-      group.clearLayers();
-      console.log("[LiveMap] render checkpoints", {
-        role: audienceRole,
-        showCheckpoints,
-        checkpointsCount: checkpoints.length,
-      });
-      if (!showCheckpoints) return;
-      checkpoints.forEach((cp) => {
-        const selected = selectedCheckpointId === cp.id;
-        const isActive = cp.isActive !== false;
-        const marker = L.circleMarker([cp.lat, cp.lng], {
-          radius: selected ? 7 : 5,
-          color: "#ffffff",
-          weight: selected ? 2 : 1,
-          fillColor: selected ? "#f59e0b" : "#fb7185",
-          fillOpacity: isActive ? 0.95 : 0.3,
-          opacity: isActive ? 0.95 : 0.4,
+      try {
+        const L = (await import("leaflet")).default;
+        if (aborted) return;
+        group.clearLayers();
+        console.log("[LiveMap] render checkpoints", {
+          role: audienceRole,
+          showCheckpoints,
+          checkpointsCount: checkpoints.length,
         });
-        if (interactive && onCheckpointSelect) {
-          marker.on("click", () => onCheckpointSelect(selected ? null : cp.id));
-        }
-        marker.addTo(group);
-      });
+        if (!showCheckpoints) return;
+        checkpoints.forEach((cp) => {
+          const selected = selectedCheckpointId === cp.id;
+          const isActive = cp.isActive !== false;
+          if (!Number.isFinite(cp.lat) || !Number.isFinite(cp.lng)) return;
+          const marker = L.circleMarker([cp.lat, cp.lng], {
+            radius: selected ? 7 : 5,
+            color: "#ffffff",
+            weight: selected ? 2 : 1,
+            fillColor: selected ? "#f59e0b" : "#fb7185",
+            fillOpacity: isActive ? 0.95 : 0.3,
+            opacity: isActive ? 0.95 : 0.4,
+          });
+          if (interactive && onCheckpointSelect) {
+            marker.on("click", () => onCheckpointSelect(selected ? null : cp.id));
+          }
+          marker.addTo(group);
+        });
+      } catch (err) {
+        console.error("[LiveMap] checkpoint render failed", err);
+      }
     })();
+    return () => {
+      aborted = true;
+    };
   }, [
     checkpoints,
     selectedCheckpointId,
