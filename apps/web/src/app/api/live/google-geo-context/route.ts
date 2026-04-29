@@ -121,7 +121,15 @@ export async function GET(req: NextRequest) {
     process.env.GOOGLE_MAPS_API_KEY ||
     process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ||
     "";
+  const keyMask = key ? `${key.slice(0, 6)}...${key.slice(-4)}` : "missing";
+  console.info("[google-geo-context] request", {
+    lat,
+    lng,
+    hasKey: Boolean(key),
+    keyMask,
+  });
   if (!key) {
+    console.warn("[google-geo-context] missing key");
     return NextResponse.json({
       zones: [],
       checkpoints: [],
@@ -154,6 +162,10 @@ export async function GET(req: NextRequest) {
       }
     | null;
   if (!rev || rev.status === "REQUEST_DENIED") {
+    console.error("[google-geo-context] reverse geocode denied", {
+      status: rev?.status ?? "NO_RESPONSE",
+      error: rev?.error_message ?? null,
+    });
     return NextResponse.json({
       zones: [],
       checkpoints: [],
@@ -216,6 +228,11 @@ export async function GET(req: NextRequest) {
         }
       | null;
     if (!g || g.status === "REQUEST_DENIED") {
+      console.warn("[google-geo-context] area geocode denied", {
+        area: name,
+        status: g?.status ?? "NO_RESPONSE",
+        error: g?.error_message ?? null,
+      });
       continue;
     }
     const vp = g.results?.[0]?.geometry?.viewport;
@@ -259,6 +276,13 @@ export async function GET(req: NextRequest) {
         }
       | null;
     if (!p || p.status === "REQUEST_DENIED") continue;
+    if (p.status && p.status !== "OK" && p.status !== "ZERO_RESULTS") {
+      console.warn("[google-geo-context] places status", {
+        type: t,
+        status: p.status,
+        error: p.error_message ?? null,
+      });
+    }
     for (const r of p?.results ?? []) {
       if (!r.place_id || !r.name || !r.geometry?.location) continue;
       const kind: Checkpoint["kind"] =
