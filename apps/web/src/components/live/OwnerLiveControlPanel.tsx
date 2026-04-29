@@ -388,8 +388,9 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
   }, [roomId, sessionId]);
 
   useEffect(() => {
-    const anchor = routePoints[routePoints.length - 1] ?? null;
-    if (!anchor) return;
+    const lastPt = routePoints[routePoints.length - 1] ?? null;
+    const turnPt = realTurnPoint ?? null;
+    const anchor = lastPt ?? turnPt ?? { lat: 44.8125, lng: 20.4612 };
     const lat = Number(anchor.lat.toFixed(3));
     const lng = Number(anchor.lng.toFixed(3));
     const geoKey = `${lat},${lng}`;
@@ -440,7 +441,7 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
     return () => {
       cancelled = true;
     };
-  }, [routePoints, geoLoadedOnce]);
+  }, [routePoints, geoLoadedOnce, realTurnPoint]);
 
   const onPipPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;

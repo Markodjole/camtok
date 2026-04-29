@@ -244,8 +244,12 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   }, [currentMarket?.id, selectedZoneId, selectedCheckpointId]);
 
   useEffect(() => {
-    const anchor = routePoints[routePoints.length - 1] ?? initialRoom.routePoints?.[0] ?? null;
-    if (!anchor) return;
+    const lastPt = routePoints[routePoints.length - 1] ?? initialRoom.routePoints?.[0] ?? null;
+    const turnPt =
+      room.currentMarket?.turnPointLat != null && room.currentMarket?.turnPointLng != null
+        ? { lat: room.currentMarket.turnPointLat, lng: room.currentMarket.turnPointLng }
+        : null;
+    const anchor = lastPt ?? turnPt ?? { lat: 44.8125, lng: 20.4612 };
     const lat = Number(anchor.lat.toFixed(3));
     const lng = Number(anchor.lng.toFixed(3));
     const geoKey = `${lat},${lng}`;
@@ -296,7 +300,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     return () => {
       cancelled = true;
     };
-  }, [routePoints, initialRoom.routePoints, geoLoadedOnce]);
+  }, [routePoints, initialRoom.routePoints, geoLoadedOnce, room.currentMarket?.turnPointLat, room.currentMarket?.turnPointLng]);
 
   useEffect(() => {
     return () => {
