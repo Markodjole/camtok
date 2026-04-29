@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import {
   type CityGridSpecCompact,
   cellLabel,
-  cellsInLatLngBounds,
+  enumerateGridCells,
   parseGridOptionId,
 } from "@/lib/live/grid/cityGrid500";
 import dynamic from "next/dynamic";
@@ -201,17 +201,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
   const zones: MapZone[] = useMemo(() => {
     if (!cityGridSpec) return [];
-    const last = routePoints[routePoints.length - 1];
-    const lat = last?.lat ?? initialRoom.routePoints?.[0]?.lat ?? 44.8125;
-    const lng = last?.lng ?? initialRoom.routePoints?.[0]?.lng ?? 20.4612;
-    const pad = 0.008;
-    const cells = cellsInLatLngBounds(
-      cityGridSpec,
-      lat - pad,
-      lng - pad,
-      lat + pad,
-      lng + pad,
-    );
+    const cells = enumerateGridCells(cityGridSpec);
     return cells.map((c) => ({
       id: c.id,
       slug: c.id,
@@ -221,7 +211,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       isActive: true,
       polygon: c.polygon,
     }));
-  }, [cityGridSpec, routePoints, initialRoom.routePoints]);
+  }, [cityGridSpec]);
 
   // Distance gate: betting closes when the vehicle is within 60 m of the
   // turn point. We prefer the road-distance value coming from
@@ -302,12 +292,6 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       if (pipLongPressTimerRef.current) clearTimeout(pipLongPressTimerRef.current);
     };
   }, []);
-
-  useEffect(() => {
-    // Viewer requirement: zones/checkpoints stay visible at all times.
-    if (!showZones) setShowZones(true);
-    if (!showCheckpoints) setShowCheckpoints(true);
-  }, [showZones, showCheckpoints]);
 
   useEffect(() => {
     const id = setInterval(() => setNowTick(Date.now()), 500);
@@ -464,7 +448,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             checkpoints={checkpoints}
             selectedZoneId={selectedZoneId}
             selectedCheckpointId={selectedCheckpointId}
-            showZones={true}
+            showZones={showZones}
             showCheckpoints={true}
             turnTarget={viewerTurnTarget}
             driverPins={driverPins}
@@ -538,9 +522,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       {mapExpanded ? (
         <div className="absolute right-4 top-24 z-40 flex flex-col items-center gap-6">
           <IconRailButton
-            active
-            onClick={() => setShowZones(true)}
-            title="Zones"
+            active={showZones}
+            onClick={() => setShowZones((v) => !v)}
+            title={showZones ? "Hide zones" : "Show zones"}
           >
             <IconLayers />
           </IconRailButton>
@@ -574,55 +558,6 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           Center on streamer
         </button>
       ) : null}
-      {mapExpanded ? (
-        <div className="absolute left-4 right-4 top-40 z-40 flex flex-wrap gap-1.5">
-          {showZones
-            ? zones.map((zone) => {
-                const selected = selectedZoneId === zone.id;
-                return (
-                  <button
-                    key={zone.id}
-                    type="button"
-                    onClick={() => {
-                      setSelectedZoneId(selected ? null : zone.id);
-                      setSelectedCheckpointId(null);
-                    }}
-                    className={`rounded-full border px-2 py-1 text-[10px] ${
-                      selected
-                        ? "border-cyan-300/70 bg-cyan-500/35 text-cyan-50"
-                        : "border-white/20 bg-black/40 text-white/80"
-                    }`}
-                  >
-                    {zone.name}
-                  </button>
-                );
-              })
-            : null}
-          {showCheckpoints
-            ? checkpoints.map((checkpoint) => {
-                const selected = selectedCheckpointId === checkpoint.id;
-                return (
-                  <button
-                    key={checkpoint.id}
-                    type="button"
-                    onClick={() => {
-                      setSelectedCheckpointId(selected ? null : checkpoint.id);
-                      setSelectedZoneId(null);
-                    }}
-                    className={`rounded-full border px-2 py-1 text-[10px] ${
-                      selected
-                        ? "border-fuchsia-300/70 bg-fuchsia-500/35 text-fuchsia-50"
-                        : "border-white/20 bg-black/40 text-white/80"
-                    }`}
-                  >
-                    {checkpoint.name}
-                  </button>
-                );
-              })
-            : null}
-        </div>
-      ) : null}
-
       {/* ── PiP corner: swapped view + expand toggle ── */}
       <div
         className="absolute z-30 overflow-hidden rounded-2xl border border-white/25 shadow-2xl"
@@ -664,7 +599,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               checkpoints={checkpoints}
               selectedZoneId={selectedZoneId}
               selectedCheckpointId={selectedCheckpointId}
-              showZones={true}
+              showZones={showZones}
               showCheckpoints={true}
               turnTarget={viewerTurnTarget}
               driverPins={driverPins}
