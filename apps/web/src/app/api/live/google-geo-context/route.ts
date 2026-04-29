@@ -22,6 +22,10 @@ type Checkpoint = {
   isActive: boolean;
 };
 
+type GPoint = { lat: number; lng: number };
+type Pt = { x: number; y: number };
+const EARTH = 111_320;
+
 function parseCoord(value: string | null): number | null {
   if (!value) return null;
   const n = Number(value);
@@ -49,45 +53,61 @@ function viewportToPolygon(viewport: {
   ];
 }
 
-function debugFallback(lat: number, lng: number): { zones: Zone[]; checkpoints: Checkpoint[] } {
-  const dLat = 0.0028;
-  const dLng = 0.0038;
+function toMeters(refLat: number, refLng: number, g: GPoint): Pt {
+  const cos = Math.cos((refLat * Math.PI) / 180);
   return {
-    zones: [
-      {
-        id: "dbg-zone-1",
-        slug: "debug-north",
-        name: "Debug North",
-        kind: "district",
-        color: "#60a5fa",
-        isActive: true,
-        polygon: [
-          { lat: lat + dLat * 1.2, lng: lng - dLng * 0.9 },
-          { lat: lat + dLat * 1.2, lng: lng + dLng * 0.9 },
-          { lat: lat + dLat * 0.2, lng: lng + dLng * 0.9 },
-          { lat: lat + dLat * 0.2, lng: lng - dLng * 0.9 },
-        ],
-      },
-      {
-        id: "dbg-zone-2",
-        slug: "debug-south",
-        name: "Debug South",
-        kind: "district",
-        color: "#a78bfa",
-        isActive: true,
-        polygon: [
-          { lat: lat - dLat * 0.2, lng: lng - dLng * 1.1 },
-          { lat: lat - dLat * 0.2, lng: lng + dLng * 1.1 },
-          { lat: lat - dLat * 1.2, lng: lng + dLng * 1.1 },
-          { lat: lat - dLat * 1.2, lng: lng - dLng * 1.1 },
-        ],
-      },
-    ],
-    checkpoints: [
-      { id: "dbg-cp-1", name: "Debug POI A", kind: "poi", lat: lat + dLat * 0.4, lng: lng + dLng * 0.4, isActive: true },
-      { id: "dbg-cp-2", name: "Debug POI B", kind: "landmark", lat: lat - dLat * 0.5, lng: lng - dLng * 0.5, isActive: true },
-    ],
+    x: (g.lng - refLng) * EARTH * cos,
+    y: (g.lat - refLat) * EARTH,
   };
+}
+
+function toGeo(refLat: number, refLng: number, p: Pt): GPoint {
+  const cos = Math.cos((refLat * Math.PI) / 180);
+  return {
+    lat: refLat + p.y / EARTH,
+    lng: refLng + p.x / (EARTH * cos),
+  };
+}
+
+function clipHalfPlaneCloserTo(polygon: Pt[], a: Pt, b: Pt): Pt[] {
+  const nx = b.x - a.x;
+  const ny = b.y - a.y;
+  const rhs = b.x * b.x + b.y * b.y - (a.x * a.x + a.y * a.y);
+  const valueOf = (p: Pt) => 2 * (p.x * nx + p.y * ny);
+  const inside = (p: Pt) => valueOf(p) <= rhs;
+  const intersect = (p: Pt, q: Pt): Pt => {
+    const vp = valueOf(p);
+    const vq = valueOf(q);
+    const denom = vq - vp;
+    const t = denom === 0 ? 0 : (rhs - vp) / denom;
+    return { x: p.x + t * (q.x - p.x), y: p.y + t * (q.y - p.y) };
+  };
+
+  const out: Pt[] = [];
+  const n = polygon.length;
+  if (n === 0) return out;
+  for (let i = 0; i < n; i++) {
+    const curr = polygon[i]!;
+    const prev = polygon[(i + n - 1) % n]!;
+    const ci = inside(curr);
+    const pi = inside(prev);
+    if (ci) {
+      if (!pi) out.push(intersect(prev, curr));
+      out.push(curr);
+    } else if (pi) {
+      out.push(intersect(prev, curr));
+    }
+  }
+  return out;
+}
+
+function voronoiCell(anchor: Pt, others: Pt[], bounds: Pt[]): Pt[] {
+  let poly = bounds.slice();
+  for (const other of others) {
+    if (poly.length === 0) break;
+    poly = clipHalfPlaneCloserTo(poly, anchor, other);
+  }
+  return poly;
 }
 
 export async function GET(req: NextRequest) {
@@ -101,59 +121,45 @@ export async function GET(req: NextRequest) {
     process.env.GOOGLE_MAPS_API_KEY ||
     process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ||
     "";
-  const fallbackToOsm = async (reason: string) => {
-    const origin = req.nextUrl.origin;
-    const url = `${origin}/api/live/geo-context?lat=${lat}&lng=${lng}`;
-    const res = await fetch(url, { cache: "no-store" }).catch(() => null);
-    if (!res?.ok) {
-      return NextResponse.json({
-        zones: [],
-        checkpoints: [],
-        source: "google",
-        reason,
-      });
-    }
-    const j = (await res.json().catch(() => null)) as
-      | {
-          zones?: Zone[];
-          checkpoints?: Checkpoint[];
-        }
-      | null;
-    const zones = Array.isArray(j?.zones) ? j!.zones : [];
-    const checkpoints = Array.isArray(j?.checkpoints) ? j!.checkpoints : [];
-    if (zones.length === 0 && checkpoints.length === 0) {
-      const dbg = debugFallback(lat, lng);
-      return NextResponse.json({
-        zones: dbg.zones,
-        checkpoints: dbg.checkpoints,
-        source: "debug_fallback",
-        reason,
-      });
-    }
-    return NextResponse.json({
-      zones,
-      checkpoints,
-      source: "osm_fallback",
-      reason,
-    });
-  };
   if (!key) {
-    return fallbackToOsm("missing_api_key");
+    return NextResponse.json({
+      zones: [],
+      checkpoints: [],
+      source: "google",
+      reason: "missing_api_key",
+    });
   }
 
   const zones: Zone[] = [];
   const checkpoints: Checkpoint[] = [];
 
-  // 1) Reverse geocode to discover nearby admin/neighborhood labels.
+  // 1) Reverse geocode to discover nearby admin/neighborhood labels and city viewport.
   const revUrl =
     `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${key}&language=en`;
   const rev = await fetch(revUrl, { cache: "no-store" }).then((r) => r.json()).catch(() => null) as
     | {
+        status?: string;
         results?: Array<{
+          formatted_address?: string;
+          types?: string[];
           address_components?: Array<{ long_name?: string; types?: string[] }>;
+          geometry?: {
+            viewport?: {
+              northeast: { lat: number; lng: number };
+              southwest: { lat: number; lng: number };
+            };
+          };
         }>;
       }
     | null;
+  if (!rev || rev.status === "REQUEST_DENIED") {
+    return NextResponse.json({
+      zones: [],
+      checkpoints: [],
+      source: "google",
+      reason: "request_denied",
+    });
+  }
 
   const components = (rev?.results ?? [])
     .flatMap((r) => r.address_components ?? [])
@@ -175,7 +181,17 @@ export async function GET(req: NextRequest) {
     ).values(),
   ).slice(0, 8);
 
-  // 2) Geocode each area name with location bias and convert viewport bounds to polygons.
+  // Pick city-scale viewport from reverse-geocode results.
+  const cityViewport =
+    (rev.results ?? []).find((r) => (r.types ?? []).includes("locality"))?.geometry?.viewport ||
+    (rev.results ?? []).find((r) => (r.types ?? []).includes("administrative_area_level_2"))?.geometry?.viewport ||
+    (rev.results ?? [])[0]?.geometry?.viewport;
+  const coverageViewport = cityViewport ?? {
+    northeast: { lat: lat + 0.06, lng: lng + 0.08 },
+    southwest: { lat: lat - 0.06, lng: lng - 0.08 },
+  };
+
+  // 2) Geocode each area name to create "administrative rectangles" (raw Google geometry).
   for (const c of uniqueAreaNames) {
     const name = c.long_name!;
     const t = (c.types ?? [])[0] ?? "administrative_area_level_2";
@@ -184,6 +200,7 @@ export async function GET(req: NextRequest) {
       `&location=${lat},${lng}&key=${key}&language=en`;
     const g = await fetch(url, { cache: "no-store" }).then((r) => r.json()).catch(() => null) as
       | {
+          status?: string;
           results?: Array<{
             geometry?: {
               viewport?: {
@@ -194,7 +211,8 @@ export async function GET(req: NextRequest) {
           }>;
         }
       | null;
-    const vp = g?.results?.[0]?.geometry?.viewport;
+    if (!g || g.status === "REQUEST_DENIED") continue;
+    const vp = g.results?.[0]?.geometry?.viewport;
     if (!vp) continue;
     zones.push({
       id: `g-zone-${name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
@@ -207,14 +225,24 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  // 3) Nearby places for checkpoint-like POIs.
-  const placeTypes = ["tourist_attraction", "museum", "park", "shopping_mall"];
+  // 3) Nearby places for checkpoint-like POIs + anchor seeds for city-wide tessellation.
+  const placeTypes = [
+    "tourist_attraction",
+    "museum",
+    "park",
+    "shopping_mall",
+    "transit_station",
+    "school",
+    "hospital",
+  ];
+  const anchorSeeds: Array<{ id: string; name: string; lat: number; lng: number; type: string }> = [];
   for (const t of placeTypes) {
     const nearbyUrl =
       `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${lat},${lng}` +
       `&radius=3000&type=${encodeURIComponent(t)}&key=${key}`;
     const p = await fetch(nearbyUrl, { cache: "no-store" }).then((r) => r.json()).catch(() => null) as
       | {
+          status?: string;
           results?: Array<{
             place_id?: string;
             name?: string;
@@ -223,6 +251,7 @@ export async function GET(req: NextRequest) {
           }>;
         }
       | null;
+    if (!p || p.status === "REQUEST_DENIED") continue;
     for (const r of p?.results ?? []) {
       if (!r.place_id || !r.name || !r.geometry?.location) continue;
       const kind: Checkpoint["kind"] =
@@ -237,7 +266,59 @@ export async function GET(req: NextRequest) {
         lng: r.geometry.location.lng,
         isActive: true,
       });
+      anchorSeeds.push({
+        id: r.place_id,
+        name: r.name,
+        lat: r.geometry.location.lat,
+        lng: r.geometry.location.lng,
+        type: (r.types ?? [])[0] ?? t,
+      });
     }
+  }
+
+  // 4) Build full-city coverage from Google anchors (Voronoi over city viewport).
+  const adminAnchors = uniqueAreaNames.map((a, i) => ({
+    id: `admin-${i}`,
+    name: a.long_name ?? `Area ${i + 1}`,
+    lat,
+    lng,
+    type: (a.types ?? [])[0] ?? "administrative",
+  }));
+  const allAnchors = [...anchorSeeds, ...adminAnchors]
+    .slice(0, 60);
+  const dedupAnchorMap = new Map<string, (typeof allAnchors)[number]>();
+  for (const a of allAnchors) {
+    if (!dedupAnchorMap.has(a.id)) dedupAnchorMap.set(a.id, a);
+  }
+  const anchors = Array.from(dedupAnchorMap.values());
+
+  if (anchors.length >= 3) {
+    const sw = coverageViewport.southwest;
+    const ne = coverageViewport.northeast;
+    const bounds: Pt[] = [
+      toMeters(lat, lng, { lat: sw.lat, lng: sw.lng }),
+      toMeters(lat, lng, { lat: sw.lat, lng: ne.lng }),
+      toMeters(lat, lng, { lat: ne.lat, lng: ne.lng }),
+      toMeters(lat, lng, { lat: ne.lat, lng: sw.lng }),
+    ];
+    const pts = anchors.map((a) => ({ a, p: toMeters(lat, lng, { lat: a.lat, lng: a.lng }) }));
+    const cells = pts.map((row, i) => {
+      const others = pts.filter((_, j) => j !== i).map((x) => x.p);
+      const poly = voronoiCell(row.p, others, bounds);
+      if (poly.length < 3) return null;
+      const polygon = poly.map((pt) => toGeo(lat, lng, pt));
+      const zone: Zone = {
+        id: `g-v-${row.a.id}`,
+        slug: row.a.name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+        name: row.a.name,
+        kind: "district",
+        color: colorForType(row.a.type),
+        isActive: true,
+        polygon,
+      };
+      return zone;
+    }).filter((x): x is Zone => x !== null);
+    zones.push(...cells);
   }
 
   const dedupZones = Array.from(
@@ -246,9 +327,6 @@ export async function GET(req: NextRequest) {
   const dedupCheckpoints = Array.from(
     new Map(checkpoints.map((c) => [c.id, c])).values(),
   ).slice(0, 16);
-  if (dedupZones.length === 0 && dedupCheckpoints.length === 0) {
-    return fallbackToOsm("google_empty");
-  }
   return NextResponse.json({
     zones: dedupZones,
     checkpoints: dedupCheckpoints,
