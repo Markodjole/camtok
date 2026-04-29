@@ -255,8 +255,6 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     const geoKey = `${lat},${lng}`;
     if (lastGeoKeyRef.current === geoKey) return;
     lastGeoKeyRef.current = geoKey;
-    let cancelled = false;
-
     const fetchGeoContext = async () => {
       try {
         if (!geoLoadedOnce) setGeoLoading(true);
@@ -273,7 +271,6 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           source?: string;
           reason?: string;
         };
-        if (cancelled) return;
         const nextZones = Array.isArray(json.zones) ? json.zones : [];
         const nextCheckpoints = Array.isArray(json.checkpoints) ? json.checkpoints : [];
         console.log("[google-geo-context][viewer]", {
@@ -297,9 +294,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     };
 
     void fetchGeoContext();
-    return () => {
-      cancelled = true;
-    };
+    return () => undefined;
   }, [routePoints, initialRoom.routePoints, geoLoadedOnce, room.currentMarket?.turnPointLat, room.currentMarket?.turnPointLng]);
 
   useEffect(() => {
