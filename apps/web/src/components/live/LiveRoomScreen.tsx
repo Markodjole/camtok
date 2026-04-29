@@ -309,6 +309,12 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   }, []);
 
   useEffect(() => {
+    // Viewer requirement: zones/checkpoints stay visible at all times.
+    if (!showZones) setShowZones(true);
+    if (!showCheckpoints) setShowCheckpoints(true);
+  }, [showZones, showCheckpoints]);
+
+  useEffect(() => {
     const id = setInterval(() => setNowTick(Date.now()), 500);
     return () => clearInterval(id);
   }, []);
@@ -463,8 +469,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             checkpoints={checkpoints}
             selectedZoneId={selectedZoneId}
             selectedCheckpointId={selectedCheckpointId}
-            showZones={showZones}
-            showCheckpoints={showCheckpoints}
+            showZones={true}
+            showCheckpoints={true}
             turnTarget={viewerTurnTarget}
             driverPins={driverPins}
             approachLine={approachLine}
@@ -537,15 +543,15 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       {mapExpanded ? (
         <div className="absolute right-4 top-24 z-40 flex flex-col items-center gap-6">
           <IconRailButton
-            active={showZones}
-            onClick={() => setShowZones((v) => !v)}
+            active
+            onClick={() => setShowZones(true)}
             title="Zones"
           >
             <IconLayers />
           </IconRailButton>
           <IconRailButton
-            active={showCheckpoints}
-            onClick={() => setShowCheckpoints((v) => !v)}
+            active
+            onClick={() => setShowCheckpoints(true)}
             title="Attractions"
           >
             <IconSparkle />
@@ -668,8 +674,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               checkpoints={checkpoints}
               selectedZoneId={selectedZoneId}
               selectedCheckpointId={selectedCheckpointId}
-              showZones={showZones}
-              showCheckpoints={showCheckpoints}
+              showZones={true}
+              showCheckpoints={true}
               turnTarget={viewerTurnTarget}
               driverPins={driverPins}
               approachLine={approachLine}
