@@ -399,26 +399,40 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
 
     const fetchGeoContext = async () => {
       try {
-        setGeoLoading(true);
+        if (!geoLoadedOnce) setGeoLoading(true);
         const res = await fetch(`/api/live/google-geo-context?lat=${lat}&lng=${lng}`, {
           cache: "no-store",
         });
         if (!res.ok) {
-          if (!cancelled) setGeoLoadedOnce(true);
+          setGeoLoadedOnce(true);
           return;
         }
         const json = (await res.json()) as {
           zones?: MapZone[];
           checkpoints?: MapCheckpoint[];
+          source?: string;
+          reason?: string;
         };
         if (cancelled) return;
-        setOsmZones(Array.isArray(json.zones) ? json.zones : []);
-        setOsmCheckpoints(Array.isArray(json.checkpoints) ? json.checkpoints : []);
+        const nextZones = Array.isArray(json.zones) ? json.zones : [];
+        const nextCheckpoints = Array.isArray(json.checkpoints) ? json.checkpoints : [];
+        console.log("[google-geo-context][streamer]", {
+          lat,
+          lng,
+          source: json.source ?? "unknown",
+          reason: json.reason ?? "unknown",
+          zonesCount: nextZones.length,
+          checkpointsCount: nextCheckpoints.length,
+          zones: nextZones,
+          checkpoints: nextCheckpoints,
+        });
+        setOsmZones(nextZones);
+        setOsmCheckpoints(nextCheckpoints);
         setGeoLoadedOnce(true);
       } catch {
-        if (!cancelled) setGeoLoadedOnce(true);
+        setGeoLoadedOnce(true);
       } finally {
-        if (!cancelled) setGeoLoading(false);
+        setGeoLoading(false);
       }
     };
 
@@ -426,7 +440,7 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
     return () => {
       cancelled = true;
     };
-  }, [routePoints]);
+  }, [routePoints, geoLoadedOnce]);
 
   const onPipPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;
@@ -563,10 +577,10 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
               followMode={true}
               tileOpacity={1}
               mapCaption={"You \u00b7 follow green arrow"}
-              zones={geoLoadedOnce ? osmZones : []}
-              checkpoints={geoLoadedOnce ? osmCheckpoints : []}
-              showZones={false}
-              showCheckpoints={false}
+              zones={osmZones}
+              checkpoints={osmCheckpoints}
+              showZones={true}
+              showCheckpoints={true}
               turnHint={aiTurnHint}
               turnHintEtaSec={aiTurnEtaSec}
               turnHintDistanceM={aiTurnDistanceM}
@@ -652,10 +666,10 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
                 followMode={true}
                 tileOpacity={0.65}
                 mapCaption={"You \u00b7 follow green arrow"}
-                zones={geoLoadedOnce ? osmZones : []}
-                checkpoints={geoLoadedOnce ? osmCheckpoints : []}
-                showZones={false}
-                showCheckpoints={false}
+                zones={osmZones}
+                checkpoints={osmCheckpoints}
+                showZones={true}
+                showCheckpoints={true}
                 turnHint={aiTurnHint}
                 turnHintEtaSec={aiTurnEtaSec}
                 turnHintDistanceM={aiTurnDistanceM}

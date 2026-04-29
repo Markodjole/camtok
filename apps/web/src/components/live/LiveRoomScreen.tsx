@@ -45,100 +45,6 @@ type MapCheckpoint = {
   isActive: boolean;
 };
 
-const CITY_ZONE_PRESETS: Array<{
-  id: string;
-  slug: string;
-  name: string;
-  kind: MapZone["kind"];
-  color: string;
-  points: Array<{ x: number; y: number }>;
-}> = [
-  {
-    id: "zone-city-center",
-    slug: "city-center",
-    name: "City Center",
-    kind: "district",
-    color: "#60a5fa",
-    points: [
-      { x: -1.1, y: 0.7 },
-      { x: -0.15, y: 1.2 },
-      { x: 0.75, y: 0.35 },
-      { x: -0.25, y: -0.35 },
-    ],
-  },
-  {
-    id: "zone-old-quarter",
-    slug: "old-quarter",
-    name: "Old Quarter",
-    kind: "district",
-    color: "#a78bfa",
-    points: [
-      { x: -1.6, y: 0.25 },
-      { x: -1.1, y: 0.95 },
-      { x: -0.55, y: 0.1 },
-      { x: -1.05, y: -0.45 },
-    ],
-  },
-  {
-    id: "zone-riverside",
-    slug: "riverside",
-    name: "Riverside",
-    kind: "corridor",
-    color: "#22c55e",
-    points: [
-      { x: 0.05, y: -1.4 },
-      { x: 0.9, y: -1.1 },
-      { x: 1.15, y: -0.25 },
-      { x: 0.2, y: -0.45 },
-    ],
-  },
-];
-
-const TOURIST_CHECKPOINT_PRESETS: Array<{
-  id: string;
-  name: string;
-  kind: MapCheckpoint["kind"];
-  offset: { x: number; y: number };
-}> = [
-  { id: "cp-main-square", name: "Main Square", kind: "square", offset: { x: -0.65, y: -0.6 } },
-  { id: "cp-city-bridge", name: "City Bridge", kind: "bridge", offset: { x: 0.95, y: 0.2 } },
-  { id: "cp-cathedral", name: "Cathedral", kind: "landmark", offset: { x: -0.95, y: 0.75 } },
-  { id: "cp-museum", name: "Museum", kind: "poi", offset: { x: 0.35, y: 1.05 } },
-  { id: "cp-viewpoint", name: "Viewpoint", kind: "landmark", offset: { x: 1.25, y: -0.45 } },
-];
-
-function buildMapObjects(anchor: RoutePoint | null): {
-  zones: MapZone[];
-  checkpoints: MapCheckpoint[];
-} {
-  const lat = anchor?.lat ?? 44.8125;
-  const lng = anchor?.lng ?? 20.4612;
-  const dLat = 0.0032;
-  const dLng = 0.0045;
-  return {
-    zones: CITY_ZONE_PRESETS.map((zone) => ({
-      id: zone.id,
-      slug: zone.slug,
-      name: zone.name,
-      kind: zone.kind,
-      color: zone.color,
-      isActive: true,
-      polygon: zone.points.map((point) => ({
-        lat: lat + dLat * point.y,
-        lng: lng + dLng * point.x,
-      })),
-    })),
-    checkpoints: TOURIST_CHECKPOINT_PRESETS.map((checkpoint) => ({
-      id: checkpoint.id,
-      name: checkpoint.name,
-      kind: checkpoint.kind,
-      lat: lat + dLat * checkpoint.offset.y,
-      lng: lng + dLng * checkpoint.offset.x,
-      isActive: true,
-    })),
-  };
-}
-
 export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [room, setRoom] = useState<LiveFeedRow>(initialRoom);
   const [routePoints, setRoutePoints] = useState<RoutePoint[]>(
@@ -325,12 +231,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       }
     }
   }, [currentMarket?.id, lastBetMarketId]);
-  const fallbackMapObjects = useMemo(
-    () => buildMapObjects(routePoints[routePoints.length - 1] ?? initialRoom.routePoints?.[0] ?? null),
-    [routePoints, initialRoom.routePoints],
-  );
-  const zones = geoLoadedOnce ? osmZones : fallbackMapObjects.zones;
-  const checkpoints = geoLoadedOnce ? osmCheckpoints : fallbackMapObjects.checkpoints;
+  const zones = osmZones;
+  const checkpoints = osmCheckpoints;
   const selectedZone = zones.find((z) => z.id === selectedZoneId) ?? null;
   const selectedCheckpoint = checkpoints.find((c) => c.id === selectedCheckpointId) ?? null;
   const selectedTargetLabel = selectedZone?.name ?? selectedCheckpoint?.name ?? null;
@@ -353,28 +255,40 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
     const fetchGeoContext = async () => {
       try {
-        setGeoLoading(true);
+        if (!geoLoadedOnce) setGeoLoading(true);
         const res = await fetch(`/api/live/google-geo-context?lat=${lat}&lng=${lng}`, {
           cache: "no-store",
         });
         if (!res.ok) {
-          if (!cancelled) setGeoLoadedOnce(true);
+          setGeoLoadedOnce(true);
           return;
         }
         const json = (await res.json()) as {
           zones?: MapZone[];
           checkpoints?: MapCheckpoint[];
+          source?: string;
+          reason?: string;
         };
         if (cancelled) return;
         const nextZones = Array.isArray(json.zones) ? json.zones : [];
         const nextCheckpoints = Array.isArray(json.checkpoints) ? json.checkpoints : [];
+        console.log("[google-geo-context][viewer]", {
+          lat,
+          lng,
+          source: json.source ?? "unknown",
+          reason: json.reason ?? "unknown",
+          zonesCount: nextZones.length,
+          checkpointsCount: nextCheckpoints.length,
+          zones: nextZones,
+          checkpoints: nextCheckpoints,
+        });
         setOsmZones(nextZones);
         setOsmCheckpoints(nextCheckpoints);
         setGeoLoadedOnce(true);
       } catch {
-        if (!cancelled) setGeoLoadedOnce(true);
+        setGeoLoadedOnce(true);
       } finally {
-        if (!cancelled) setGeoLoading(false);
+        setGeoLoading(false);
       }
     };
 
@@ -382,7 +296,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     return () => {
       cancelled = true;
     };
-  }, [routePoints, initialRoom.routePoints]);
+  }, [routePoints, initialRoom.routePoints, geoLoadedOnce]);
 
   useEffect(() => {
     return () => {

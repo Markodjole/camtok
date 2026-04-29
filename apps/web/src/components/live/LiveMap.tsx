@@ -107,13 +107,13 @@ function mapProfile(
   const m = (mode ?? "").toLowerCase();
   const bonus = role === "streamer" ? 1 : 0;
   if (m.includes("car") || m.includes("drive")) {
-    return { zoom: 17 + bonus, lineWeight: 4, showSpeed: true, speedUnit: "kmh" };
+    return { zoom: 16 + bonus, lineWeight: 4, showSpeed: true, speedUnit: "kmh" };
   }
   if (m.includes("bike") || m.includes("cycle")) {
-    return { zoom: 18 + bonus, lineWeight: 4, showSpeed: true, speedUnit: "kmh" };
+    return { zoom: 17 + bonus, lineWeight: 4, showSpeed: true, speedUnit: "kmh" };
   }
   // walking / default
-  return { zoom: Math.min(19, 18 + bonus + 1), lineWeight: 3, showSpeed: false, speedUnit: "none" };
+  return { zoom: 17 + bonus, lineWeight: 3, showSpeed: false, speedUnit: "none" };
 }
 
 function normalizeAngleDeg(deg: number): number {
@@ -248,6 +248,12 @@ export function LiveMap({
     (async () => {
       const L = (await import("leaflet")).default;
       group.clearLayers();
+      console.log("[LiveMap] render zones", {
+        role: audienceRole,
+        showZones,
+        zonesCount: zones.length,
+        ids: zones.map((z) => z.id),
+      });
       if (!showZones) return;
       zones.forEach((zone) => {
         const selected = selectedZoneId === zone.id;
@@ -257,9 +263,9 @@ export function LiveMap({
           zone.polygon.map((p) => [p.lat, p.lng] as [number, number]),
           {
             color: selected ? "#ffffff" : color,
-            weight: selected ? 3 : 2,
+            weight: selected ? 4 : 3,
             fillColor: color,
-            fillOpacity: isActive ? (selected ? 0.35 : 0.2) : 0.08,
+            fillOpacity: isActive ? (selected ? 0.5 : 0.35) : 0.14,
             opacity: isActive ? 0.9 : 0.35,
           },
         );
@@ -269,7 +275,7 @@ export function LiveMap({
         poly.addTo(group);
       });
     })();
-  }, [zones, selectedZoneId, showZones, interactive, onZoneSelect, mapReady]);
+  }, [zones, selectedZoneId, showZones, interactive, onZoneSelect, mapReady, audienceRole]);
 
   useEffect(() => {
     const group = checkpointLayerRef.current;
@@ -277,6 +283,11 @@ export function LiveMap({
     (async () => {
       const L = (await import("leaflet")).default;
       group.clearLayers();
+      console.log("[LiveMap] render checkpoints", {
+        role: audienceRole,
+        showCheckpoints,
+        checkpointsCount: checkpoints.length,
+      });
       if (!showCheckpoints) return;
       checkpoints.forEach((cp) => {
         const selected = selectedCheckpointId === cp.id;
@@ -302,6 +313,7 @@ export function LiveMap({
     interactive,
     onCheckpointSelect,
     mapReady,
+    audienceRole,
   ]);
 
   useEffect(() => {
