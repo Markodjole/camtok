@@ -734,6 +734,13 @@ export function LiveMap({
           </p>
         </div>
       )}
+      {destinationRoute && destinationRoute.length > 1 ? (
+        <div className="pointer-events-none absolute left-2 top-2 z-[2000]">
+          <span className="rounded-full border border-red-300/60 bg-red-500/80 px-2 py-1 text-[10px] font-semibold tracking-wide text-white shadow-md">
+            Google suggested route
+          </span>
+        </div>
+      ) : null}
     </div>
   );
 }
