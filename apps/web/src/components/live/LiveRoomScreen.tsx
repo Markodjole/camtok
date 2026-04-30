@@ -79,6 +79,11 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [approachLine, setApproachLine] = useState<
     Array<{ lat: number; lng: number }> | null
   >(null);
+  const [destinationRoute, setDestinationRoute] = useState<
+    Array<{ lat: number; lng: number }> | null
+  >(null);
+  const [destinationEtaSec, setDestinationEtaSec] = useState<number | null>(null);
+  const [destinationDistanceM, setDestinationDistanceM] = useState<number | null>(null);
   const [nowTick, setNowTick] = useState(() => Date.now());
   const [lastBetMarketId, setLastBetMarketId] = useState<string | null>(null);
   const [lastBetOptionLabel, setLastBetOptionLabel] = useState<string | null>(null);
@@ -300,6 +305,41 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
   useEffect(() => {
     let cancelled = false;
+    const fetchDest = async () => {
+      try {
+        const r = await fetch(
+          `/api/live/rooms/${room.roomId}/destination-route`,
+          { cache: "no-store" },
+        );
+        if (!r.ok) return;
+        const j = (await r.json()) as {
+          route: {
+            polyline: Array<{ lat: number; lng: number }>;
+            distanceMeters: number;
+            durationSec: number;
+          } | null;
+          distanceToDestinationMeters?: number;
+        };
+        if (cancelled) return;
+        setDestinationRoute(j.route?.polyline ?? null);
+        setDestinationDistanceM(
+          j.route?.distanceMeters ?? j.distanceToDestinationMeters ?? null,
+        );
+        setDestinationEtaSec(j.route?.durationSec ?? null);
+      } catch {
+        /* transient */
+      }
+    };
+    void fetchDest();
+    const id = setInterval(fetchDest, 4000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [room.roomId]);
+
+  useEffect(() => {
+    let cancelled = false;
     const fetchRoute = async () => {
       try {
         const r = await fetch(`/api/live/rooms/${room.roomId}/driver-route`, {
@@ -454,6 +494,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             driverPins={driverPins}
             approachLine={approachLine}
             railPhase={viewerRailPhase}
+            destination={room.destination}
+            destinationRoute={destinationRoute}
             onZoneSelect={(id) => {
               setSelectedZoneId(id);
               if (id) setSelectedCheckpointId(null);
@@ -473,6 +515,25 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
       {/* ── Top gradient scrim ───────────────────────────── */}
       <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-36 bg-gradient-to-b from-black/75 to-transparent" />
+
+      {room.destination ? (
+        <div className="pointer-events-none absolute inset-x-0 top-[5.25rem] z-30 flex justify-center px-3">
+          <div className="pointer-events-auto flex max-w-[92%] items-center gap-2 rounded-full border border-red-400/50 bg-red-500/25 px-3 py-1 text-[11px] text-red-50 shadow-lg backdrop-blur">
+            <span className="text-base leading-none">📍</span>
+            <span className="truncate font-medium">
+              Destination: {room.destination.label}
+            </span>
+            {destinationDistanceM != null && (
+              <span className="shrink-0 text-[10px] text-red-100/85">
+                · {formatDistance(destinationDistanceM)}
+                {destinationEtaSec != null
+                  ? ` · ${formatEta(destinationEtaSec)}`
+                  : ""}
+              </span>
+            )}
+          </div>
+        </div>
+      ) : null}
 
       {/* ── Top bar — LIVE · name · mode · $amount stepper ── */}
       <div className="absolute inset-x-0 top-12 z-40 flex items-center gap-2 px-4 py-3 text-sm">
@@ -605,6 +666,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               driverPins={driverPins}
               approachLine={approachLine}
               railPhase={viewerRailPhase}
+              destination={room.destination}
+              destinationRoute={destinationRoute}
             />
             {routePoints.length === 0 && (
               <div className="absolute inset-0 flex items-center justify-center bg-black/30 text-[9px] text-white/70">
@@ -714,6 +777,21 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       </div>
     </div>
   );
+}
+
+function formatDistance(m: number): string {
+  if (!Number.isFinite(m) || m <= 0) return "0 m";
+  if (m < 1000) return `${Math.round(m)} m`;
+  return `${(m / 1000).toFixed(m < 10_000 ? 1 : 0)} km`;
+}
+
+function formatEta(sec: number): string {
+  if (!Number.isFinite(sec) || sec <= 0) return "0 min";
+  const minutes = Math.round(sec / 60);
+  if (minutes < 60) return `${minutes} min`;
+  const h = Math.floor(minutes / 60);
+  const r = minutes % 60;
+  return r === 0 ? `${h} h` : `${h} h ${r} min`;
 }
 
 function MarketTimer({ locksAt }: { locksAt: string }) {

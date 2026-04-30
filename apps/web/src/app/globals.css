@@ -92,3 +92,20 @@ body {
   margin: 0 !important;
 }
 
+.leaflet-tooltip.camtok-destination-tip {
+  background: rgba(239, 68, 68, 0.92) !important;
+  border: 1px solid rgba(255, 255, 255, 0.6) !important;
+  border-radius: 9999px !important;
+  color: #fff !important;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  padding: 2px 8px !important;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45) !important;
+  white-space: nowrap;
+}
+
+.leaflet-tooltip.camtok-destination-tip::before {
+  border-top-color: rgba(239, 68, 68, 0.92) !important;
+}
+

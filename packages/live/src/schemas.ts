@@ -59,11 +59,19 @@ export const decisionDirectionSchema = z.enum([
   "other",
 ]);
 
+export const destinationInputSchema = z.object({
+  lat: z.number().finite().min(-90).max(90),
+  lng: z.number().finite().min(-180).max(180),
+  label: z.string().min(1).max(160),
+  placeId: z.string().max(200).optional().nullable(),
+});
+
 export const startSessionInputSchema = z.object({
   characterId: z.string().uuid(),
   transportMode: transportModeSchema,
   statusText: z.string().max(200).optional(),
   intentLabel: z.string().max(80).optional(),
+  destination: destinationInputSchema.optional().nullable(),
 });
 
 export const heartbeatInputSchema = z.object({
@@ -141,6 +149,7 @@ export const camtokSafetyProfileUpdateSchema = z.object({
 });
 
 export type StartSessionInput = z.infer<typeof startSessionInputSchema>;
+export type DestinationInput = z.infer<typeof destinationInputSchema>;
 export type HeartbeatInput = z.infer<typeof heartbeatInputSchema>;
 export type LocationPoint = z.infer<typeof locationPointSchema>;
 export type LocationBatchInput = z.infer<typeof locationBatchInputSchema>;

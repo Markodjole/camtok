@@ -255,6 +255,10 @@ export async function startLiveSessionForUser(
           transport_mode: parsed.data.transportMode,
           current_status_text: parsed.data.statusText ?? null,
           current_intent_label: parsed.data.intentLabel ?? null,
+          destination_lat: parsed.data.destination?.lat ?? null,
+          destination_lng: parsed.data.destination?.lng ?? null,
+          destination_label: parsed.data.destination?.label ?? null,
+          destination_place_id: parsed.data.destination?.placeId ?? null,
           last_heartbeat_at: new Date().toISOString(),
           status: "live",
         })
@@ -279,6 +283,10 @@ export async function startLiveSessionForUser(
       transport_mode: parsed.data.transportMode,
       current_status_text: parsed.data.statusText ?? null,
       current_intent_label: parsed.data.intentLabel ?? null,
+      destination_lat: parsed.data.destination?.lat ?? null,
+      destination_lng: parsed.data.destination?.lng ?? null,
+      destination_label: parsed.data.destination?.label ?? null,
+      destination_place_id: parsed.data.destination?.placeId ?? null,
       safety_level: policy.safetyLevel,
       last_heartbeat_at: new Date().toISOString(),
     })

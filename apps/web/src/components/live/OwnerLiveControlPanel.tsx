@@ -13,6 +13,7 @@ import { StreamGuidanceOverlay } from "./StreamGuidanceOverlay";
 import { TurnBlinkOverlay, type TurnDirection } from "./TurnBlinkOverlay";
 import { LiveDecisionStatusRibbon } from "./LiveDecisionStatusRibbon";
 import { computeStreamGuidance } from "@/lib/live/streamGuidance";
+import { DestinationPicker, type PickedDestination } from "./DestinationPicker";
 
 const LiveMap = dynamic(() => import("./LiveMap").then((m) => m.LiveMap), { ssr: false });
 type MapZone = {
@@ -72,6 +73,13 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
   const [transportMode, setTransportMode] = useState<TransportMode>("walking");
   const [statusText, setStatusText] = useState("");
   const [intentLabel, setIntentLabel] = useState("");
+  const [destination, setDestination] = useState<PickedDestination | null>(null);
+  const [currentPos, setCurrentPos] = useState<{ lat: number; lng: number } | null>(null);
+  const [destRoute, setDestRoute] = useState<{
+    polyline: Array<{ lat: number; lng: number }>;
+    distanceMeters: number;
+    durationSec: number;
+  } | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [roomId, setRoomId] = useState<string | null>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
@@ -145,6 +153,14 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
       transportMode,
       statusText: statusText.trim() || undefined,
       intentLabel: intentLabel.trim() || undefined,
+      destination: destination
+        ? {
+            lat: destination.lat,
+            lng: destination.lng,
+            label: destination.label,
+            placeId: destination.placeId,
+          }
+        : null,
     });
     if ("error" in res) {
       setError(res.error ?? "Failed to start session");
@@ -342,6 +358,37 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
     };
   }, [roomId, sessionId, routePoints]);
 
+  useEffect(() => {
+    if (!roomId || !sessionId) return;
+    let cancelled = false;
+    const fetchDestRoute = async () => {
+      try {
+        const r = await fetch(
+          `/api/live/rooms/${roomId}/destination-route`,
+          { cache: "no-store" },
+        );
+        if (!r.ok) return;
+        const j = (await r.json()) as {
+          route: {
+            polyline: Array<{ lat: number; lng: number }>;
+            distanceMeters: number;
+            durationSec: number;
+          } | null;
+        };
+        if (cancelled) return;
+        setDestRoute(j.route);
+      } catch {
+        /* transient */
+      }
+    };
+    void fetchDestRoute();
+    const id = setInterval(fetchDestRoute, 4000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [roomId, sessionId]);
+
   // Poll the driver-route endpoint which returns the road-snapped polyline
   // from the current position to the AI checkpoint (a bit past the next
   // turn). Backend caches by market + position bucket so this is cheap.
@@ -388,6 +435,31 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
     setOsmZones([]);
     setOsmCheckpoints([]);
   }, []);
+
+  // Pre-fetch a quick GPS fix on mount so the destination autocomplete can
+  // bias towards the driver's current city before they hit "Go live".
+  useEffect(() => {
+    if (sessionId) return;
+    if (!("geolocation" in navigator)) return;
+    let cancelled = false;
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        if (cancelled) return;
+        setCurrentPos({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+      },
+      () => undefined,
+      { enableHighAccuracy: false, timeout: 7000, maximumAge: 60_000 },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (!routePoints.length) return;
+    const last = routePoints[routePoints.length - 1]!;
+    setCurrentPos({ lat: last.lat, lng: last.lng });
+  }, [routePoints]);
 
   const onPipPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;
@@ -523,7 +595,11 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
               rotateWithHeading={true}
               followMode={true}
               tileOpacity={1}
-              mapCaption={"You \u00b7 follow green arrow"}
+              mapCaption={
+                destination
+                  ? `Destination: ${destination.label}`
+                  : "You \u00b7 follow green arrow"
+              }
               zones={osmZones}
               checkpoints={osmCheckpoints}
               showZones={false}
@@ -535,6 +611,8 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
               driverPins={driverPins}
               approachLine={approachLine}
               railPhase={railPhase}
+              destination={destination}
+              destinationRoute={destRoute?.polyline ?? null}
             />
           ) : (
             <LiveVideoPlayer localStream={stream} className="h-full w-full" />
@@ -612,7 +690,11 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
                 rotateWithHeading={true}
                 followMode={true}
                 tileOpacity={0.65}
-                mapCaption={"You \u00b7 follow green arrow"}
+                mapCaption={
+                  destination
+                    ? `Destination: ${destination.label}`
+                    : "You \u00b7 follow green arrow"
+                }
                 zones={osmZones}
                 checkpoints={osmCheckpoints}
                 showZones={false}
@@ -624,6 +706,8 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
                 driverPins={driverPins}
                 approachLine={approachLine}
                 railPhase={railPhase}
+                destination={destination}
+                destinationRoute={destRoute?.polyline ?? null}
               />
               {routePoints.length === 0 && (
                 <div className="absolute inset-0 flex items-center justify-center bg-black/60 text-[9px] text-white/40">
@@ -708,6 +792,12 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
           />
         </div>
 
+        <DestinationPicker
+          value={destination}
+          onChange={setDestination}
+          bias={currentPos}
+        />
+
         <p className="text-[11px] text-white/35">
           Uses your rear (world-facing) camera when the device supports it.
         </p>
@@ -716,11 +806,11 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
 
         <button
           type="button"
-          disabled={starting}
+          disabled={starting || !destination}
           onClick={() => void goLive()}
           className="w-full rounded-2xl bg-red-500 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50"
         >
-          {starting ? "Starting…" : "Go live"}
+          {starting ? "Starting…" : destination ? "Go live" : "Pick a destination first"}
         </button>
       </div>
     </div>

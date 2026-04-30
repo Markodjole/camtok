@@ -44,6 +44,12 @@ export type LiveFeedRow = {
   sessionStartedAt: string;
   lastHeartbeatAt: string | null;
   routePoints: RoutePoint[];
+  destination: {
+    lat: number;
+    lng: number;
+    label: string;
+    placeId: string | null;
+  } | null;
 };
 
 export async function getLiveFeed(): Promise<{ items: LiveFeedRow[] }> {
@@ -97,6 +103,17 @@ export async function getLiveFeed(): Promise<{ items: LiveFeedRow[] }> {
     sessionStartedAt: r.session_started_at as string,
     lastHeartbeatAt: (r.last_heartbeat_at as string | null) ?? null,
     routePoints: [],
+    destination:
+      r.destination_lat != null && r.destination_lng != null
+        ? {
+            lat: r.destination_lat as number,
+            lng: r.destination_lng as number,
+            label:
+              ((r.destination_label as string | null) ?? "").trim() ||
+              "Destination",
+            placeId: (r.destination_place_id as string | null) ?? null,
+          }
+        : null,
   }));
 
   return { items };

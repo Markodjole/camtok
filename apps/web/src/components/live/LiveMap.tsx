@@ -79,6 +79,20 @@ export interface LiveMapProps {
    *  - "active"  → bets closed, turn coming: rail (driver → checkpoint) + dot.
    */
   railPhase?: "none" | "pending" | "active";
+  /**
+   * Driver-chosen destination — rendered as a red pin with an optional
+   * label tooltip. Independent of the AI decision pin (which is blue).
+   */
+  destination?: {
+    lat: number;
+    lng: number;
+    label?: string;
+  } | null;
+  /**
+   * Google-suggested route polyline from current position to destination.
+   * Server recomputes whenever the driver deviates more than ~40 m.
+   */
+  destinationRoute?: Array<{ lat: number; lng: number }> | null;
 }
 
 const C = {
@@ -150,6 +164,8 @@ export function LiveMap({
   driverPins = null,
   approachLine = null,
   railPhase = "none",
+  destination = null,
+  destinationRoute = null,
 }: LiveMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<import("leaflet").Map | null>(null);
@@ -161,6 +177,7 @@ export function LiveMap({
   const checkpointLayerRef = useRef<import("leaflet").LayerGroup | null>(null);
   const turnLayerRef = useRef<import("leaflet").LayerGroup | null>(null);
   const railLayerRef = useRef<import("leaflet").LayerGroup | null>(null);
+  const destLayerRef = useRef<import("leaflet").LayerGroup | null>(null);
   const hasAppliedInitialZoomRef = useRef(false);
   const onUserInteractRef = useRef<(() => void) | undefined>(undefined);
   const motionRafRef = useRef<number | null>(null);
@@ -214,6 +231,7 @@ export function LiveMap({
       t.addTo(m);
       zoneLayerRef.current = L.layerGroup().addTo(m);
       checkpointLayerRef.current = L.layerGroup().addTo(m);
+      destLayerRef.current = L.layerGroup().addTo(m);
       railLayerRef.current = L.layerGroup().addTo(m);
       turnLayerRef.current = L.layerGroup().addTo(m);
       layerRef.current = t;
@@ -237,6 +255,7 @@ export function LiveMap({
       arRef.current = null;
       zoneLayerRef.current = null;
       checkpointLayerRef.current = null;
+      destLayerRef.current = null;
       railLayerRef.current = null;
       turnLayerRef.current = null;
       mapRef.current?.remove();
@@ -352,6 +371,85 @@ export function LiveMap({
     onCheckpointSelect,
     mapReady,
     audienceRole,
+  ]);
+
+  useEffect(() => {
+    const group = destLayerRef.current;
+    if (!group) return;
+    let aborted = false;
+    (async () => {
+      const L = (await import("leaflet")).default;
+      if (aborted) return;
+      group.clearLayers();
+
+      if (
+        destinationRoute &&
+        destinationRoute.length >= 2 &&
+        destinationRoute.every(
+          (p) => Number.isFinite(p.lat) && Number.isFinite(p.lng),
+        )
+      ) {
+        const pts = destinationRoute.map(
+          (p) => [p.lat, p.lng] as [number, number],
+        );
+        L.polyline(pts, {
+          color: "#000000",
+          weight: 9,
+          opacity: 0.25,
+          lineCap: "round",
+          lineJoin: "round",
+        }).addTo(group);
+        L.polyline(pts, {
+          color: "#ef4444",
+          weight: 5,
+          opacity: 0.85,
+          dashArray: "6 6",
+          lineCap: "round",
+          lineJoin: "round",
+        }).addTo(group);
+      }
+
+      if (
+        destination &&
+        Number.isFinite(destination.lat) &&
+        Number.isFinite(destination.lng)
+      ) {
+        const html =
+          `<div style="display:flex;flex-direction:column;align-items:center;transform:translateY(-2px)">
+            <div style="width:18px;height:18px;border-radius:50%;background:#ef4444;border:2px solid white;box-shadow:0 0 8px rgba(0,0,0,0.85)"></div>
+            <div style="width:2px;height:10px;background:#ef4444;box-shadow:0 0 4px rgba(0,0,0,0.6)"></div>
+          </div>`;
+        const icon = L.divIcon({
+          html,
+          className: "camtok-destination-pin",
+          iconSize: [22, 32],
+          iconAnchor: [11, 30],
+        });
+        const marker = L.marker([destination.lat, destination.lng], {
+          icon,
+          interactive: false,
+          zIndexOffset: 1000,
+        });
+        if (destination.label) {
+          marker.bindTooltip(destination.label, {
+            permanent: true,
+            direction: "top",
+            offset: [0, -28],
+            className: "camtok-destination-tip",
+          });
+        }
+        marker.addTo(group);
+      }
+    })();
+    return () => {
+      aborted = true;
+    };
+  }, [
+    destination?.lat,
+    destination?.lng,
+    destination?.label,
+    destinationRoute,
+    mapReady,
   ]);
 
   useEffect(() => {
