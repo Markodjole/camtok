@@ -93,6 +93,8 @@ export interface LiveMapProps {
    * Server recomputes whenever the driver deviates more than ~40 m.
    */
   destinationRoute?: Array<{ lat: number; lng: number }> | null;
+  /** UI label for destination route badge. */
+  destinationRouteLabel?: string | null;
 }
 
 const C = {
@@ -166,6 +168,7 @@ export function LiveMap({
   railPhase = "none",
   destination = null,
   destinationRoute = null,
+  destinationRouteLabel = "Google suggested route",
 }: LiveMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<import("leaflet").Map | null>(null);
@@ -737,7 +740,7 @@ export function LiveMap({
       {destinationRoute && destinationRoute.length > 1 ? (
         <div className="pointer-events-none absolute left-2 top-2 z-[2000]">
           <span className="rounded-full border border-red-300/60 bg-red-500/80 px-2 py-1 text-[10px] font-semibold tracking-wide text-white shadow-md">
-            Google suggested route
+            {destinationRouteLabel ?? "Google suggested route"}
           </span>
         </div>
       ) : null}

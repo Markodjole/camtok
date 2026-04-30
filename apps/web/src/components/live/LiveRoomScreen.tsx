@@ -82,6 +82,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [destinationRoute, setDestinationRoute] = useState<
     Array<{ lat: number; lng: number }> | null
   >(null);
+  const [hasGoogleDestinationRoute, setHasGoogleDestinationRoute] = useState(false);
   const [destinationEtaSec, setDestinationEtaSec] = useState<number | null>(null);
   const [destinationDistanceM, setDestinationDistanceM] = useState<number | null>(null);
   const [nowTick, setNowTick] = useState(() => Date.now());
@@ -351,6 +352,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         };
         if (cancelled) return;
         setDestinationRoute(j.route?.polyline ?? null);
+        setHasGoogleDestinationRoute(Boolean(j.route?.polyline && j.route.polyline.length > 1));
         setDestinationDistanceM(
           j.route?.distanceMeters ?? j.distanceToDestinationMeters ?? null,
         );
@@ -360,12 +362,26 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       }
     };
     void fetchDest();
-    const id = setInterval(fetchDest, 4000);
+    const id = setInterval(fetchDest, 2000);
     return () => {
       cancelled = true;
       clearInterval(id);
     };
   }, [room.roomId]);
+
+  const destinationRouteForMap = useMemo(() => {
+    if (destinationRoute && destinationRoute.length > 1) return destinationRoute;
+    const last = routePoints[routePoints.length - 1];
+    if (!last || !room.destination) return null;
+    return [
+      { lat: last.lat, lng: last.lng },
+      { lat: room.destination.lat, lng: room.destination.lng },
+    ];
+  }, [destinationRoute, routePoints, room.destination]);
+
+  const destinationRouteLabel = hasGoogleDestinationRoute
+    ? "Google suggested route"
+    : "Destination direction";
 
   useEffect(() => {
     let cancelled = false;
@@ -525,7 +541,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             approachLine={approachLine}
             railPhase={viewerRailPhase}
             destination={room.destination}
-            destinationRoute={destinationRoute}
+            destinationRoute={destinationRouteForMap}
+            destinationRouteLabel={destinationRouteLabel}
             onZoneSelect={(id) => {
               setSelectedZoneId(id);
               if (id) setSelectedCheckpointId(null);
@@ -698,7 +715,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               approachLine={approachLine}
               railPhase={viewerRailPhase}
               destination={room.destination}
-              destinationRoute={destinationRoute}
+              destinationRoute={destinationRouteForMap}
+              destinationRouteLabel={destinationRouteLabel}
             />
             {routePoints.length === 0 && (
               <div className="absolute inset-0 flex items-center justify-center bg-black/30 text-[9px] text-white/70">

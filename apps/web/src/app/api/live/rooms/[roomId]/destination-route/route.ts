@@ -33,8 +33,8 @@ type Cached = {
 };
 
 const ROUTE_CACHE = new Map<string, Cached>();
-const CACHE_MAX_AGE_MS = 45_000;
-const OFF_ROUTE_THRESHOLD_M = 40;
+const CACHE_MAX_AGE_MS = 8_000;
+const OFF_ROUTE_THRESHOLD_M = 12;
 const DESTINATION_REACHED_M = 25;
 
 export async function GET(
