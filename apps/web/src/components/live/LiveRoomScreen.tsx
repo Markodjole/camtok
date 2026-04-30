@@ -334,13 +334,20 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
   useEffect(() => {
     let cancelled = false;
-    const fetchDest = async () => {
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    const fetchDest = async (): Promise<void> => {
+      if (cancelled) return;
       try {
         const r = await fetch(
           `/api/live/rooms/${room.roomId}/destination-route`,
           { cache: "no-store" },
         );
-        if (!r.ok) return;
+        if (!r.ok) {
+          retryTimer = setTimeout(() => {
+            void fetchDest();
+          }, 1000);
+          return;
+        }
         const j = (await r.json()) as {
           route: {
             polyline: Array<{ lat: number; lng: number }>;
@@ -348,13 +355,14 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             durationSec: number;
           } | null;
           distanceToDestinationMeters?: number;
+          reason?: "no_room" | "no_destination" | "no_position" | "arrived";
         };
         if (cancelled) return;
         // Only update when we have an actual Google road polyline.
-        // Keep last valid route on transient misses instead of drawing a straight fallback.
+        // Keep last valid route on transient misses; retry until Google returns again.
         if (j.route?.polyline && j.route.polyline.length > 1) {
           setDestinationRoute(j.route.polyline);
-        } else if (j.route === null) {
+        } else if (j.reason === "no_destination" || j.reason === "arrived") {
           setDestinationRoute(null);
         }
         setDestinationDistanceM(
@@ -363,15 +371,20 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         setDestinationEtaSec(j.route?.durationSec ?? null);
       } catch {
         /* transient */
+      } finally {
+        if (!cancelled) {
+          retryTimer = setTimeout(() => {
+            void fetchDest();
+          }, destinationRoute ? 2000 : 1000);
+        }
       }
     };
     void fetchDest();
-    const id = setInterval(fetchDest, 2000);
     return () => {
       cancelled = true;
-      clearInterval(id);
+      if (retryTimer) clearTimeout(retryTimer);
     };
-  }, [room.roomId]);
+  }, [room.roomId, destinationRoute]);
 
   useEffect(() => {
     let cancelled = false;
