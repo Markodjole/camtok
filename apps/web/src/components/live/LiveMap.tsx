@@ -125,7 +125,9 @@ function mapProfile(
   speedUnit: "kmh" | "none";
 } {
   const m = (mode ?? "").toLowerCase();
-  const bonus = role === "streamer" ? 1 : 0;
+  // Keep viewer viewpoint identical to driver viewpoint so motion/turning
+  // perception matches exactly between roles.
+  const bonus = 1;
   if (m.includes("car") || m.includes("drive")) {
     return { zoom: 16 + bonus, lineWeight: 4, showSpeed: true, speedUnit: "kmh" };
   }
