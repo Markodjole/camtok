@@ -77,9 +77,18 @@ type Instruction = {
   confidence: "high" | "low";
 };
 
+type PinAnchor = { lat: number; lng: number };
+
 type RoomState = {
   /** Ordered list of pin OSM node ids currently shown to clients. */
   pinIds: number[];
+  /**
+   * World coordinates fixed the first time each id enters the queue.
+   * When Overpass / Google polyline jitters, the same node can briefly
+   * disappear from `candidates` or jump in cumulativeM — we keep the
+   * visual pin here until the vehicle actually passes it.
+   */
+  anchors: Record<number, PinAnchor>;
   lastUpdatedMs: number;
 };
 
@@ -91,6 +100,10 @@ const APPROACH_LINE_BEFORE_M = 50;
 const APPROACH_LINE_AFTER_M = 20;
 /** Pin is treated as "passed" once its road distance from vehicle is below this. */
 const PASSED_THRESHOLD_M = 5;
+/** On-map straight-line pass radius when re-projecting a sticky anchor (meters). */
+const PASSED_ANCHOR_LINE_M = 12;
+/** Drop a sticky pin if it projects farther than this from the active polyline (meters). */
+const STICKY_OFF_ROUTE_DROP_M = 45;
 /** Max perpendicular distance from polyline to consider a crossroad "on the road". */
 const ON_ROUTE_THRESHOLD_M = 14;
 /** Look this far ahead for the OSRM forward route. */
@@ -243,6 +256,100 @@ function projectCrossroadsOntoRoute(
     dedup.push(p);
   }
   return dedup;
+}
+
+function ensureAnchors(
+  queue: RoutePinCandidate[],
+  anchors: Record<number, PinAnchor>,
+): Record<number, PinAnchor> {
+  const next = { ...anchors };
+  for (const q of queue) {
+    if (!next[q.id]) {
+      next[q.id] = { lat: q.lat, lng: q.lng };
+    }
+  }
+  // Drop anchors for ids no longer in queue
+  const ids = new Set(queue.map((q) => q.id));
+  for (const k of Object.keys(next)) {
+    if (!ids.has(Number(k))) delete next[Number(k)];
+  }
+  return next;
+}
+
+/**
+ * Rebuild ordered queue from previous pin ids, keeping positions stable until
+ * the vehicle passes each pin (road-ahead distance or straight-line fallback).
+ */
+function resolveCommittedQueue(params: {
+  polyline: LatLng[];
+  vehicle: LatLng;
+  prevPinIds: number[];
+  anchors: Record<number, PinAnchor>;
+  candidates: RoutePinCandidate[];
+  spacing: { minSpacingM: number; maxSpacingM: number };
+}): { queue: RoutePinCandidate[]; anchors: Record<number, PinAnchor> } {
+  const { polyline, vehicle, prevPinIds, anchors, candidates, spacing } = params;
+  const candById = new Map(candidates.map((c) => [c.id, c] as const));
+  const vProj = projectOntoPolyline(polyline, vehicle);
+  const vehCum = vProj
+    ? cumulativeMetersAt(polyline, vProj.segmentIndex, vProj.t)
+    : 0;
+
+  const surviving: RoutePinCandidate[] = [];
+  for (const id of prevPinIds) {
+    const fromCand = candById.get(id);
+    const anchor: PinAnchor | null =
+      anchors[id] ??
+      (fromCand ? { lat: fromCand.lat, lng: fromCand.lng } : null);
+    if (!anchor) continue;
+
+    let pinCum: number;
+    let meta: Pick<
+      RoutePinCandidate,
+      "comfort" | "bestRoadClass" | "meaningfulBranches" | "onPlannedRoute"
+    >;
+    if (fromCand) {
+      pinCum = fromCand.cumulativeM;
+      meta = {
+        comfort: fromCand.comfort,
+        bestRoadClass: fromCand.bestRoadClass,
+        meaningfulBranches: fromCand.meaningfulBranches,
+        onPlannedRoute: fromCand.onPlannedRoute,
+      };
+    } else {
+      const pProj = projectOntoPolyline(polyline, anchor);
+      if (!pProj || pProj.distanceMeters > STICKY_OFF_ROUTE_DROP_M) {
+        continue;
+      }
+      pinCum = cumulativeMetersAt(polyline, pProj.segmentIndex, pProj.t);
+      meta = {
+        comfort: 0.5,
+        bestRoadClass: "unknown",
+        meaningfulBranches: 2,
+        onPlannedRoute: true,
+      };
+    }
+
+    const ahead = pinCum - vehCum;
+    if (ahead <= PASSED_THRESHOLD_M) continue;
+    if (metersBetween(vehicle, anchor) < PASSED_ANCHOR_LINE_M) continue;
+
+    surviving.push({
+      id,
+      lat: anchor.lat,
+      lng: anchor.lng,
+      cumulativeM: pinCum,
+      ...meta,
+    });
+  }
+
+  const queue =
+    surviving.length === 0
+      ? buildFreshQueue(candidates, spacing)
+      : topUpQueue(surviving, candidates, spacing);
+
+  const nextAnchors = ensureAnchors(queue, anchors);
+  return { queue, anchors: nextAnchors };
 }
 
 /**
@@ -415,27 +522,18 @@ export async function GET(
   const nowMs = Date.now();
   const prev = ROOM_STATE.get(roomId);
 
-  // Drop pins that are no longer ahead on the current route (vehicle passed
-  // them, or driver took an unexpected branch and the pin is no longer on
-  // the road).
-  const survivingFromState: RoutePinCandidate[] = [];
-  if (prev) {
-    for (const id of prev.pinIds) {
-      const c = candidates.find((x) => x.id === id);
-      if (!c) continue;
-      if (c.cumulativeM <= PASSED_THRESHOLD_M) continue;
-      survivingFromState.push(c);
-    }
-  }
-
-  // If we have nothing, start a fresh queue. Otherwise, top up.
-  const queue =
-    survivingFromState.length === 0
-      ? buildFreshQueue(candidates, spacing)
-      : topUpQueue(survivingFromState, candidates, spacing);
+  const { queue, anchors } = resolveCommittedQueue({
+    polyline,
+    vehicle: position,
+    prevPinIds: prev?.pinIds ?? [],
+    anchors: prev?.anchors ?? {},
+    candidates,
+    spacing,
+  });
 
   ROOM_STATE.set(roomId, {
     pinIds: queue.map((p) => p.id),
+    anchors,
     lastUpdatedMs: nowMs,
   });
   if (ROOM_STATE.size > 256) {
