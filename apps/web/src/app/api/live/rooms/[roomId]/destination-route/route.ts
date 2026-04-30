@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getLiveRoomDetail } from "@/actions/live-feed";
 import { fetchGoogleDirectionsRoute } from "@/lib/live/routing/googleDirections";
-import { fetchOsrmDrivingRoute } from "@/lib/live/routing/osrm";
 import {
   metersBetween,
   projectOntoPolyline,
@@ -102,10 +101,9 @@ export async function GET(
     : null;
 
   if (needsRefetch) {
-    const freshGoogle = await fetchGoogleDirectionsRoute(driver, dest, {
+    const fresh = await fetchGoogleDirectionsRoute(driver, dest, {
       transportMode: room.transportMode,
     });
-    const fresh = freshGoogle ?? (await fetchOsrmDrivingRoute(driver, dest));
     if (fresh) {
       ROUTE_CACHE.set(roomId, {
         polyline: fresh.polyline,
