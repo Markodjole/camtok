@@ -623,7 +623,7 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
               approachLine={approachLine}
               railPhase={railPhase}
               destination={destination}
-              destinationRoute={destRoute?.polyline ?? null}
+              destinationRoute={null}
             />
           ) : (
             <LiveVideoPlayer localStream={stream} className="h-full w-full" />
@@ -718,7 +718,7 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
                 approachLine={approachLine}
                 railPhase={railPhase}
                 destination={destination}
-                destinationRoute={destRoute?.polyline ?? null}
+                destinationRoute={null}
               />
               {routePoints.length === 0 && (
                 <div className="absolute inset-0 flex items-center justify-center bg-black/60 text-[9px] text-white/40">

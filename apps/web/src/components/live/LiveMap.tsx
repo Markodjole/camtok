@@ -402,16 +402,10 @@ export function LiveMap({
           (p) => [p.lat, p.lng] as [number, number],
         );
         L.polyline(pts, {
-          color: "#000000",
-          weight: 9,
-          opacity: 0.25,
-          lineCap: "round",
-          lineJoin: "round",
-        }).addTo(group);
-        L.polyline(pts, {
           color: "#ef4444",
-          weight: 6,
-          opacity: 0.95,
+          weight: 4,
+          opacity: 0.3,
+          dashArray: "8 10",
           lineCap: "round",
           lineJoin: "round",
         }).addTo(group);
