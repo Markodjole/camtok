@@ -1,11 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getLiveRoomDetail } from "@/actions/live-feed";
 import { fetchOsrmDrivingRoute } from "@/lib/live/routing/osrm";
-import { fetchNearbyCrossroads } from "@/lib/live/routing/findNextCrossroad";
+import {
+  fetchNearbyCrossroadsDetailed,
+  type DetailedCrossroad,
+} from "@/lib/live/routing/findNextCrossroad";
+import { fetchGoogleDirectionsRoute } from "@/lib/live/routing/googleDirections";
+import {
+  isHardRejected,
+  isMajorOrBetter,
+  scoreRoadComfort,
+  type NormalizedRoadClass,
+} from "@/lib/live/routing/roadClassNormalizer";
 import {
   bearingDegrees,
   cumulativeMetersAt,
   metersBetween,
+  polylineLengthMeters,
   projectOntoPolyline,
   projectPoint,
   slicePolylineByDistance,
@@ -86,6 +97,42 @@ const ON_ROUTE_THRESHOLD_M = 14;
 const FORWARD_PROBE_M = 1500;
 /** Search this far for OSM crossroad candidates. */
 const CROSSROAD_SEARCH_RADIUS_M = 1500;
+/**
+ * Once we have a Google destination route, only consider candidates within
+ * the first PLANNING_LOOKAHEAD_M meters of that polyline so pins always sit
+ * on the immediate maneuver horizon.
+ */
+const PLANNING_LOOKAHEAD_M = 1500;
+/** Min comfort score to consider a candidate's best connected branch usable. */
+const MIN_BRANCH_COMFORT_SCORE = 0.45;
+
+type PlanningRoute = {
+  polyline: LatLng[];
+  source: "google" | "osrm";
+};
+
+/**
+ * Per-room cache for the driver→destination Google polyline used to plan
+ * blue-pin placement. Keeps the shared driver-route handler from spamming
+ * the Google Routes endpoint on every viewer poll while still recomputing
+ * when the driver drifts off the planned road.
+ */
+type PlanningCacheEntry = {
+  polyline: LatLng[];
+  destLat: number;
+  destLng: number;
+  driverBucket: string;
+  fetchedAtMs: number;
+};
+const PLANNING_ROUTE_CACHE = new Map<string, PlanningCacheEntry>();
+const PLANNING_ROUTE_TTL_MS = 30_000;
+const PLANNING_DRIVER_BUCKET_DEG = 0.0008; // ~85 m
+
+function planningBucket(p: LatLng): string {
+  const lat = Math.round(p.lat / PLANNING_DRIVER_BUCKET_DEG);
+  const lng = Math.round(p.lng / PLANNING_DRIVER_BUCKET_DEG);
+  return `${lat}|${lng}`;
+}
 
 function spacingWindowForSpeed(speedMps: number | null | undefined): {
   minSpacingM: number;
@@ -120,16 +167,34 @@ type RoutePinCandidate = {
   lat: number;
   lng: number;
   cumulativeM: number;
+  /** Best comfort score among connected ways. */
+  comfort: number;
+  /** Best (highest) connected road class. */
+  bestRoadClass: NormalizedRoadClass;
+  /** How many connected ways pass at least the comfort floor. */
+  meaningfulBranches: number;
+  /** Set when the candidate sits on the destination-aware planning polyline. */
+  onPlannedRoute: boolean;
 };
 
 /**
- * Project every nearby crossroad onto the OSRM polyline and keep the ones
- * sitting on the road, sorted by cumulative road distance from the start
- * (= vehicle position).
+ * Project every nearby crossroad onto the planning polyline and apply the
+ * "bettable crossroad" rules from
+ * `camtok_road_api_bettable_crossroads_cursor_instructions.md`:
+ *
+ *   - hard-reject candidates whose only connected ways are tracks /
+ *     footways / private / forbidden
+ *   - require ≥ 2 meaningful branches (comfort ≥ MIN_BRANCH_COMFORT_SCORE)
+ *   - keep unknown roads as a soft fallback so we don't go silent in OSM
+ *     under-mapped areas
+ *
+ * Returned candidates are sorted by cumulative road distance from the start
+ * of the polyline (= vehicle position).
  */
 function projectCrossroadsOntoRoute(
   polyline: LatLng[],
-  crossroads: Array<{ nodeId: number; lat: number; lng: number }>,
+  crossroads: DetailedCrossroad[],
+  opts: { onPlannedRoute: boolean },
 ): RoutePinCandidate[] {
   const out: RoutePinCandidate[] = [];
   for (const c of crossroads) {
@@ -137,7 +202,35 @@ function projectCrossroadsOntoRoute(
     if (!proj) continue;
     if (proj.distanceMeters > ON_ROUTE_THRESHOLD_M) continue;
     const cum = cumulativeMetersAt(polyline, proj.segmentIndex, proj.t);
-    out.push({ id: c.nodeId, lat: c.lat, lng: c.lng, cumulativeM: cum });
+
+    // Apply bettable-branch filtering — require at least one connected way
+    // that is realistically drivable (not service-only / tracks / private).
+    const usableWays = c.ways.filter((w) => !isHardRejected(w.roadClass, w.tags));
+    if (usableWays.length === 0) continue;
+
+    let bestComfort = 0;
+    let meaningful = 0;
+    for (const w of usableWays) {
+      const cf = scoreRoadComfort(w.roadClass, w.tags.surface, w.tags.access);
+      if (cf > bestComfort) bestComfort = cf;
+      if (cf >= MIN_BRANCH_COMFORT_SCORE) meaningful += 1;
+    }
+
+    // Need at least two non-hard-rejected branches for a real intersection;
+    // unknown-class branches still count so we don't black out under-mapped
+    // areas where Overpass returns sparse tags.
+    if (usableWays.length < 2) continue;
+
+    out.push({
+      id: c.nodeId,
+      lat: c.lat,
+      lng: c.lng,
+      cumulativeM: cum,
+      comfort: bestComfort,
+      bestRoadClass: c.bestRoadClass,
+      meaningfulBranches: meaningful,
+      onPlannedRoute: opts.onPlannedRoute,
+    });
   }
   out.sort((a, b) => a.cumulativeM - b.cumulativeM);
   // Deduplicate near-duplicate crossroads (same intersection mapped twice in
@@ -203,6 +296,69 @@ function topUpQueue(
   return queue;
 }
 
+/**
+ * Resolve a planning polyline to use for blue-pin selection.
+ *
+ *  1. If the room has a destination, ask Google Routes for a road-snapped
+ *     polyline driver→destination, then trim it to the next
+ *     PLANNING_LOOKAHEAD_M meters. We cache per-room and re-fetch when the
+ *     driver drifts off-route or the destination changes.
+ *  2. Otherwise (no destination, or Google returned nothing), fall back to
+ *     the existing OSRM forward probe in the heading direction.
+ */
+async function resolvePlanningPolyline(params: {
+  roomId: string;
+  driver: LatLng;
+  heading: number;
+  destination: { lat: number; lng: number } | null;
+  transportMode?: string;
+}): Promise<PlanningRoute | null> {
+  const { roomId, driver, heading, destination, transportMode } = params;
+
+  if (destination) {
+    const cached = PLANNING_ROUTE_CACHE.get(roomId);
+    const driverBucket = planningBucket(driver);
+    const cacheValid =
+      cached &&
+      Math.abs(cached.destLat - destination.lat) < 1e-6 &&
+      Math.abs(cached.destLng - destination.lng) < 1e-6 &&
+      cached.driverBucket === driverBucket &&
+      Date.now() - cached.fetchedAtMs < PLANNING_ROUTE_TTL_MS;
+
+    let polyline = cacheValid ? cached!.polyline : null;
+    if (!polyline) {
+      const google = await fetchGoogleDirectionsRoute(driver, destination, {
+        transportMode,
+      });
+      if (google && google.polyline.length >= 2) {
+        polyline = google.polyline;
+        PLANNING_ROUTE_CACHE.set(roomId, {
+          polyline,
+          destLat: destination.lat,
+          destLng: destination.lng,
+          driverBucket,
+          fetchedAtMs: Date.now(),
+        });
+      }
+    }
+    if (polyline && polyline.length >= 2) {
+      const total = polylineLengthMeters(polyline);
+      const trimmed =
+        total > PLANNING_LOOKAHEAD_M
+          ? slicePolylineByDistance(polyline, 0, PLANNING_LOOKAHEAD_M)
+          : polyline;
+      if (trimmed.length >= 2) {
+        return { polyline: trimmed, source: "google" };
+      }
+    }
+  }
+
+  const farTarget = projectPoint(driver, heading, FORWARD_PROBE_M);
+  const osrm = await fetchOsrmDrivingRoute(driver, farTarget);
+  if (!osrm || osrm.polyline.length < 2) return null;
+  return { polyline: osrm.polyline, source: "osrm" };
+}
+
 export async function GET(
   _req: NextRequest,
   ctx: { params: Promise<{ roomId: string }> },
@@ -227,19 +383,34 @@ export async function GET(
 
   const position: LatLng = { lat: last.lat, lng: last.lng };
   const spacing = spacingWindowForSpeed(last.speedMps);
-  const farTarget = projectPoint(position, heading, FORWARD_PROBE_M);
 
-  const [osrm, crossroads] = await Promise.all([
-    fetchOsrmDrivingRoute(position, farTarget),
-    fetchNearbyCrossroads(position.lat, position.lng, CROSSROAD_SEARCH_RADIUS_M),
+  const destination = room.destination
+    ? { lat: room.destination.lat, lng: room.destination.lng }
+    : null;
+
+  const [planning, crossroads] = await Promise.all([
+    resolvePlanningPolyline({
+      roomId,
+      driver: position,
+      heading,
+      destination,
+      transportMode: room.transportMode,
+    }),
+    fetchNearbyCrossroadsDetailed(
+      position.lat,
+      position.lng,
+      CROSSROAD_SEARCH_RADIUS_M,
+    ),
   ]);
 
-  if (!osrm || osrm.polyline.length < 2) {
+  if (!planning || planning.polyline.length < 2) {
     return NextResponse.json({ instruction: null, reason: "no_route" });
   }
 
-  const polyline = osrm.polyline;
-  const candidates = projectCrossroadsOntoRoute(polyline, crossroads);
+  const polyline = planning.polyline;
+  const candidates = projectCrossroadsOntoRoute(polyline, crossroads, {
+    onPlannedRoute: planning.source === "google",
+  });
 
   const nowMs = Date.now();
   const prev = ROOM_STATE.get(roomId);
@@ -295,5 +466,15 @@ export async function GET(
     confidence: pins.length > 0 ? "high" : "low",
   };
 
-  return NextResponse.json({ instruction });
+  return NextResponse.json({
+    instruction,
+    planning: {
+      source: planning.source,
+      destinationAware:
+        planning.source === "google" && Boolean(destination),
+      bestRoadClasses: queue.map((q) => q.bestRoadClass),
+      meaningfulBranchesPerPin: queue.map((q) => q.meaningfulBranches),
+      onlyMajorRoads: queue.every((q) => isMajorOrBetter(q.bestRoadClass)),
+    },
+  });
 }

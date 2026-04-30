@@ -1,4 +1,9 @@
 import { bearingDegrees, metersBetween, type LatLng } from "./geometry";
+import {
+  normalizeOsmRoad,
+  type NormalizedRoadClass,
+  type OsmRoadTags,
+} from "./roadClassNormalizer";
 
 /**
  * The upcoming road intersection we want to highlight on the driver's map.
@@ -12,11 +17,28 @@ export type NextCrossroad = {
   distanceMeters: number;
 };
 
+/**
+ * Crossroad enriched with per-way road metadata so the bettable-intersection
+ * scorer can apply the integration-spec rules (skip service/track/private
+ * branches, prefer major/medium roads, require ≥2 meaningful branches).
+ */
+export type DetailedCrossroad = NextCrossroad & {
+  /** Connected drivable ways with their normalized road class and raw tags. */
+  ways: Array<{
+    wayId: number;
+    roadClass: NormalizedRoadClass;
+    tags: OsmRoadTags;
+  }>;
+  /** Best class among the connected ways (used as primary comfort signal). */
+  bestRoadClass: NormalizedRoadClass;
+};
+
 type OverpassWayElement = {
   type: "way";
   id: number;
   nodes?: number[];
   geometry?: Array<{ lat: number; lon: number }>;
+  tags?: Record<string, string>;
 };
 
 type OverpassElement = OverpassWayElement | { type: "node"; id: number; lat?: number; lon?: number };
@@ -24,6 +46,7 @@ type OverpassElement = OverpassWayElement | { type: "node"; id: number; lat?: nu
 type CacheEntry = {
   expiresAtMs: number;
   crossroads: NextCrossroad[];
+  detailed: DetailedCrossroad[];
 };
 
 // Server-side cache keyed by a ~100 m position bucket: the crossroad set in a
@@ -62,14 +85,16 @@ const DRIVABLE_CLASSES = [
   "service",
 ].join("|");
 
-export async function fetchNearbyCrossroads(
+async function loadCrossroads(
   lat: number,
   lng: number,
   radiusMeters: number,
-): Promise<NextCrossroad[]> {
+): Promise<{ crossroads: NextCrossroad[]; detailed: DetailedCrossroad[] }> {
   const key = bucketKey(lat, lng);
   const hit = CACHE.get(key);
-  if (hit && hit.expiresAtMs > Date.now()) return hit.crossroads;
+  if (hit && hit.expiresAtMs > Date.now()) {
+    return { crossroads: hit.crossroads, detailed: hit.detailed };
+  }
 
   const query = `
 [out:json][timeout:15];
@@ -90,30 +115,43 @@ out body geom qt;
       cache: "no-store",
     });
     if (!res.ok) {
-      CACHE.set(key, { expiresAtMs: Date.now() + 5_000, crossroads: [] });
-      return [];
+      CACHE.set(key, {
+        expiresAtMs: Date.now() + 5_000,
+        crossroads: [],
+        detailed: [],
+      });
+      return { crossroads: [], detailed: [] };
     }
     const json = (await res.json().catch(() => null)) as
       | { elements?: OverpassElement[] }
       | null;
     elements = json?.elements ?? [];
   } catch {
-    return [];
+    return { crossroads: [], detailed: [] };
   }
 
-  // Build a node → usage-count map and remember each node's first seen coords.
-  // A node used by ≥ 2 drivable ways is, by definition, an intersection.
-  const countByNode = new Map<number, number>();
+  // Track per-node which drivable ways pass through it (with their tags) so
+  // the consumer can score connected branches per the integration spec.
+  const waysByNode = new Map<
+    number,
+    Array<{ wayId: number; tags: Record<string, string> }>
+  >();
   const geomByNode = new Map<number, { lat: number; lng: number }>();
   for (const el of elements) {
     if (el.type !== "way") continue;
     const nodes = el.nodes;
     const geom = el.geometry;
     if (!nodes || !geom) continue;
+    const tags = el.tags ?? {};
     const len = Math.min(nodes.length, geom.length);
     for (let i = 0; i < len; i += 1) {
       const nid = nodes[i]!;
-      countByNode.set(nid, (countByNode.get(nid) ?? 0) + 1);
+      let bucket = waysByNode.get(nid);
+      if (!bucket) {
+        bucket = [];
+        waysByNode.set(nid, bucket);
+      }
+      bucket.push({ wayId: el.id, tags });
       if (!geomByNode.has(nid)) {
         geomByNode.set(nid, { lat: geom[i]!.lat, lng: geom[i]!.lon });
       }
@@ -122,19 +160,58 @@ out body geom qt;
 
   const origin = { lat, lng };
   const crossroads: NextCrossroad[] = [];
-  for (const [nodeId, count] of countByNode) {
-    if (count < 2) continue;
+  const detailed: DetailedCrossroad[] = [];
+  for (const [nodeId, bucket] of waysByNode) {
+    // Deduplicate ways that touch the same node multiple times (rare).
+    const seen = new Set<number>();
+    const uniqueWays = bucket.filter((w) => {
+      if (seen.has(w.wayId)) return false;
+      seen.add(w.wayId);
+      return true;
+    });
+    if (uniqueWays.length < 2) continue;
     const geo = geomByNode.get(nodeId);
     if (!geo) continue;
+    const distance = metersBetween(origin, geo);
     crossroads.push({
       nodeId,
       lat: geo.lat,
       lng: geo.lng,
-      distanceMeters: metersBetween(origin, geo),
+      distanceMeters: distance,
+    });
+
+    const ways = uniqueWays.map((w) => {
+      const tags: OsmRoadTags = {
+        highway: w.tags.highway ?? null,
+        surface: w.tags.surface ?? null,
+        access: w.tags.access ?? null,
+        motor_vehicle: w.tags.motor_vehicle ?? null,
+        oneway: w.tags.oneway ?? null,
+        lanes: w.tags.lanes ?? null,
+        maxspeed: w.tags.maxspeed ?? null,
+      };
+      return {
+        wayId: w.wayId,
+        tags,
+        roadClass: normalizeOsmRoad(tags),
+      };
+    });
+    const bestRoadClass = pickBestRoadClass(ways.map((w) => w.roadClass));
+    detailed.push({
+      nodeId,
+      lat: geo.lat,
+      lng: geo.lng,
+      distanceMeters: distance,
+      ways,
+      bestRoadClass,
     });
   }
 
-  CACHE.set(key, { expiresAtMs: Date.now() + CACHE_TTL_MS, crossroads });
+  CACHE.set(key, {
+    expiresAtMs: Date.now() + CACHE_TTL_MS,
+    crossroads,
+    detailed,
+  });
 
   // Opportunistic sweep.
   if (CACHE.size > 256) {
@@ -144,7 +221,57 @@ out body geom qt;
     }
   }
 
+  return { crossroads, detailed };
+}
+
+const ROAD_CLASS_RANK: Record<NormalizedRoadClass, number> = {
+  motorway: 7,
+  major: 6,
+  medium: 5,
+  local: 4,
+  minor: 3,
+  service: 2,
+  unknown: 2,
+  bad: 1,
+  forbidden: 0,
+};
+
+function pickBestRoadClass(
+  classes: NormalizedRoadClass[],
+): NormalizedRoadClass {
+  let best: NormalizedRoadClass = "unknown";
+  let bestRank = -1;
+  for (const c of classes) {
+    const rank = ROAD_CLASS_RANK[c] ?? 0;
+    if (rank > bestRank) {
+      best = c;
+      bestRank = rank;
+    }
+  }
+  return best;
+}
+
+export async function fetchNearbyCrossroads(
+  lat: number,
+  lng: number,
+  radiusMeters: number,
+): Promise<NextCrossroad[]> {
+  const { crossroads } = await loadCrossroads(lat, lng, radiusMeters);
   return crossroads;
+}
+
+/**
+ * Same Overpass call as `fetchNearbyCrossroads` but returns the connected
+ * ways (with normalized road class & raw tags) for each intersection. Used
+ * by the destination-aware bettable-intersection scorer.
+ */
+export async function fetchNearbyCrossroadsDetailed(
+  lat: number,
+  lng: number,
+  radiusMeters: number,
+): Promise<DetailedCrossroad[]> {
+  const { detailed } = await loadCrossroads(lat, lng, radiusMeters);
+  return detailed;
 }
 
 /**
