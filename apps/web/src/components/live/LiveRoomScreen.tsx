@@ -164,7 +164,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       }
     };
     fetchPoints();
-    const id = setInterval(fetchPoints, 1200);
+    const id = setInterval(fetchPoints, 600);
     return () => clearInterval(id);
   }, [room.liveSessionId]);
 
@@ -526,7 +526,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             className="h-full w-full"
             interactive={true}
             audienceRole="viewer"
-            showCourseArrow={false}
+            showCourseArrow={true}
             transportMode={room.transportMode}
             rotateWithHeading={true}
             followMode={mapFollow}
@@ -702,7 +702,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               className="h-full w-full"
               interactive={false}
               audienceRole="viewer"
-              showCourseArrow={false}
+              showCourseArrow={true}
               transportMode={room.transportMode}
               rotateWithHeading={true}
               tileOpacity={0.65}

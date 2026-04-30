@@ -99,12 +99,16 @@ export interface LiveMapProps {
 
 const C = {
   streamer: { line: "#22c55e", lineOp: 0.5, fill: "#4ade80", r: 7 },
-  viewer: { line: "#a78bfa", lineOp: 0.4, fill: "#fb7185", r: 6 },
+  viewer: { line: "#22c55e", lineOp: 0.5, fill: "#4ade80", r: 7 },
 };
 
-function headingDivIcon(L: { divIcon: (o: object) => import("leaflet").DivIcon }, deg: number, streamer: boolean) {
-  const m = streamer ? 24 : 19;
-  const c = streamer ? "#4ade80" : "#c4b5fd";
+function headingDivIcon(
+  L: { divIcon: (o: object) => import("leaflet").DivIcon },
+  deg: number,
+  _streamer: boolean,
+) {
+  const m = 24;
+  const c = "#4ade80";
   const html = `<div style="width:52px;height:52px;display:flex;align-items:center;justify-content:center;transform:rotate(${deg}deg)">
     <div style="width:0;height:0;border-left:${m * 0.35}px solid transparent;border-right:${m * 0.35}px solid transparent;
       border-bottom:${m * 0.8}px solid ${c};filter:drop-shadow(0 0 2px #000)"></div></div>`;
@@ -646,13 +650,13 @@ export function LiveMap({
     const targetPos: [number, number] = [last.lat, last.lng];
 
     const now = performance.now();
-    const sinceLastGpsSec = lastGpsAtMsRef.current != null ? Math.max(0.7, Math.min(2.8, (now - lastGpsAtMsRef.current) / 1000)) : 1.2;
+    const sinceLastGpsSec = lastGpsAtMsRef.current != null ? Math.max(0.4, Math.min(2.8, (now - lastGpsAtMsRef.current) / 1000)) : 0.8;
     lastGpsAtMsRef.current = now;
 
     const vLatPerSec = prev ? (last.lat - prev.lat) / sinceLastGpsSec : 0;
     const vLngPerSec = prev ? (last.lng - prev.lng) / sinceLastGpsSec : 0;
-    const settleMs = 800;
-    const tailMs = 1400;
+    const settleMs = Math.round(Math.min(900, Math.max(450, sinceLastGpsSec * 1000 * 0.7)));
+    const tailMs = Math.round(Math.min(1500, Math.max(600, sinceLastGpsSec * 1000 * 1.1)));
     const totalMs = settleMs + tailMs;
     const frameStart = performance.now();
 

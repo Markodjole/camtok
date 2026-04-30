@@ -100,6 +100,7 @@ export async function GET(
       }
     : null;
 
+  let lastFetchOk = true;
   if (needsRefetch) {
     const fresh = await fetchGoogleDirectionsRoute(driver, dest, {
       transportMode: room.transportMode,
@@ -114,6 +115,15 @@ export async function GET(
         fetchedAtMs: Date.now(),
       });
       route = fresh;
+    } else {
+      lastFetchOk = false;
+      console.warn("[destination-route] Google route fetch failed", {
+        roomId,
+        from: driver,
+        to: dest,
+        transportMode: room.transportMode,
+        hasCache: Boolean(cached),
+      });
     }
   }
 
@@ -129,5 +139,7 @@ export async function GET(
     route,
     distanceToDestinationMeters: distanceToDest,
     refetched: needsRefetch,
+    lastFetchOk,
+    reason: route ? "ok" : lastFetchOk ? "ok_no_route" : "google_error",
   });
 }
