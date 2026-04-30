@@ -63,7 +63,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [showReplay, setShowReplay] = useState(false);
   const [skillFeedback, setSkillFeedback] = useState<SkillFeedbackData | null>(null);
   /** When true: map is full-screen, camera feed is in the corner pip */
-  const [mapExpanded, setMapExpanded] = useState(false);
+  const [mapExpanded, setMapExpanded] = useState(true);
   const [selectedZoneId, setSelectedZoneId] = useState<string | null>(null);
   const [selectedCheckpointId, setSelectedCheckpointId] = useState<string | null>(null);
   const [selectedMapOptionId, setSelectedMapOptionId] = useState<string | null>(null);
@@ -299,6 +299,17 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   }, []);
 
   useEffect(() => {
+    const placeBottomLeft = () => {
+      const boxW = Math.min(window.innerWidth * 0.34, 180);
+      const top = Math.max(48, window.innerHeight - boxW - 120);
+      setPipPos({ top, left: 12 });
+    };
+    placeBottomLeft();
+    window.addEventListener("resize", placeBottomLeft);
+    return () => window.removeEventListener("resize", placeBottomLeft);
+  }, []);
+
+  useEffect(() => {
     const id = setInterval(() => setNowTick(Date.now()), 500);
     return () => clearInterval(id);
   }, []);
@@ -406,7 +417,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       else return;
     }
     e.preventDefault();
-    const boxW = Math.min(window.innerWidth * 0.56, 260);
+    const boxW = Math.min(window.innerWidth * 0.34, 180);
     const boxH = boxW;
     const nextLeft = Math.max(
       8,
@@ -626,10 +637,10 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         style={{
           top: pipPos.top,
           left: pipPos.left,
-          width: "56vw",
-          height: "56vw",
-          maxWidth: 260,
-          maxHeight: 260,
+          width: "34vw",
+          height: "34vw",
+          maxWidth: 180,
+          maxHeight: 180,
           opacity: 0.9,
           touchAction: "none",
           cursor: pipDragReady ? "grabbing" : "grab",

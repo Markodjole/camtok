@@ -264,6 +264,17 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
     };
   }, []);
 
+  useEffect(() => {
+    const placeBottomLeft = () => {
+      const boxW = Math.min(window.innerWidth * 0.34, 180);
+      const top = Math.max(48, window.innerHeight - boxW - 120);
+      setPipPos({ top, left: 12 });
+    };
+    placeBottomLeft();
+    window.addEventListener("resize", placeBottomLeft);
+    return () => window.removeEventListener("resize", placeBottomLeft);
+  }, []);
+
   // Drive rail-phase transitions smoothly between GPS polls.
   useEffect(() => {
     const id = setInterval(() => setNowTick(Date.now()), 500);
@@ -493,7 +504,7 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
       else return;
     }
     e.preventDefault();
-    const boxW = Math.min(window.innerWidth * 0.42, 220);
+    const boxW = Math.min(window.innerWidth * 0.34, 180);
     const boxH = boxW;
     const nextLeft = Math.max(
       8,
@@ -663,10 +674,10 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
           style={{
             top: pipPos.top,
             left: pipPos.left,
-            width: "42vw",
-            height: "42vw",
-            maxWidth: 220,
-            maxHeight: 220,
+            width: "34vw",
+            height: "34vw",
+            maxWidth: 180,
+            maxHeight: 180,
             opacity: 0.9,
             touchAction: "none",
             cursor: pipDragReady ? "grabbing" : "grab",
