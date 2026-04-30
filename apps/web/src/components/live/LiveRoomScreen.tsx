@@ -82,7 +82,6 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [destinationRoute, setDestinationRoute] = useState<
     Array<{ lat: number; lng: number }> | null
   >(null);
-  const [hasGoogleDestinationRoute, setHasGoogleDestinationRoute] = useState(false);
   const [destinationEtaSec, setDestinationEtaSec] = useState<number | null>(null);
   const [destinationDistanceM, setDestinationDistanceM] = useState<number | null>(null);
   const [nowTick, setNowTick] = useState(() => Date.now());
@@ -351,8 +350,13 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           distanceToDestinationMeters?: number;
         };
         if (cancelled) return;
-        setDestinationRoute(j.route?.polyline ?? null);
-        setHasGoogleDestinationRoute(Boolean(j.route?.polyline && j.route.polyline.length > 1));
+        // Only update when we have an actual Google road polyline.
+        // Keep last valid route on transient misses instead of drawing a straight fallback.
+        if (j.route?.polyline && j.route.polyline.length > 1) {
+          setDestinationRoute(j.route.polyline);
+        } else if (j.route === null) {
+          setDestinationRoute(null);
+        }
         setDestinationDistanceM(
           j.route?.distanceMeters ?? j.distanceToDestinationMeters ?? null,
         );
@@ -368,20 +372,6 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       clearInterval(id);
     };
   }, [room.roomId]);
-
-  const destinationRouteForMap = useMemo(() => {
-    if (destinationRoute && destinationRoute.length > 1) return destinationRoute;
-    const last = routePoints[routePoints.length - 1];
-    if (!last || !room.destination) return null;
-    return [
-      { lat: last.lat, lng: last.lng },
-      { lat: room.destination.lat, lng: room.destination.lng },
-    ];
-  }, [destinationRoute, routePoints, room.destination]);
-
-  const destinationRouteLabel = hasGoogleDestinationRoute
-    ? "Google suggested route"
-    : "Destination direction";
 
   useEffect(() => {
     let cancelled = false;
@@ -541,8 +531,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             approachLine={approachLine}
             railPhase={viewerRailPhase}
             destination={room.destination}
-            destinationRoute={destinationRouteForMap}
-            destinationRouteLabel={destinationRouteLabel}
+            destinationRoute={destinationRoute}
+            destinationRouteLabel="Google suggested route"
             onZoneSelect={(id) => {
               setSelectedZoneId(id);
               if (id) setSelectedCheckpointId(null);
@@ -715,8 +705,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               approachLine={approachLine}
               railPhase={viewerRailPhase}
               destination={room.destination}
-              destinationRoute={destinationRouteForMap}
-              destinationRouteLabel={destinationRouteLabel}
+              destinationRoute={destinationRoute}
+              destinationRouteLabel="Google suggested route"
             />
             {routePoints.length === 0 && (
               <div className="absolute inset-0 flex items-center justify-center bg-black/30 text-[9px] text-white/70">
