@@ -139,7 +139,25 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         );
         if (res.ok) {
           const json = (await res.json()) as { points: RoutePoint[] };
-          setRoutePoints(json.points);
+          setRoutePoints((prev) => {
+            const next = json.points;
+            if (prev.length === next.length) {
+              const prevLast = prev[prev.length - 1];
+              const nextLast = next[next.length - 1];
+              if (
+                (!prevLast && !nextLast) ||
+                (prevLast &&
+                  nextLast &&
+                  prevLast.lat === nextLast.lat &&
+                  prevLast.lng === nextLast.lng &&
+                  (prevLast.heading ?? null) === (nextLast.heading ?? null) &&
+                  (prevLast.speedMps ?? null) === (nextLast.speedMps ?? null))
+              ) {
+                return prev;
+              }
+            }
+            return next;
+          });
         }
       } catch {
         /* transient */

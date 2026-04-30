@@ -93,13 +93,13 @@ export function LiveVideoPlayer({
           Connecting to live stream…
         </div>
       ) : null}
-      {!localStream && liveSessionId && remoteStream && !soundOn ? (
+      {!localStream && liveSessionId && remoteStream ? (
         <button
           type="button"
-          onClick={() => setSoundOn(true)}
-          className="absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full bg-white/10 px-3 py-1.5 text-[11px] text-white backdrop-blur"
+          onClick={() => setSoundOn((prev) => !prev)}
+          className="absolute bottom-2 right-2 z-10 rounded-md bg-black/45 px-2 py-1 text-[10px] text-white/90 backdrop-blur-sm"
         >
-          Tap for sound
+          {soundOn ? "Sound on" : "Sound off"}
         </button>
       ) : null}
       {signalError ? (

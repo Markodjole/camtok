@@ -267,7 +267,7 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
   useEffect(() => {
     const placeBottomLeft = () => {
       const boxW = Math.min(window.innerWidth * 0.34, 180);
-      const top = Math.max(48, window.innerHeight - boxW - 76);
+      const top = Math.max(48, window.innerHeight - boxW - 104);
       setPipPos({ top, left: 12 });
     };
     placeBottomLeft();
