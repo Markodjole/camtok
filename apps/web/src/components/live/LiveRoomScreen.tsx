@@ -301,7 +301,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   useEffect(() => {
     const placeBottomLeft = () => {
       const boxW = Math.min(window.innerWidth * 0.34, 180);
-      const top = Math.max(48, window.innerHeight - boxW - 120);
+      const top = Math.max(48, window.innerHeight - boxW - 76);
       setPipPos({ top, left: 12 });
     };
     placeBottomLeft();
@@ -771,8 +771,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         />
       ) : null}
 
-      {/* ── Joystick — always at exact same position ── */}
-      <div className="pointer-events-none fixed inset-x-0 bottom-0 z-[60] flex flex-col items-center px-4 pb-[calc(4.25rem+env(safe-area-inset-bottom,0px))]">
+      {/* ── Joystick — pinned bottom-right ── */}
+      <div className="pointer-events-none fixed inset-x-0 bottom-0 z-[60] flex flex-col items-end px-4 pb-[calc(1rem+env(safe-area-inset-bottom,0px))]">
         <div className="pointer-events-auto flex flex-col items-center">
           {currentMarket && currentMarket.marketType !== "city_grid" ? (
             <DirectionalBetPad

@@ -267,7 +267,7 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
   useEffect(() => {
     const placeBottomLeft = () => {
       const boxW = Math.min(window.innerWidth * 0.34, 180);
-      const top = Math.max(48, window.innerHeight - boxW - 120);
+      const top = Math.max(48, window.innerHeight - boxW - 76);
       setPipPos({ top, left: 12 });
     };
     placeBottomLeft();
@@ -748,16 +748,16 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
 
         <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-48 bg-gradient-to-t from-black/80 to-transparent" />
 
-        <div className="absolute inset-x-0 bottom-0 z-20 px-5 pb-4">
+        <div className="absolute bottom-4 right-4 z-20 flex flex-col items-end gap-2">
           {roomId && (
-            <p className="mb-3 text-center text-[10px] text-white/30">{`room ${roomId.slice(0, 8)}\u2026`}</p>
+            <p className="text-[10px] text-white/30">{`room ${roomId.slice(0, 8)}\u2026`}</p>
           )}
           <button
             type="button"
             onClick={() => void stopLive()}
-            className="w-full rounded-2xl border border-red-500/40 bg-red-500/20 px-4 py-3 text-sm font-semibold text-red-300 backdrop-blur-sm active:bg-red-500/35"
+            className="rounded-xl border border-red-500/40 bg-red-500/20 px-4 py-2.5 text-sm font-semibold text-red-300 backdrop-blur-sm active:bg-red-500/35"
           >
-            End live session
+            End session
           </button>
         </div>
       </div>
