@@ -478,6 +478,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             className="h-full w-full"
             interactive={true}
             audienceRole="viewer"
+            showCourseArrow={false}
             transportMode={room.transportMode}
             rotateWithHeading={true}
             followMode={mapFollow}
@@ -652,6 +653,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               className="h-full w-full"
               interactive={false}
               audienceRole="viewer"
+              showCourseArrow={false}
               transportMode={room.transportMode}
               rotateWithHeading={true}
               tileOpacity={0.65}

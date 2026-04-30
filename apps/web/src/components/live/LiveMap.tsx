@@ -189,6 +189,8 @@ export function LiveMap({
     onUserInteractRef.current = onUserInteract;
   }, [onUserInteract]);
   const streamer = audienceRole === "streamer";
+  const showHistoryPath = audienceRole === "streamer";
+  const smoothMotion = audienceRole === "streamer";
   const col = streamer ? C.streamer : C.viewer;
   const profile = mapProfile(transportMode, streamer ? "streamer" : "viewer");
 
@@ -401,9 +403,8 @@ export function LiveMap({
         }).addTo(group);
         L.polyline(pts, {
           color: "#ef4444",
-          weight: 5,
-          opacity: 0.85,
-          dashArray: "6 6",
+          weight: 6,
+          opacity: 0.95,
           lineCap: "round",
           lineJoin: "round",
         }).addTo(group);
@@ -544,15 +545,20 @@ export function LiveMap({
           : profile.zoom
         : profile.zoom;
 
-      if (plRef.current) {
-        plRef.current.setLatLngs(latlngs);
-        plRef.current.setStyle({ color: col.line, weight: profile.lineWeight, opacity: col.lineOp });
-      } else {
-        plRef.current = L.polyline(latlngs, {
-          color: col.line,
-          weight: profile.lineWeight,
-          opacity: col.lineOp,
-        }).addTo(m);
+      if (showHistoryPath) {
+        if (plRef.current) {
+          plRef.current.setLatLngs(latlngs);
+          plRef.current.setStyle({ color: col.line, weight: profile.lineWeight, opacity: col.lineOp });
+        } else {
+          plRef.current = L.polyline(latlngs, {
+            color: col.line,
+            weight: profile.lineWeight,
+            opacity: col.lineOp,
+          }).addTo(m);
+        }
+      } else if (plRef.current) {
+        m.removeLayer(plRef.current);
+        plRef.current = null;
       }
       if (dotRef.current) {
         // Keep position updates inside the RAF interpolator to avoid per-GPS snaps.
@@ -584,6 +590,10 @@ export function LiveMap({
       if (followMode) {
         if (isFirstFollowFrame) {
           m.setView(pos, targetZoom, { animate: true, duration: 0.45 });
+        } else if (!smoothMotion) {
+          // Viewer mode: keep the marker fixed at actual latest GPS only
+          // (no between-point interpolation) and recenter immediately.
+          m.setView(pos, m.getZoom(), { animate: false });
         }
         hasAppliedInitialZoomRef.current = true;
       }
@@ -626,6 +636,7 @@ export function LiveMap({
   ]);
 
   useEffect(() => {
+    if (!smoothMotion) return;
     const m = mapRef.current;
     const dot = dotRef.current;
     if (!m || !dot || routePoints.length === 0) return;
@@ -680,7 +691,7 @@ export function LiveMap({
       if (motionRafRef.current != null) cancelAnimationFrame(motionRafRef.current);
       motionRafRef.current = null;
     };
-  }, [routePoints, followMode, rotateWithHeading]);
+  }, [routePoints, followMode, rotateWithHeading, smoothMotion]);
 
   return (
     <div className="relative h-full w-full" style={{ background: "rgba(10,10,20,0.4)" }}>
