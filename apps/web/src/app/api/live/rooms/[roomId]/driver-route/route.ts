@@ -39,8 +39,9 @@ export const dynamic = "force-dynamic";
  *      *not* just because it dropped under the 200 m floor.
  *   5. Whenever a pin is dropped (passed), top up the queue from the far
  *      end so the driver always has three decision points lined up.
- *   6. The blue line is the last 50 m of road approaching pin #1 only —
- *      we don't render the long route anymore.
+ *   6. The blue line is shown only under 50 m to the next pin and the
+ *      segment itself spans ~50 m before the pin plus ~20 m after it
+ *      (when that continuation exists on the route polyline).
  *
  * The endpoint is intentionally stateless-looking from the client: each
  * poll returns the current queue. Persistence lives in `ROOM_STATE`
@@ -60,7 +61,7 @@ type Pin = {
 type Instruction = {
   decisionId: string;
   pins: Pin[];
-  /** Last 50 m of the OSRM polyline ending at pins[0]. */
+  /** Guidance segment around pins[0]: ~50 m before + ~20 m after. */
   approachLine: LatLng[];
   confidence: "high" | "low";
 };
@@ -75,7 +76,8 @@ const ROOM_STATE = new Map<string, RoomState>();
 const ROOM_STATE_TTL_MS = 5 * 60_000;
 
 const TARGET_PIN_COUNT = 3;
-const APPROACH_LINE_M = 50;
+const APPROACH_LINE_BEFORE_M = 50;
+const APPROACH_LINE_AFTER_M = 20;
 /** Pin is treated as "passed" once its road distance from vehicle is below this. */
 const PASSED_THRESHOLD_M = 5;
 /** Max perpendicular distance from polyline to consider a crossroad "on the road". */
@@ -281,8 +283,9 @@ export async function GET(
   let approachLine: LatLng[] = [];
   if (pins.length > 0) {
     const firstM = pins[0]!.distanceMeters;
-    const startM = Math.max(0, firstM - APPROACH_LINE_M);
-    approachLine = slicePolylineByDistance(polyline, startM, firstM);
+    const startM = Math.max(0, firstM - APPROACH_LINE_BEFORE_M);
+    const endM = Math.max(startM, firstM + APPROACH_LINE_AFTER_M);
+    approachLine = slicePolylineByDistance(polyline, startM, endM);
   }
 
   const instruction: Instruction = {

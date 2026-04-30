@@ -500,8 +500,8 @@ export function LiveMap({
         }).addTo(group);
       }
 
-      // Approach line: backend hands us the exact 50 m road segment that
-      // ends at the first pin. We draw it directly (no client-side trim)
+      // Approach line: backend hands us a turn guidance segment
+      // (~50 m before + up to ~20 m after the first pin). We draw it directly
       // so it always matches the road and disappears the moment the
       // vehicle moves past the pin.
       if (!showDriverLine || !approachLine || approachLine.length < 2) return;
