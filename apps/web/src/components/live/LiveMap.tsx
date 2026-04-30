@@ -189,8 +189,8 @@ export function LiveMap({
     onUserInteractRef.current = onUserInteract;
   }, [onUserInteract]);
   const streamer = audienceRole === "streamer";
-  const showHistoryPath = audienceRole === "streamer";
-  const smoothMotion = audienceRole === "streamer";
+  const showHistoryPath = true;
+  const smoothMotion = true;
   const col = streamer ? C.streamer : C.viewer;
   const profile = mapProfile(transportMode, streamer ? "streamer" : "viewer");
 
@@ -590,10 +590,6 @@ export function LiveMap({
       if (followMode) {
         if (isFirstFollowFrame) {
           m.setView(pos, targetZoom, { animate: true, duration: 0.45 });
-        } else if (!smoothMotion) {
-          // Viewer mode: keep the marker fixed at actual latest GPS only
-          // (no between-point interpolation) and recenter immediately.
-          m.setView(pos, m.getZoom(), { animate: false });
         }
         hasAppliedInitialZoomRef.current = true;
       }
@@ -636,7 +632,6 @@ export function LiveMap({
   ]);
 
   useEffect(() => {
-    if (!smoothMotion) return;
     const m = mapRef.current;
     const dot = dotRef.current;
     if (!m || !dot || routePoints.length === 0) return;

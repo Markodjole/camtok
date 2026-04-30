@@ -67,7 +67,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [selectedZoneId, setSelectedZoneId] = useState<string | null>(null);
   const [selectedCheckpointId, setSelectedCheckpointId] = useState<string | null>(null);
   const [selectedMapOptionId, setSelectedMapOptionId] = useState<string | null>(null);
-  const [showZones, setShowZones] = useState(true);
+  const [showZones, setShowZones] = useState(false);
   const [showCheckpoints, setShowCheckpoints] = useState(true);
   const [mapFollow, setMapFollow] = useState(true);
   const [osmCheckpoints, setOsmCheckpoints] = useState<MapCheckpoint[]>([]);
