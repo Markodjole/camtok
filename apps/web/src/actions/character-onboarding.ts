@@ -63,7 +63,7 @@ export type CharacterOnboardingDraft = {
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-export function buildDrivingRouteStyleFromDraft(
+function buildDrivingRouteStyleFromDraft(
   draft: CharacterOnboardingDraft,
 ): DrivingRouteStyle {
   let comfortVsSpeed: ComfortVsSpeed = draft.routeComfortVsSpeed ?? "balanced";

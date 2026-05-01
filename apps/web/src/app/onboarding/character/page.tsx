@@ -9,13 +9,11 @@ import { ArrowLeft, ArrowRight, Loader2, Sparkles, Upload } from "lucide-react";
 import { AppShell } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/components/ui/toast";
 import { createBrowserClient, getUserQueued } from "@/lib/supabase/client";
 import {
   type CharacterOnboardingDraft,
-  type OnboardingMiniGameKey,
   type SpeedTendency,
   type OvertakingStyle,
   type PatienceLevel,
@@ -34,51 +32,7 @@ import {
 import { cn } from "@/lib/utils";
 import type { ComfortVsSpeed, PathStyle } from "@/lib/live/routing/drivingRouteStyle";
 
-const STEPS = ["Driver", "Vehicle", "Style", "Decisions", "Review"] as const;
-
-const MINI_GAME: Array<{
-  key: OnboardingMiniGameKey;
-  title: string;
-  a: string;
-  b: string;
-}> = [
-  {
-    key: "yellow_light",
-    title: "Yellow light 50m ahead",
-    a: "Ease off — safety first",
-    b: "Gun it, you'll make it",
-  },
-  {
-    key: "cut_off",
-    title: "Driver cuts you off without signaling",
-    a: "Shrug it off, move on",
-    b: "Honk and follow — make your point",
-  },
-  {
-    key: "gps_vs_shortcut",
-    title: "GPS says right, your gut says left (shortcut)",
-    a: "Trust the GPS",
-    b: "Take the shortcut, you know this city",
-  },
-  {
-    key: "traffic_jam",
-    title: "GPS adds 15 extra minutes — traffic jam",
-    a: "Wait it out in queue",
-    b: "Find alternative route immediately",
-  },
-  {
-    key: "missed_turn_react",
-    title: "You miss your turn",
-    a: "Stay calm, let it reroute",
-    b: "Stress, try to U-turn right away",
-  },
-  {
-    key: "speed_camera",
-    title: "There is a speed camera on your usual route",
-    a: "Always slow down for it",
-    b: "Depends on my mood and speed already",
-  },
-];
+const STEPS = ["Vehicle", "Driving", "Review"] as const;
 
 type Chip<T extends string> = { value: T; label: string };
 
@@ -265,11 +219,6 @@ function InnerOnboarding() {
     }
   }
 
-  function setMini(key: OnboardingMiniGameKey, value: "a" | "b") {
-    const next = { ...draft, miniGame: { ...draft.miniGame, [key]: value } };
-    void persistDraft(next);
-  }
-
   function chip<T extends string>(
     field: keyof CharacterOnboardingDraft,
     value: T,
@@ -333,9 +282,9 @@ function InnerOnboarding() {
         <div className="space-y-4 p-4 pb-32">
           <div>
             <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Driver profile builder</p>
-            <h1 className="text-2xl font-bold tracking-tight">Build your driver character</h1>
+            <h1 className="text-2xl font-bold tracking-tight">Quick driver setup</h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              Tell viewers who they are watching. Your driving style, vehicle, and behavior shape the live markets.
+              Short setup with only key choices. No extra questions.
             </p>
           </div>
 
@@ -347,78 +296,12 @@ function InnerOnboarding() {
             <Progress value={progress} className="h-2" />
           </div>
 
-          {/* ── Step 0: Driver identity ── */}
+          {/* ── Step 0: Vehicle ── */}
           {step === 0 && (
             <Card>
               <CardHeader>
-                <CardTitle>Who is your driver?</CardTitle>
-                <CardDescription>Name, vibe, and a bit of backstory about you behind the wheel.</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <div className="space-y-1.5">
-                  <label className="text-sm font-medium" htmlFor="cname">Driver name / alias</label>
-                  <Input
-                    id="cname"
-                    value={draft.characterName ?? ""}
-                    onChange={(e) => setDraft({ ...draft, characterName: e.target.value })}
-                    onBlur={() => persistDraft(draft)}
-                    placeholder="e.g. Viktor, Night Runner, The Serbian"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-sm font-medium" htmlFor="tag">Tagline</label>
-                  <Input
-                    id="tag"
-                    value={draft.tagline ?? ""}
-                    onChange={(e) => setDraft({ ...draft, tagline: e.target.value })}
-                    onBlur={() => persistDraft(draft)}
-                    placeholder="e.g. Always 10 over, never late"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-sm font-medium" htmlFor="bio">About you as a driver</label>
-                  <textarea
-                    id="bio"
-                    className="border-input bg-background placeholder:text-muted-foreground focus-visible:ring-ring flex min-h-[90px] w-full rounded-md border px-3 py-2 text-sm focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none"
-                    value={draft.backstory ?? ""}
-                    onChange={(e) => setDraft({ ...draft, backstory: e.target.value })}
-                    onBlur={() => persistDraft(draft)}
-                    placeholder="I drive mostly at night, know every back street in the city, hate traffic jams…"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-sm font-medium" htmlFor="city">City / area you drive in</label>
-                  <Input
-                    id="city"
-                    value={draft.cityZone ?? ""}
-                    onChange={(e) => setDraft({ ...draft, cityZone: e.target.value })}
-                    onBlur={() => persistDraft(draft)}
-                    placeholder="e.g. Belgrade, Dorcol + Vracar"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-sm font-medium">Your photo</label>
-                  <Button type="button" variant="outline" className="gap-2" asChild>
-                    <label>
-                      <Upload className="h-4 w-4" />
-                      {draft.primaryImagePath ? "Change photo" : "Upload photo"}
-                      <input type="file" accept="image/*" className="hidden" onChange={onPickPrimaryImage} />
-                    </label>
-                  </Button>
-                  {draft.primaryImagePath && (
-                    <p className="text-xs text-emerald-500">Photo uploaded</p>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-          )}
-
-          {/* ── Step 1: Vehicle ── */}
-          {step === 1 && (
-            <Card>
-              <CardHeader>
-                <CardTitle>Your vehicle</CardTitle>
-                <CardDescription>What do you drive and how does it feel.</CardDescription>
+                <CardTitle>Vehicle</CardTitle>
+                <CardDescription>Select what you drive and upload one photo.</CardDescription>
               </CardHeader>
               <CardContent className="space-y-5">
                 <div className="space-y-2">
@@ -453,18 +336,29 @@ function InnerOnboarding() {
                     onChange={(v) => chip("typicalRoutes", v)}
                   />
                 </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">Driver photo</label>
+                  <Button type="button" variant="outline" className="gap-2" asChild>
+                    <label>
+                      <Upload className="h-4 w-4" />
+                      {draft.primaryImagePath ? "Change photo" : "Upload photo"}
+                      <input type="file" accept="image/*" className="hidden" onChange={onPickPrimaryImage} />
+                    </label>
+                  </Button>
+                  {draft.primaryImagePath && (
+                    <p className="text-xs text-emerald-500">Photo uploaded</p>
+                  )}
+                </div>
               </CardContent>
             </Card>
           )}
 
-          {/* ── Step 2: Driving style ── */}
-          {step === 2 && (
+          {/* ── Step 1: Driving style ── */}
+          {step === 1 && (
             <Card>
               <CardHeader>
                 <CardTitle>Driving style</CardTitle>
-                <CardDescription>
-                  These directly shape the betting markets — viewers bet on your behavior, so be honest.
-                </CardDescription>
+                <CardDescription>Pick concise behavior presets.</CardDescription>
               </CardHeader>
               <CardContent className="space-y-6">
                 <div className="space-y-2">
@@ -499,7 +393,6 @@ function InnerOnboarding() {
                     onChange={(v) => chip("riskLevel", v)}
                   />
                 </div>
-
                 <div className="rounded-lg border border-dashed border-border/80 bg-muted/20 p-4 space-y-4">
                   <p className="text-sm font-semibold text-foreground">
                     Navigation while live
@@ -547,54 +440,16 @@ function InnerOnboarding() {
             </Card>
           )}
 
-          {/* ── Step 3: Mini-game quick decisions ── */}
-          {step === 3 && (
-            <Card>
-              <CardHeader>
-                <CardTitle>Quick decisions</CardTitle>
-                <CardDescription>
-                  Real situations behind the wheel. Your answers tune the AI market predictions.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                {MINI_GAME.map((g) => (
-                  <div key={g.key} className="rounded-lg border border-border p-3">
-                    <p className="text-sm font-semibold">{g.title}</p>
-                    <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                      <Button
-                        type="button"
-                        variant={draft.miniGame?.[g.key] === "a" ? "default" : "outline"}
-                        className="h-auto whitespace-normal py-3 text-left"
-                        onClick={() => setMini(g.key, "a")}
-                      >
-                        {g.a}
-                      </Button>
-                      <Button
-                        type="button"
-                        variant={draft.miniGame?.[g.key] === "b" ? "default" : "outline"}
-                        className="h-auto whitespace-normal py-3 text-left"
-                        onClick={() => setMini(g.key, "b")}
-                      >
-                        {g.b}
-                      </Button>
-                    </div>
-                  </div>
-                ))}
-              </CardContent>
-            </Card>
-          )}
-
-          {/* ── Step 4: Review ── */}
-          {step === 4 && (
+          {/* ── Step 2: Review ── */}
+          {step === 2 && (
             <Card>
               <CardHeader>
                 <CardTitle>Review</CardTitle>
                 <CardDescription>
-                  We build your driver character from your answers. Viewers will bet on your turns, speed, and reactions.
+                  Final check before creating the profile.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-2 text-sm text-muted-foreground">
-                <p><span className="font-medium text-foreground">Name:</span> {draft.characterName || "—"}</p>
                 <p><span className="font-medium text-foreground">Photo:</span> {draft.primaryImagePath ? "set" : "missing — go back to Step 1"}</p>
                 <p><span className="font-medium text-foreground">Vehicle:</span> {draft.entityType ?? "not set"} · {draft.vehicleStyle ?? ""} · {draft.transmission ?? ""}</p>
                 <p><span className="font-medium text-foreground">Speed:</span> {draft.speedTendency?.replace("_", " ") ?? "not set"}</p>
@@ -607,19 +462,18 @@ function InnerOnboarding() {
                   {draft.routePathStyle ?? "auto"} ·{" "}
                   {draft.routeEcoConscious ? "eco on" : "eco off"}
                 </p>
-                <p><span className="font-medium text-foreground">Decisions answered:</span> {Object.keys(draft.miniGame ?? {}).length}/{MINI_GAME.length}</p>
                 <Button
                   type="button"
                   className="mt-4 w-full gap-2"
-                  disabled={submitting || !draft.primaryImagePath || !draft.characterName?.trim()}
+                  disabled={submitting || !draft.primaryImagePath}
                   onClick={handleFinish}
                 >
                   {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
                   {forceUpdate && primaryCharacterId ? "Update driver profile" : "Create driver profile"}
                 </Button>
-                {(!draft.primaryImagePath || !draft.characterName?.trim()) && (
+                {!draft.primaryImagePath && (
                   <p className="text-xs text-amber-500">
-                    {!draft.characterName?.trim() ? "Name required. " : ""}{!draft.primaryImagePath ? "Photo required." : ""}
+                    Photo required.
                   </p>
                 )}
               </CardContent>
