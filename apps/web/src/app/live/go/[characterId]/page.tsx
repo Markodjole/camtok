@@ -2,6 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import { createServerClient } from "@/lib/supabase/server";
 import { AppShell } from "@/components/layout/app-shell";
 import { OwnerLiveControlPanel } from "@/components/live/OwnerLiveControlPanel";
+import { normalizeDrivingRouteStyle } from "@/lib/live/routing/drivingRouteStyle";
 
 export const dynamic = "force-dynamic";
 
@@ -19,7 +20,7 @@ export default async function GoLivePage({
 
   const { data: character } = await supabase
     .from("characters")
-    .select("id, name, creator_user_id")
+    .select("id, name, creator_user_id, driving_route_style")
     .eq("id", characterId)
     .maybeSingle();
   if (!character) notFound();
@@ -29,10 +30,17 @@ export default async function GoLivePage({
     redirect("/characters");
   }
 
+  const routeStyle = normalizeDrivingRouteStyle(
+    (character as { driving_route_style?: unknown }).driving_route_style,
+  );
+
   return (
     <AppShell>
       <div className="flex h-full min-h-0 flex-col">
-        <OwnerLiveControlPanel characterId={characterId} />
+        <OwnerLiveControlPanel
+          characterId={characterId}
+          characterDrivingRouteStyle={routeStyle}
+        />
       </div>
     </AppShell>
   );

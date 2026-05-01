@@ -32,6 +32,7 @@ import {
   normalizeImageUploadContentType,
 } from "@/lib/storage/upload-content-type";
 import { cn } from "@/lib/utils";
+import type { ComfortVsSpeed, PathStyle } from "@/lib/live/routing/drivingRouteStyle";
 
 const STEPS = ["Driver", "Vehicle", "Style", "Decisions", "Review"] as const;
 
@@ -135,6 +136,21 @@ const RISK_LEVELS: Chip<RiskLevel>[] = [
   { value: "calculated", label: "Calculated" },
   { value: "risk_taker", label: "Risk taker" },
   { value: "full_send", label: "Full send" },
+];
+
+const ROUTE_COMFORT: Chip<ComfortVsSpeed>[] = [
+  { value: "comfort", label: "Comfort first — calmer ETA routing" },
+  { value: "balanced", label: "Balanced" },
+  { value: "speed", label: "Time matters — fastest sensible route" },
+];
+
+const ROUTE_PATH: Chip<PathStyle>[] = [
+  {
+    value: "smooth",
+    label: "Smoother roads — prefers avoiding highways when driving",
+  },
+  { value: "balanced", label: "Balanced road choice" },
+  { value: "direct", label: "Direct — shortcuts & major roads OK" },
 ];
 
 function ChipGroup<T extends string>({
@@ -483,6 +499,50 @@ function InnerOnboarding() {
                     onChange={(v) => chip("riskLevel", v)}
                   />
                 </div>
+
+                <div className="rounded-lg border border-dashed border-border/80 bg-muted/20 p-4 space-y-4">
+                  <p className="text-sm font-semibold text-foreground">
+                    Navigation while live
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    These tune Google routes and where blue decision pins appear. Viewers see short tags on the map (e.g. “Avoids highways”).
+                  </p>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Comfort vs speed</label>
+                    <ChipGroup
+                      chips={ROUTE_COMFORT}
+                      value={draft.routeComfortVsSpeed}
+                      onChange={(v) => chip("routeComfortVsSpeed", v)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Route shape</label>
+                    <ChipGroup
+                      chips={ROUTE_PATH}
+                      value={draft.routePathStyle}
+                      onChange={(v) => chip("routePathStyle", v)}
+                    />
+                  </div>
+                  <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-border bg-background/80 p-3 text-left">
+                    <input
+                      type="checkbox"
+                      className="mt-1"
+                      checked={!!draft.routeEcoConscious}
+                      onChange={(e) => {
+                        void persistDraft({
+                          ...draft,
+                          routeEcoConscious: e.target.checked,
+                        });
+                      }}
+                    />
+                    <span>
+                      <span className="text-sm font-medium">Eco & toll saver</span>
+                      <span className="mt-0.5 block text-xs text-muted-foreground">
+                        Prefer fewer tolls and a lighter routing footprint when supported.
+                      </span>
+                    </span>
+                  </label>
+                </div>
               </CardContent>
             </Card>
           )}
@@ -541,6 +601,12 @@ function InnerOnboarding() {
                 <p><span className="font-medium text-foreground">Overtaking:</span> {draft.overtakingStyle?.replace("_", " ") ?? "not set"}</p>
                 <p><span className="font-medium text-foreground">Patience:</span> {draft.patienceLevel?.replace("_", " ") ?? "not set"}</p>
                 <p><span className="font-medium text-foreground">Risk level:</span> {draft.riskLevel?.replace("_", " ") ?? "not set"}</p>
+                <p>
+                  <span className="font-medium text-foreground">Live routing:</span>{" "}
+                  {draft.routeComfortVsSpeed ?? "auto from answers"} ·{" "}
+                  {draft.routePathStyle ?? "auto"} ·{" "}
+                  {draft.routeEcoConscious ? "eco on" : "eco off"}
+                </p>
                 <p><span className="font-medium text-foreground">Decisions answered:</span> {Object.keys(draft.miniGame ?? {}).length}/{MINI_GAME.length}</p>
                 <Button
                   type="button"

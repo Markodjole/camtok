@@ -549,6 +549,7 @@ export async function createCustomCharacter(input: {
   camtok_entity_type?: "pedestrian" | "bike" | "car" | "other";
   camtok_active?: boolean;
   camtok_content?: Record<string, unknown>;
+  driving_route_style?: Record<string, unknown>;
   additionalImagePaths?: Array<{ path: string; angle?: string; isPrimary?: boolean }>;
 }): Promise<{ error?: string; character?: CharacterWithImages }> {
   const supabase = await createServerClient();
@@ -614,6 +615,13 @@ export async function createCustomCharacter(input: {
       camtok_entity_type: camtokEntityType,
       camtok_active: camtokActive,
       camtok_content: camtokContent,
+      driving_route_style:
+        input.driving_route_style ?? {
+          version: 1,
+          comfortVsSpeed: "balanced",
+          pathStyle: "balanced",
+          ecoConscious: false,
+        },
       trait_history: [],
       total_videos: 0,
       total_resolutions: 0,
@@ -693,6 +701,7 @@ export async function updateUserCharacter(
     camtok_entity_type?: "pedestrian" | "bike" | "car" | "other";
     camtok_active?: boolean;
     camtok_content?: Record<string, unknown>;
+    driving_route_style?: Record<string, unknown>;
   },
 ): Promise<{ error?: string; character?: CharacterWithImages }> {
   const supabase = await createServerClient();
@@ -725,6 +734,9 @@ export async function updateUserCharacter(
   if (input.camtok_entity_type !== undefined) patch.camtok_entity_type = input.camtok_entity_type;
   if (input.camtok_active !== undefined) patch.camtok_active = input.camtok_active;
   if (input.camtok_content !== undefined) patch.camtok_content = input.camtok_content;
+  if (input.driving_route_style !== undefined) {
+    patch.driving_route_style = input.driving_route_style;
+  }
 
   const { data: updated, error: updErr } = await serviceClient
     .from("characters")

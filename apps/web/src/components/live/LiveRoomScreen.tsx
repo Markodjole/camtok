@@ -7,6 +7,7 @@ import {
   enumerateGridCells,
   parseGridOptionId,
 } from "@/lib/live/grid/cityGrid500";
+import { drivingRouteStyleBadges } from "@/lib/live/routing/drivingRouteStyle";
 import dynamic from "next/dynamic";
 import type { LiveFeedRow, RoutePoint } from "@/actions/live-feed";
 import { metersBetween } from "@/lib/live/routing/geometry";
@@ -294,6 +295,16 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const selectedCheckpoint = checkpoints.find((c) => c.id === selectedCheckpointId) ?? null;
   const selectedTargetLabel = selectedZone?.name ?? selectedCheckpoint?.name ?? null;
 
+  const driverRouteBadges = useMemo(
+    () => drivingRouteStyleBadges(room.drivingRouteStyle, room.transportMode),
+    [
+      room.transportMode,
+      room.drivingRouteStyle.comfortVsSpeed,
+      room.drivingRouteStyle.pathStyle,
+      room.drivingRouteStyle.ecoConscious,
+    ],
+  );
+
   useEffect(() => {
     if (currentMarket?.marketType === "city_grid") {
       setSelectedMapOptionId(selectedZoneId);
@@ -551,6 +562,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             destination={room.destination}
             destinationRoute={destinationRoute}
             destinationRouteLabel="Google suggested route"
+            driverRouteBadges={driverRouteBadges}
             onZoneSelect={(id) => {
               setSelectedZoneId(id);
               if (id) setSelectedCheckpointId(null);
@@ -725,6 +737,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               destination={room.destination}
               destinationRoute={destinationRoute}
               destinationRouteLabel="Google suggested route"
+              driverRouteBadges={driverRouteBadges}
             />
             {routePoints.length === 0 && (
               <div className="absolute inset-0 flex items-center justify-center bg-black/30 text-[9px] text-white/70">

@@ -3,6 +3,8 @@
 import { unstable_noStore } from "next/cache";
 import { createServiceClient } from "@/lib/supabase/server";
 import type { CityGridSpecCompact } from "@/lib/live/grid/cityGrid500";
+import type { DrivingRouteStyle } from "@/lib/live/routing/drivingRouteStyle";
+import { normalizeDrivingRouteStyle } from "@/lib/live/routing/drivingRouteStyle";
 
 export type RoutePoint = {
   lat: number;
@@ -52,18 +54,13 @@ export type LiveFeedRow = {
     label: string;
     placeId: string | null;
   } | null;
+  /** Character routing persona — badges + Google/OSRM tuning. */
+  drivingRouteStyle: DrivingRouteStyle;
 };
 
-export async function getLiveFeed(): Promise<{ items: LiveFeedRow[] }> {
-  unstable_noStore();
-  const service = await createServiceClient();
-
-  const { data } = await service
-    .from("active_live_rooms")
-    .select("*")
-    .limit(50);
-
-  const items: LiveFeedRow[] = (data ?? []).map((r) => ({
+/** Map one `active_live_rooms` row — shared by feed list and single-room detail. */
+function liveFeedRowFromActiveRoomRow(r: Record<string, unknown>): LiveFeedRow {
+  return {
     roomId: r.room_id as string,
     liveSessionId: r.live_session_id as string,
     characterId: r.character_id as string,
@@ -116,7 +113,22 @@ export async function getLiveFeed(): Promise<{ items: LiveFeedRow[] }> {
             placeId: (r.destination_place_id as string | null) ?? null,
           }
         : null,
-  }));
+    drivingRouteStyle: normalizeDrivingRouteStyle(r.character_driving_route_style),
+  };
+}
+
+export async function getLiveFeed(): Promise<{ items: LiveFeedRow[] }> {
+  unstable_noStore();
+  const service = await createServiceClient();
+
+  const { data } = await service
+    .from("active_live_rooms")
+    .select("*")
+    .limit(50);
+
+  const items: LiveFeedRow[] = (data ?? []).map((r) =>
+    liveFeedRowFromActiveRoomRow(r as Record<string, unknown>),
+  );
 
   return { items };
 }
@@ -135,9 +147,7 @@ export async function getLiveRoomDetail(roomId: string): Promise<{
 
   if (!data) return { room: null };
 
-  const items = await getLiveFeed();
-  const match = items.items.find((r) => r.roomId === roomId);
-  if (!match) return { room: null };
+  const base = liveFeedRowFromActiveRoomRow(data as Record<string, unknown>);
 
   // Fetch the last 100 GPS points for the map.
   const sessionId = data.live_session_id as string;
@@ -168,5 +178,5 @@ export async function getLiveRoomDetail(roomId: string): Promise<{
     }))
     .reverse(); // oldest→newest for path drawing
 
-  return { room: { ...match, routePoints } };
+  return { room: { ...base, routePoints } };
 }

@@ -120,6 +120,8 @@ export interface Character {
   camtok_active?: boolean;
   camtok_entity_type?: CamtokEntityType;
   camtok_content?: CamtokContentLayer;
+  /** Routing persona JSON — see `drivingRouteStyle.ts`. */
+  driving_route_style?: Record<string, unknown>;
   sort_order: number;
   created_at: string;
 }

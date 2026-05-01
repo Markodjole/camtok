@@ -1,4 +1,6 @@
 import type { LatLng } from "./geometry";
+import type { DrivingRouteStyle } from "./drivingRouteStyle";
+import { googleRouteTuningFromDrivingStyle } from "./drivingRouteStyle";
 
 /**
  * Decode a Google encoded polyline (precision 5) to a list of lat/lng.
@@ -66,6 +68,8 @@ export async function fetchGoogleDirectionsRoute(
   opts: {
     transportMode?: string;
     signal?: AbortSignal;
+    /** When set, adjusts routingPreference + routeModifiers (highways/tolls/ferries). */
+    drivingRouteStyle?: DrivingRouteStyle | null;
   } = {},
 ): Promise<{
   polyline: LatLng[];
@@ -84,6 +88,24 @@ export async function fetchGoogleDirectionsRoute(
   const modeKey = (opts.transportMode ?? "drive").toLowerCase();
   const travelMode = ROUTES_TRAVEL_MODE[modeKey] ?? "DRIVE";
 
+  const tuning = opts.drivingRouteStyle
+    ? googleRouteTuningFromDrivingStyle(opts.drivingRouteStyle, opts.transportMode)
+    : null;
+
+  const motorRouting =
+    travelMode === "DRIVE" || travelMode === "TWO_WHEELER";
+
+  const routingPreference = motorRouting
+    ? tuning?.routingPreference ?? "TRAFFIC_AWARE"
+    : undefined;
+
+  const routeModifiers =
+    motorRouting &&
+    tuning?.routeModifiers &&
+    Object.keys(tuning.routeModifiers).length > 0
+      ? tuning.routeModifiers
+      : undefined;
+
   const body = {
     origin: {
       location: { latLng: { latitude: from.lat, longitude: from.lng } },
@@ -94,7 +116,8 @@ export async function fetchGoogleDirectionsRoute(
     travelMode,
     polylineQuality: "OVERVIEW",
     polylineEncoding: "ENCODED_POLYLINE",
-    routingPreference: travelMode === "DRIVE" ? "TRAFFIC_AWARE" : undefined,
+    ...(routingPreference ? { routingPreference } : {}),
+    ...(routeModifiers ? { routeModifiers } : {}),
   };
 
   try {

@@ -104,6 +104,7 @@ export async function GET(
   if (needsRefetch) {
     const fresh = await fetchGoogleDirectionsRoute(driver, dest, {
       transportMode: room.transportMode,
+      drivingRouteStyle: room.drivingRouteStyle,
     });
     if (fresh) {
       ROUTE_CACHE.set(roomId, {

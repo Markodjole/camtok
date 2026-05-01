@@ -95,6 +95,8 @@ export interface LiveMapProps {
   destinationRoute?: Array<{ lat: number; lng: number }> | null;
   /** UI label for destination route badge. */
   destinationRouteLabel?: string | null;
+  /** Short labels derived from `driving_route_style` (shown to viewers & streamer). */
+  driverRouteBadges?: string[] | null;
 }
 
 const C = {
@@ -190,6 +192,7 @@ export function LiveMap({
   destination = null,
   destinationRoute = null,
   destinationRouteLabel = "Google suggested route",
+  driverRouteBadges = null,
 }: LiveMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<import("leaflet").Map | null>(null);
@@ -950,13 +953,25 @@ export function LiveMap({
           </p>
         </div>
       )}
-      {destinationRoute && destinationRoute.length > 1 ? (
-        <div className="pointer-events-none absolute left-2 top-2 z-[2000]">
-          <span className="rounded-full border border-red-300/60 bg-red-500/80 px-2 py-1 text-[10px] font-semibold tracking-wide text-white shadow-md">
-            {destinationRouteLabel ?? "Google suggested route"}
-          </span>
+      <div className="pointer-events-none absolute left-2 right-2 top-2 z-[2000] flex flex-wrap items-start justify-between gap-2">
+        <div className="flex flex-wrap gap-1">
+          {destinationRoute && destinationRoute.length > 1 ? (
+            <span className="rounded-full border border-red-300/60 bg-red-500/80 px-2 py-1 text-[10px] font-semibold tracking-wide text-white shadow-md">
+              {destinationRouteLabel ?? "Google suggested route"}
+            </span>
+          ) : null}
         </div>
-      ) : null}
+        <div className="flex max-w-[min(92%,280px)] flex-wrap justify-end gap-1">
+          {(driverRouteBadges ?? []).map((label) => (
+            <span
+              key={label}
+              className="rounded-full border border-sky-300/55 bg-sky-950/88 px-2 py-0.5 text-[9px] font-semibold leading-tight text-sky-50 shadow-md backdrop-blur-sm"
+            >
+              {label}
+            </span>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

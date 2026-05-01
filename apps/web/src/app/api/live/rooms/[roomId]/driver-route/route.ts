@@ -13,6 +13,10 @@ import {
   type NormalizedRoadClass,
 } from "@/lib/live/routing/roadClassNormalizer";
 import {
+  minBranchComfortForDrivingStyle,
+  type DrivingRouteStyle,
+} from "@/lib/live/routing/drivingRouteStyle";
+import {
   bearingDegrees,
   cumulativeMetersAt,
   metersBetween,
@@ -207,7 +211,7 @@ type RoutePinCandidate = {
 function projectCrossroadsOntoRoute(
   polyline: LatLng[],
   crossroads: DetailedCrossroad[],
-  opts: { onPlannedRoute: boolean },
+  opts: { onPlannedRoute: boolean; minBranchComfort: number },
 ): RoutePinCandidate[] {
   const out: RoutePinCandidate[] = [];
   for (const c of crossroads) {
@@ -226,7 +230,7 @@ function projectCrossroadsOntoRoute(
     for (const w of usableWays) {
       const cf = scoreRoadComfort(w.roadClass, w.tags.surface, w.tags.access);
       if (cf > bestComfort) bestComfort = cf;
-      if (cf >= MIN_BRANCH_COMFORT_SCORE) meaningful += 1;
+      if (cf >= opts.minBranchComfort) meaningful += 1;
     }
 
     // Need at least two non-hard-rejected branches for a real intersection;
@@ -419,8 +423,10 @@ async function resolvePlanningPolyline(params: {
   heading: number;
   destination: { lat: number; lng: number } | null;
   transportMode?: string;
+  drivingRouteStyle: DrivingRouteStyle;
 }): Promise<PlanningRoute | null> {
-  const { roomId, driver, heading, destination, transportMode } = params;
+  const { roomId, driver, heading, destination, transportMode, drivingRouteStyle } =
+    params;
 
   if (destination) {
     const cached = PLANNING_ROUTE_CACHE.get(roomId);
@@ -436,6 +442,7 @@ async function resolvePlanningPolyline(params: {
     if (!polyline) {
       const google = await fetchGoogleDirectionsRoute(driver, destination, {
         transportMode,
+        drivingRouteStyle,
       });
       if (google && google.polyline.length >= 2) {
         polyline = google.polyline;
@@ -495,6 +502,10 @@ export async function GET(
     ? { lat: room.destination.lat, lng: room.destination.lng }
     : null;
 
+  const drivingRouteStyle = room.drivingRouteStyle;
+  const minBranchComfort =
+    minBranchComfortForDrivingStyle(drivingRouteStyle);
+
   const [planning, crossroads] = await Promise.all([
     resolvePlanningPolyline({
       roomId,
@@ -502,6 +513,7 @@ export async function GET(
       heading,
       destination,
       transportMode: room.transportMode,
+      drivingRouteStyle,
     }),
     fetchNearbyCrossroadsDetailed(
       position.lat,
@@ -517,6 +529,7 @@ export async function GET(
   const polyline = planning.polyline;
   const candidates = projectCrossroadsOntoRoute(polyline, crossroads, {
     onPlannedRoute: planning.source === "google",
+    minBranchComfort,
   });
 
   const nowMs = Date.now();

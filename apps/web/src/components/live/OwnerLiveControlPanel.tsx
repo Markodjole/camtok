@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 import { startLiveSession, endLiveSession } from "@/actions/live-sessions";
@@ -14,6 +14,11 @@ import { TurnBlinkOverlay, type TurnDirection } from "./TurnBlinkOverlay";
 import { LiveDecisionStatusRibbon } from "./LiveDecisionStatusRibbon";
 import { computeStreamGuidance } from "@/lib/live/streamGuidance";
 import { DestinationPicker, type PickedDestination } from "./DestinationPicker";
+import {
+  DEFAULT_DRIVING_ROUTE_STYLE,
+  drivingRouteStyleBadges,
+  type DrivingRouteStyle,
+} from "@/lib/live/routing/drivingRouteStyle";
 
 const LiveMap = dynamic(() => import("./LiveMap").then((m) => m.LiveMap), { ssr: false });
 type MapZone = {
@@ -69,7 +74,13 @@ async function openLiveCameraStream(): Promise<MediaStream> {
   }
 }
 
-export function OwnerLiveControlPanel({ characterId }: { characterId: string }) {
+export function OwnerLiveControlPanel({
+  characterId,
+  characterDrivingRouteStyle,
+}: {
+  characterId: string;
+  characterDrivingRouteStyle?: DrivingRouteStyle;
+}) {
   const [transportMode, setTransportMode] = useState<TransportMode>("walking");
   const [statusText, setStatusText] = useState("");
   const [intentLabel, setIntentLabel] = useState("");
@@ -99,6 +110,15 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
   const [osmCheckpoints, setOsmCheckpoints] = useState<MapCheckpoint[]>([]);
   const [pipPos, setPipPos] = useState({ top: 48, left: 12 });
   const [pipDragReady, setPipDragReady] = useState(false);
+
+  const driverRouteBadges = useMemo(
+    () =>
+      drivingRouteStyleBadges(
+        characterDrivingRouteStyle ?? DEFAULT_DRIVING_ROUTE_STYLE,
+        transportMode,
+      ),
+    [characterDrivingRouteStyle, transportMode],
+  );
 
   const watchIdRef = useRef<number | null>(null);
   const heartbeatRef = useRef<NodeJS.Timeout | null>(null);
@@ -588,6 +608,7 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
               railPhase={railPhase}
               destination={destination}
               destinationRoute={null}
+              driverRouteBadges={driverRouteBadges}
             />
           ) : (
             <LiveVideoPlayer localStream={stream} className="h-full w-full" />
@@ -683,6 +704,7 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
                 railPhase={railPhase}
                 destination={destination}
                 destinationRoute={null}
+                driverRouteBadges={driverRouteBadges}
               />
               {routePoints.length === 0 && (
                 <div className="absolute inset-0 flex items-center justify-center bg-black/60 text-[9px] text-white/40">

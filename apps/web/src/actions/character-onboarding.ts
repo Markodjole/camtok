@@ -8,6 +8,12 @@ import {
   updateUserCharacter,
 } from "@/actions/characters";
 import type { BettingSignals } from "@/lib/characters/types";
+import type {
+  ComfortVsSpeed,
+  DrivingRouteStyle,
+  PathStyle,
+} from "@/lib/live/routing/drivingRouteStyle";
+import { normalizeDrivingRouteStyle } from "@/lib/live/routing/drivingRouteStyle";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -39,11 +45,15 @@ export type CharacterOnboardingDraft = {
   vehicleStyle?: VehicleStyle;
   transmission?: Transmission;
   typicalRoutes?: RouteType;
-  // Step 2 – Driving style
+  // Step 2 – Driving style (betting + routing persona)
   speedTendency?: SpeedTendency;
   overtakingStyle?: OvertakingStyle;
   patienceLevel?: PatienceLevel;
   riskLevel?: RiskLevel;
+  /** Maps to Google Routes + blue-pin thresholds — shown on viewer maps while live. */
+  routeComfortVsSpeed?: ComfortVsSpeed;
+  routePathStyle?: PathStyle;
+  routeEcoConscious?: boolean;
   // Step 3 – Quick decisions mini-game
   miniGame?: Partial<Record<OnboardingMiniGameKey, "a" | "b">>;
   // Photo
@@ -52,6 +62,40 @@ export type CharacterOnboardingDraft = {
 };
 
 // ─── Constants ───────────────────────────────────────────────────────────────
+
+export function buildDrivingRouteStyleFromDraft(
+  draft: CharacterOnboardingDraft,
+): DrivingRouteStyle {
+  let comfortVsSpeed: ComfortVsSpeed = draft.routeComfortVsSpeed ?? "balanced";
+  if (!draft.routeComfortVsSpeed) {
+    const st = draft.speedTendency ?? "slightly_above";
+    if (st === "always_legal") comfortVsSpeed = "comfort";
+    else if (st === "whatever" || st === "significantly_above") comfortVsSpeed = "speed";
+    else comfortVsSpeed = "balanced";
+  }
+
+  let pathStyle: PathStyle = draft.routePathStyle ?? "balanced";
+  if (!draft.routePathStyle) {
+    const rt = draft.typicalRoutes ?? "mixed";
+    if (rt === "highway") pathStyle = "direct";
+    else if (rt === "suburbs" || rt === "city_center") pathStyle = "smooth";
+    else pathStyle = "balanced";
+  }
+
+  let eco = draft.routeEcoConscious;
+  if (eco === undefined) {
+    eco =
+      draft.speedTendency === "always_legal" &&
+      draft.riskLevel === "ultra_careful";
+  }
+
+  return normalizeDrivingRouteStyle({
+    version: 1,
+    comfortVsSpeed,
+    pathStyle,
+    ecoConscious: !!eco,
+  });
+}
 
 const EMPTY_SIGNALS: BettingSignals = {
   quick_read: [],
@@ -349,12 +393,20 @@ export async function finalizeCharacterOnboarding(input: {
     road_rage: "road rage",
   };
 
+  const routePersona = buildDrivingRouteStyleFromDraft(draft);
+
   const camtokContent = {
     bio: draft.backstory?.trim() || undefined,
     vibe_tags: [
       speedLabel[draft.speedTendency ?? "slightly_above"] ?? draft.speedTendency,
       overtakeLabel[draft.overtakingStyle ?? "when_safe"] ?? draft.overtakingStyle,
       patienceLabel[draft.patienceLevel ?? "normal"] ?? draft.patienceLevel,
+      routePersona.pathStyle === "smooth"
+        ? "prefers smoother roads"
+        : routePersona.pathStyle === "direct"
+          ? "likes direct routes"
+          : null,
+      routePersona.ecoConscious ? "eco-conscious routing" : null,
     ].filter(Boolean),
     city_zone: draft.cityZone?.trim() || undefined,
     visual_style: draft.vehicleStyle ?? undefined,
@@ -406,6 +458,7 @@ export async function finalizeCharacterOnboarding(input: {
       camtok_entity_type: entityType,
       camtok_active: true,
       camtok_content: camtokContent,
+      driving_route_style: routePersona,
     });
     if (upd.error || !upd.character) return { error: upd.error ?? "Update failed" };
     await replaceReferenceImages(serviceClient, primaryId, draft.primaryImagePath.trim(), extras);
@@ -430,6 +483,7 @@ export async function finalizeCharacterOnboarding(input: {
       camtok_entity_type: entityType,
       camtok_active: true,
       camtok_content: camtokContent,
+      driving_route_style: routePersona,
       additionalImagePaths: extras.map((path) => ({ path })),
     });
     if (created.error || !created.character) return { error: created.error ?? "Create failed" };
