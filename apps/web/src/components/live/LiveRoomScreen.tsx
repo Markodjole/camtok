@@ -825,8 +825,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         />
       ) : null}
 
-      {/* ── Joystick — pinned bottom-right ── */}
-      <div className="pointer-events-none fixed inset-x-0 bottom-0 z-[60] flex flex-col items-end px-4 pb-[calc(1rem+env(safe-area-inset-bottom,0px))]">
+      {/* ── Joystick — pinned above nav/sheets ── */}
+      <div className="pointer-events-none fixed inset-x-0 z-[80] flex flex-col items-end px-4 pb-[calc(5.4rem+env(safe-area-inset-bottom,0px))]">
         <div className="pointer-events-auto flex flex-col items-center">
           {currentMarket && currentMarket.marketType !== "city_grid" ? (
             <DirectionalBetPad

@@ -945,6 +945,16 @@ export function LiveMap({
         }
       }
 
+      // Keep prediction smooth but bounded: never drift too far from
+      // the latest road-snapped server point for long periods.
+      const maxDriftM = viewerPreciseTurnWindow ? 7 : 11;
+      const driftM = metersBetween({ lat: nLat, lng: nLng }, target);
+      if (driftM > maxDriftM) {
+        const ratio = maxDriftM / Math.max(driftM, 1e-6);
+        nLat = target.lat + (nLat - target.lat) * ratio;
+        nLng = target.lng + (nLng - target.lng) * ratio;
+      }
+
       viewerPoseSmoothedRef.current = { lat: nLat, lng: nLng };
       viewerPoseVelRef.current = { vLat: nextVLat, vLng: nextVLng };
 
