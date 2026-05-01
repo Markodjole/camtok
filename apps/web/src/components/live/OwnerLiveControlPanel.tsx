@@ -147,6 +147,11 @@ export function OwnerLiveControlPanel({
       accuracyMeters?: number;
     }>
   >([]);
+  const lastTelemetryPointRef = useRef<{
+    lat: number;
+    lng: number;
+    atMs: number;
+  } | null>(null);
   const router = useRouter();
   const p2pCleanupRef = useRef<(() => void) | undefined>(undefined);
 
@@ -194,18 +199,39 @@ export function OwnerLiveControlPanel({
     if ("geolocation" in navigator) {
       watchIdRef.current = navigator.geolocation.watchPosition(
         (pos) => {
+          const lat = pos.coords.latitude;
+          const lng = pos.coords.longitude;
+          const atMs = pos.timestamp || Date.now();
+          const rawSpeed =
+            pos.coords.speed != null && !Number.isNaN(pos.coords.speed)
+              ? pos.coords.speed
+              : null;
+          let resolvedSpeedMps: number | undefined =
+            rawSpeed != null ? rawSpeed : undefined;
+          const prev = lastTelemetryPointRef.current;
+          if ((resolvedSpeedMps == null || resolvedSpeedMps < 0) && prev) {
+            const dtSec = Math.max(0.08, Math.min(3, (atMs - prev.atMs) / 1000));
+            const latAvg = (lat + prev.lat) / 2;
+            const dy = (lat - prev.lat) * 111_320;
+            const dx =
+              (lng - prev.lng) *
+              111_320 *
+              Math.cos((latAvg * Math.PI) / 180);
+            resolvedSpeedMps = Math.hypot(dx, dy) / dtSec;
+          }
+          lastTelemetryPointRef.current = { lat, lng, atMs };
           const point: RoutePoint = {
-            lat: pos.coords.latitude,
-            lng: pos.coords.longitude,
+            lat,
+            lng,
             heading: pos.coords.heading != null && !Number.isNaN(pos.coords.heading) ? pos.coords.heading : undefined,
-            speedMps: pos.coords.speed != null && !Number.isNaN(pos.coords.speed) ? pos.coords.speed : undefined,
+            speedMps: resolvedSpeedMps,
           };
           setRoutePoints((prev) => [...prev.slice(-199), point]);
           pendingLocationsRef.current.push({
-            recordedAt: new Date(pos.timestamp).toISOString(),
-            lat: pos.coords.latitude,
-            lng: pos.coords.longitude,
-            speedMps: pos.coords.speed ?? undefined,
+            recordedAt: new Date(atMs).toISOString(),
+            lat,
+            lng,
+            speedMps: resolvedSpeedMps,
             headingDeg: pos.coords.heading ?? undefined,
             accuracyMeters: pos.coords.accuracy ?? undefined,
           });

@@ -705,8 +705,9 @@ export function LiveMap({
       const mPerDegLng = Math.max(4500, 111_320 * Math.cos(latRad));
       const vn = (last.speedMps * Math.cos(h)) / mPerDegLat;
       const ve = (last.speedMps * Math.sin(h)) / mPerDegLng;
-      measVLat = measVLat * 0.55 + vn * 0.45;
-      measVLng = measVLng * 0.55 + ve * 0.45;
+      // Prefer driver-reported speed/heading for viewer motion pacing.
+      measVLat = measVLat * 0.2 + vn * 0.8;
+      measVLng = measVLng * 0.2 + ve * 0.8;
     }
 
     const blend = 0.28;
