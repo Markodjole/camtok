@@ -580,9 +580,6 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         )}
       </div>
 
-      {/* ── Top gradient scrim ───────────────────────────── */}
-      <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-36 bg-gradient-to-b from-black/75 to-transparent" />
-
       {room.destination ? (
         <div className="pointer-events-none absolute inset-x-0 top-[5.25rem] z-30 flex justify-center px-3">
           <div className="pointer-events-auto flex max-w-[92%] items-center gap-2 rounded-full border border-red-400/50 bg-red-500/25 px-3 py-1 text-[11px] text-red-50 shadow-lg backdrop-blur">

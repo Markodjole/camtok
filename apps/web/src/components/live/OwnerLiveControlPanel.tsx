@@ -259,7 +259,7 @@ export function OwnerLiveControlPanel({
         clearInterval(heartbeatRef.current);
         heartbeatRef.current = null;
       }
-    }, 2500);
+    }, 1300);
   }
 
   function startTick(rid: string) {
@@ -665,8 +665,6 @@ export function OwnerLiveControlPanel({
           }
           nowTick={nowTick}
         />
-
-        <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-28 bg-gradient-to-b from-black/75 to-transparent" />
 
         <div className="absolute right-4 top-20 z-40 flex flex-col items-center gap-6">
           <span
