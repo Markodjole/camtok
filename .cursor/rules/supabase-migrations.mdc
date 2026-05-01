@@ -1,0 +1,14 @@
+---
+description: After changing Supabase migration SQL, apply locally and push to linked remote—run CLI yourself.
+alwaysApply: true
+---
+
+# Supabase migrations
+
+When you **add or modify** anything under `supabase/migrations/` (same task or follow-up), from repo root:
+
+1. **Local:** `pnpm exec supabase migration up --local` — if Docker stack is stopped, run `pnpm exec supabase start` first.
+2. **Remote:** `pnpm exec supabase db push` (requires CLI linked project + auth).
+3. **Verify:** `pnpm exec supabase migration list` — latest row must match on Local **and** Remote.
+
+Execute these commands yourself; don’t hand off to the user unless the environment blocks CLI/network/auth. Report failures with the command output.
