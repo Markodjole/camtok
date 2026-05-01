@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { RoutePoint } from "@/actions/live-feed";
+import { metersBetween } from "@/lib/live/routing/geometry";
 
 export interface LiveMapProps {
   routePoints: RoutePoint[];
@@ -226,6 +227,7 @@ export function LiveMap({
   const routePointsLenRef = useRef(0);
   const followModeRef = useRef(followMode);
   const smoothHeadingRef = useRef<number>(0);
+  const viewerTurnPinRef = useRef<{ lat: number; lng: number } | null>(null);
   const [mapReady, setMapReady] = useState(0);
   const [rotationDeg, setRotationDeg] = useState(0);
   useEffect(() => {
@@ -837,6 +839,8 @@ export function LiveMap({
     }
 
     const VIEWER_SPRING = 2.15;
+    const TURN_PRECISE_PRE_M = 50;
+    const TURN_PRECISE_POST_M = 20;
 
     const loop = (now: number) => {
       const mm = mapRef.current;
@@ -865,6 +869,33 @@ export function LiveMap({
 
       const target = viewerPollTargetRef.current;
       const vel = viewerVelSmoothedRef.current;
+      const nextPin = driverPins?.[0] ?? null;
+      if (
+        nextPin &&
+        nextPin.distanceMeters != null &&
+        nextPin.distanceMeters <= TURN_PRECISE_PRE_M
+      ) {
+        viewerTurnPinRef.current = { lat: nextPin.lat, lng: nextPin.lng };
+      }
+
+      let viewerPreciseTurnWindow = false;
+      if (
+        nextPin &&
+        nextPin.distanceMeters != null &&
+        nextPin.distanceMeters <= TURN_PRECISE_PRE_M
+      ) {
+        viewerPreciseTurnWindow = true;
+      } else if (viewerTurnPinRef.current) {
+        const postTurnDist = metersBetween(
+          { lat: pose.lat, lng: pose.lng },
+          viewerTurnPinRef.current,
+        );
+        if (postTurnDist <= TURN_PRECISE_POST_M) {
+          viewerPreciseTurnWindow = true;
+        } else {
+          viewerTurnPinRef.current = null;
+        }
+      }
 
       let nLat = pose.lat + vel.vLat * dt;
       let nLng = pose.lng + vel.vLng * dt;
@@ -872,8 +903,9 @@ export function LiveMap({
       const dLat = target.lat - nLat;
       const dLng = target.lng - nLng;
 
-      let corrLat = VIEWER_SPRING * dLat * dt;
-      let corrLng = VIEWER_SPRING * dLng * dt;
+      const preciseSpring = viewerPreciseTurnWindow ? 4.6 : VIEWER_SPRING;
+      let corrLat = preciseSpring * dLat * dt;
+      let corrLng = preciseSpring * dLng * dt;
 
       const vmag = Math.hypot(vel.vLat, vel.vLng);
       const minVm = 8e-8;
@@ -903,7 +935,7 @@ export function LiveMap({
     viewerSmoothRafRef.current = requestAnimationFrame(loop);
 
     return cancelViewerLoop;
-  }, [followMode, streamer, routePoints.length]);
+  }, [followMode, streamer, routePoints.length, driverPins]);
 
   return (
     <div className="relative h-full w-full" style={{ background: "rgba(10,10,20,0.4)" }}>
