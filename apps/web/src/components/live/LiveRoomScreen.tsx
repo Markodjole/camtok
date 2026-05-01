@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import {
   type CityGridSpecCompact,
   cellLabel,
@@ -105,8 +106,13 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     baseLeft: 0,
   });
   const showLiveBets = true;
+  const [joyPortalReady, setJoyPortalReady] = useState(false);
   const skillFeedbackTimerRef = { current: null as ReturnType<typeof setTimeout> | null };
   const { betPill, flash } = useBetPill();
+
+  useEffect(() => {
+    setJoyPortalReady(true);
+  }, []);
 
   const handleSettlement = useCallback((data: SkillFeedbackData) => {
     setSkillFeedback(data);
@@ -483,6 +489,13 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     setPipPos({ top: nextTop, left: nextLeft });
   };
 
+  const showDirectionalJoystick = showLiveBets;
+  const joystickLocked =
+    isLocked ||
+    !currentMarket ||
+    currentMarket.marketType === "city_grid" ||
+    !!placingOptionId;
+
   const onPipPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     if (pipLongPressTimerRef.current) clearTimeout(pipLongPressTimerRef.current);
     try {
@@ -825,23 +838,34 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         />
       ) : null}
 
-      {/* ── Joystick — pinned above nav/sheets ── */}
-      <div className="pointer-events-none fixed inset-x-0 z-[80] flex flex-col items-end px-4 pb-[calc(5.4rem+env(safe-area-inset-bottom,0px))]">
-        <div className="pointer-events-auto flex flex-col items-center">
-          {currentMarket && currentMarket.marketType !== "city_grid" ? (
-            <DirectionalBetPad
-              options={currentMarket.options}
-              betAmount={betAmount}
-              onBet={async (optionId) => {
-                await placeBet(optionId);
+      {joyPortalReady && showDirectionalJoystick
+        ? createPortal(
+            <div
+              className="pointer-events-none fixed right-3 z-[380] flex max-w-[100vw] flex-col items-end"
+              style={{
+                bottom: "calc(5.25rem + env(safe-area-inset-bottom, 0px))",
               }}
-              locked={isLocked || !currentMarket || !!placingOptionId}
-              routePoints={routePoints}
-            />
-          ) : null}
-          {error && <div className="mt-1 text-[10px] text-red-400">{error}</div>}
-        </div>
-      </div>
+            >
+              <div className="pointer-events-auto flex flex-col items-center">
+                <DirectionalBetPad
+                  options={currentMarket?.options ?? []}
+                  betAmount={betAmount}
+                  onBet={async (optionId, _dir) => {
+                    await placeBet(optionId);
+                  }}
+                  locked={joystickLocked}
+                  routePoints={routePoints}
+                />
+                {error ? (
+                  <div className="mt-1 max-w-[10rem] text-right text-[10px] text-red-400">
+                    {error}
+                  </div>
+                ) : null}
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }
