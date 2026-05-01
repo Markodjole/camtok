@@ -148,6 +148,9 @@ function normalizeAngleDeg(deg: number): number {
   return v;
 }
 
+/** Viewer bearing blend toward GPS heading (~Google Maps navigation feel). */
+const VIEWER_MAP_ROTATION_TAU_SEC = 2;
+
 /** True Δt between snapshots (viewer DB trail); avoids bogus speed when poll cadence ≠ GPS cadence. */
 function motionSegmentDtSec(
   prev: RoutePoint | null,
@@ -232,6 +235,9 @@ export function LiveMap({
   const routePointsLenRef = useRef(0);
   const followModeRef = useRef(followMode);
   const smoothHeadingRef = useRef<number>(0);
+  /** CSS wrapper rotation target (degrees); `-vehicleHeading`. Viewer RAF eases toward this. */
+  const viewerMapRotationTargetRef = useRef<number>(0);
+  const rotateWithHeadingRef = useRef(false);
   const viewerTurnPinRef = useRef<{ lat: number; lng: number } | null>(null);
   const [mapReady, setMapReady] = useState(0);
   const [rotationDeg, setRotationDeg] = useState(0);
@@ -240,6 +246,7 @@ export function LiveMap({
   }, [onUserInteract]);
   routePointsLenRef.current = routePoints.length;
   followModeRef.current = followMode;
+  rotateWithHeadingRef.current = rotateWithHeading;
   const streamer = audienceRole === "streamer";
   const showHistoryPath = true;
   const smoothMotion = true;
@@ -645,19 +652,20 @@ export function LiveMap({
       // to avoid empty corners while preserving a fully filled frame.
       if (followMode && rotateWithHeading && last.heading != null) {
         const target = -last.heading;
-        const delta = normalizeAngleDeg(target - smoothHeadingRef.current);
-        // Streamers get gentle easing (few ° per GPS tick). Viewers need the map
-        // aligned with travel direction quickly so left/right bets match reality.
-        const abs = Math.abs(delta);
-        const rotationEase = streamer
-          ? 0.12
-          : Math.min(0.94, 0.52 + (Math.min(abs, 110) / 110) * 0.36);
-        smoothHeadingRef.current = normalizeAngleDeg(
-          smoothHeadingRef.current + delta * rotationEase,
-        );
-        setRotationDeg(smoothHeadingRef.current);
+        if (streamer) {
+          const delta = normalizeAngleDeg(target - smoothHeadingRef.current);
+          const rotationEase = 0.12;
+          smoothHeadingRef.current = normalizeAngleDeg(
+            smoothHeadingRef.current + delta * rotationEase,
+          );
+          setRotationDeg(smoothHeadingRef.current);
+        } else {
+          viewerMapRotationTargetRef.current = target;
+          // Viewer: smoothed every animation frame in the motion loop (~VIEWER_MAP_ROTATION_TAU_SEC).
+        }
       } else if (followMode) {
         smoothHeadingRef.current = 0;
+        viewerMapRotationTargetRef.current = 0;
         setRotationDeg(0);
       }
     })();
@@ -881,6 +889,16 @@ export function LiveMap({
       const dt = Math.min(0.055, Math.max(0.008, (now - lastTs) / 1000));
       viewerLoopLastTsRef.current = now;
 
+      if (rotateWithHeadingRef.current) {
+        const targetRot = viewerMapRotationTargetRef.current;
+        const rotDelta = normalizeAngleDeg(targetRot - smoothHeadingRef.current);
+        const rotAlpha = 1 - Math.exp(-dt / VIEWER_MAP_ROTATION_TAU_SEC);
+        smoothHeadingRef.current = normalizeAngleDeg(
+          smoothHeadingRef.current + rotDelta * rotAlpha,
+        );
+        setRotationDeg(smoothHeadingRef.current);
+      }
+
       const target = viewerPollTargetRef.current;
       const vel = viewerVelSmoothedRef.current;
       const nextPin = driverPins?.[0] ?? null;
@@ -984,7 +1002,7 @@ export function LiveMap({
                   transformOrigin: "50% 50%",
                   transition: streamer
                     ? "transform 1100ms cubic-bezier(0.22,0.61,0.36,1)"
-                    : "transform 220ms cubic-bezier(0.33,1,0.48,1)",
+                    : "none",
                 }
               : {
                   position: "absolute",

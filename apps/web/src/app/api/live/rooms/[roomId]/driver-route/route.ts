@@ -555,18 +555,23 @@ export async function GET(
     }
   }
 
+  const vProjHead = projectOntoPolyline(polyline, position);
+  const vehCumHead = vProjHead
+    ? cumulativeMetersAt(polyline, vProjHead.segmentIndex, vProjHead.t)
+    : 0;
+
   const pins: Pin[] = queue.map((q) => ({
     id: q.id,
     lat: q.lat,
     lng: q.lng,
-    distanceMeters: q.cumulativeM,
+    distanceMeters: Math.max(0, q.cumulativeM - vehCumHead),
   }));
 
   let approachLine: LatLng[] = [];
-  if (pins.length > 0) {
-    const firstM = pins[0]!.distanceMeters;
-    const startM = Math.max(0, firstM - APPROACH_LINE_BEFORE_M);
-    const endM = Math.max(startM, firstM + APPROACH_LINE_AFTER_M);
+  if (queue.length > 0) {
+    const firstPinCum = queue[0]!.cumulativeM;
+    const startM = Math.max(0, firstPinCum - APPROACH_LINE_BEFORE_M);
+    const endM = Math.max(startM, firstPinCum + APPROACH_LINE_AFTER_M);
     approachLine = slicePolylineByDistance(polyline, startM, endM);
   }
 

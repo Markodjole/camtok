@@ -3,13 +3,14 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { openSystemMarketForRoom } from "@/actions/live-markets";
 import { openCityGridMarketForRoom } from "@/actions/live-city-grid-market";
 import { lockMarket, revealAndSettleMarket } from "@/actions/live-settlement";
+import { LIVE_BET_LOCK_DISTANCE_M } from "@/lib/live/liveBetLockDistance";
 import { metersBetween } from "@/lib/live/routing/geometry";
 
 /**
  * Stateless tick worker for a single room. Designed to be called every few
  * seconds by a scheduler / cron / client poll. Advances room state:
  *   - waiting_for_next_market → tries to open a system market
- *   - market_open: lock when vehicle within BET_LOCK_DISTANCE_M of the
+ *   - market_open: lock when vehicle within LIVE_BET_LOCK_DISTANCE_M of the
  *     turn point, OR when the safety-timeout `locks_at` passes.
  *   - market_locked past reveal_at → reveal+settle
  *
@@ -17,8 +18,6 @@ import { metersBetween } from "@/lib/live/routing/geometry";
  */
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-const BET_LOCK_DISTANCE_M = 60;
 
 export async function POST(
   _req: NextRequest,
@@ -69,7 +68,7 @@ export async function POST(
     const status = (market as { status: string }).status;
 
     if (status === "open") {
-      // Distance-based lock: vehicle within `BET_LOCK_DISTANCE_M` of the
+      // Distance-based lock: vehicle within `LIVE_BET_LOCK_DISTANCE_M` of the
       // turn point closes betting. This is the primary trigger; the
       // time-based `locks_at` is a far-future safety net.
       let distanceLocked = false;
@@ -97,7 +96,7 @@ export async function POST(
             { lat, lng },
             { lat: turnLat, lng: turnLng },
           );
-          distanceLocked = dist <= BET_LOCK_DISTANCE_M;
+          distanceLocked = dist <= LIVE_BET_LOCK_DISTANCE_M;
         }
       }
       if (distanceLocked || now >= locksAt) {

@@ -11,6 +11,7 @@ import {
 import { drivingRouteStyleBadges } from "@/lib/live/routing/drivingRouteStyle";
 import dynamic from "next/dynamic";
 import type { LiveFeedRow, RoutePoint } from "@/actions/live-feed";
+import { LIVE_BET_LOCK_DISTANCE_M } from "@/lib/live/liveBetLockDistance";
 import { metersBetween } from "@/lib/live/routing/geometry";
 import { LiveVideoPlayer } from "./LiveVideoPlayer";
 import { DirectionalBetPad } from "./DirectionalBetPad";
@@ -107,6 +108,12 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   });
   const showLiveBets = true;
   const [joyPortalReady, setJoyPortalReady] = useState(false);
+  /** Latched blue-pin position so viewer UI does not jump when /driver-route refreshes. */
+  const [stickyViewerPin, setStickyViewerPin] = useState<{
+    id: number | string;
+    lat: number;
+    lng: number;
+  } | null>(null);
   const skillFeedbackTimerRef = { current: null as ReturnType<typeof setTimeout> | null };
   const { betPill, flash } = useBetPill();
 
@@ -226,6 +233,53 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     ? { lat: currentMarket.turnPointLat, lng: currentMarket.turnPointLng, kind: "straight" as const, label: "" }
     : null;
 
+  useEffect(() => {
+    setStickyViewerPin(null);
+  }, [room.roomId]);
+
+  useEffect(() => {
+    const last = routePoints[routePoints.length - 1];
+    const apiHead = driverPins?.[0];
+    const PASSED_CLEAR_LINE_M = 12;
+    const marketTurn =
+      currentMarket?.turnPointLat != null &&
+      currentMarket?.turnPointLng != null &&
+      currentMarket.id
+        ? {
+            id: `market:${currentMarket.id}`,
+            lat: currentMarket.turnPointLat,
+            lng: currentMarket.turnPointLng,
+          }
+        : null;
+
+    setStickyViewerPin((sticky) => {
+      let next = sticky;
+
+      if (next && last && metersBetween(last, next) < PASSED_CLEAR_LINE_M) {
+        next = null;
+      }
+
+      const candidate =
+        apiHead?.id != null
+          ? { id: apiHead.id, lat: apiHead.lat, lng: apiHead.lng }
+          : marketTurn;
+
+      if (!next && candidate) return candidate;
+
+      if (next && apiHead?.id === next.id) {
+        return { ...next, lat: apiHead.lat, lng: apiHead.lng };
+      }
+
+      return next;
+    });
+  }, [
+    driverPins,
+    routePoints,
+    currentMarket?.id,
+    currentMarket?.turnPointLat,
+    currentMarket?.turnPointLng,
+  ]);
+
   const cityGridSpec =
     currentMarket?.marketType === "city_grid"
       ? (currentMarket.cityGridSpec as CityGridSpecCompact | null | undefined)
@@ -245,44 +299,113 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     }));
   }, [cityGridSpec]);
 
-  // Distance gate: betting closes when the vehicle is within 60 m of the
-  // turn point. We prefer the road-distance value coming from
-  // /driver-route (driverPins[0].distanceMeters) when the active pin
-  // matches the market's turn point; otherwise fall back to a quick
-  // straight-line distance to the market's turn point.
+  const PASSED_HIDE_PIN_LINE_M = 12;
+  const routeLast =
+    routePoints.length > 0 ? routePoints[routePoints.length - 1]! : null;
+
+  const passedMarketTurn =
+    !!viewerTurnTarget &&
+    !!routeLast &&
+    currentMarket != null &&
+    currentMarket.marketType !== "city_grid" &&
+    metersBetween(routeLast, viewerTurnTarget) < PASSED_HIDE_PIN_LINE_M;
+
+  /** Hide blue pin once we're essentially at the maneuver (matches server pass semantics). */
+  const viewerTurnTargetForMap =
+    currentMarket?.marketType !== "city_grid" &&
+    viewerTurnTarget &&
+    currentMarket &&
+    !passedMarketTurn
+      ? viewerTurnTarget
+      : null;
+
+  const viewerDecisionLatLng =
+    viewerTurnTargetForMap != null
+      ? { lat: viewerTurnTargetForMap.lat, lng: viewerTurnTargetForMap.lng }
+      : stickyViewerPin ??
+        (driverPins?.[0]
+          ? { lat: driverPins[0].lat, lng: driverPins[0].lng }
+          : null);
+
+  /** Server locks on `live_betting_markets.turn_point_*` — mirror that for UI + joystick. */
+  const bettingDistanceTarget =
+    currentMarket?.marketType !== "city_grid" && viewerTurnTarget && currentMarket
+      ? { lat: viewerTurnTarget.lat, lng: viewerTurnTarget.lng }
+      : viewerDecisionLatLng;
+
+  // Distance gate: betting closes when the vehicle is within LIVE_BET_LOCK_DISTANCE_M
+  // of the market turn point (same as tick + placeLiveBet).
   const isDistanceLocked =
     currentMarket?.marketType === "city_grid"
       ? false
       : (() => {
           const last = routePoints[routePoints.length - 1];
-          if (!last) return false;
-          const turnPoint =
-            currentMarket?.turnPointLat != null && currentMarket?.turnPointLng != null
-              ? { lat: currentMarket.turnPointLat, lng: currentMarket.turnPointLng }
-              : driverPins && driverPins.length > 0
-                ? { lat: driverPins[0]!.lat, lng: driverPins[0]!.lng }
-                : null;
-          if (!turnPoint) return false;
-          const dist = metersBetween({ lat: last.lat, lng: last.lng }, turnPoint);
-          return dist <= 60;
+          if (!last || !bettingDistanceTarget) return false;
+          return (
+            metersBetween(
+              { lat: last.lat, lng: last.lng },
+              bettingDistanceTarget,
+            ) <= LIVE_BET_LOCK_DISTANCE_M
+          );
         })();
   const isTimeLocked = currentMarket
     ? new Date(currentMarket.locksAt) <= new Date()
     : true;
   const isLocked = isTimeLocked || isDistanceLocked;
+
+  /** Ribbon: open vs closed from lock distance (+ time safety net), not revealAt flicker. */
   const viewerRailPhase: "none" | "pending" | "active" = (() => {
     if (currentMarket?.marketType === "city_grid") return "none";
-    // Viewer should always see the next decision marker (blue dot) when we
-    // have either a market turn-point or a checkpoint from driver-route.
-    if (!viewerTurnTarget && (!driverPins || driverPins.length === 0)) return "none";
-    if (!currentMarket || !viewerTurnTarget) return "pending";
-    const locksAtMs = Date.parse(currentMarket.locksAt);
-    if (currentMarket.revealAt) {
-      const revealMs = Date.parse(currentMarket.revealAt);
-      if (Number.isFinite(revealMs) && nowTick > revealMs + 1500) return "none";
-    }
-    return Number.isFinite(locksAtMs) && nowTick >= locksAtMs ? "active" : "pending";
+    const pinUi = viewerDecisionLatLng;
+    if (!pinUi) return "none";
+    const last = routePoints[routePoints.length - 1];
+    if (!last) return "pending";
+    const distBet =
+      bettingDistanceTarget != null
+        ? metersBetween(last, bettingDistanceTarget)
+        : Number.POSITIVE_INFINITY;
+    const timeClosed =
+      !!currentMarket &&
+      Number.isFinite(Date.parse(currentMarket.locksAt)) &&
+      nowTick >= Date.parse(currentMarket.locksAt);
+    if (distBet <= LIVE_BET_LOCK_DISTANCE_M || timeClosed) return "active";
+    return "pending";
   })();
+
+  const viewerOsrmPreviewPins = useMemo(() => {
+    if (currentMarket?.marketType === "city_grid") return driverPins;
+    if (
+      viewerTurnTarget &&
+      currentMarket &&
+      currentMarket.marketType !== "city_grid"
+    ) {
+      return [];
+    }
+    if (!stickyViewerPin) return driverPins;
+    const dm =
+      typeof stickyViewerPin.id === "number"
+        ? driverPins?.find((p) => p.id === stickyViewerPin.id)?.distanceMeters
+        : undefined;
+    const pin: {
+      lat: number;
+      lng: number;
+      id?: number | string;
+      distanceMeters?: number;
+    } = {
+      lat: stickyViewerPin.lat,
+      lng: stickyViewerPin.lng,
+      id: stickyViewerPin.id,
+    };
+    if (dm != null) pin.distanceMeters = dm;
+    return [pin];
+  }, [
+    currentMarket?.id,
+    currentMarket?.marketType,
+    viewerTurnTarget?.lat,
+    viewerTurnTarget?.lng,
+    stickyViewerPin,
+    driverPins,
+  ]);
   const viewerDriverPos =
     routePoints.length > 0
       ? { lat: routePoints[routePoints.length - 1]!.lat, lng: routePoints[routePoints.length - 1]!.lng }
@@ -514,7 +637,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         phase={viewerRailPhase}
         locksAt={currentMarket?.locksAt ?? null}
         revealAt={currentMarket?.revealAt ?? null}
-        turnPoint={viewerTurnTarget ?? (driverPins && driverPins[0]) ?? null}
+        turnPoint={viewerDecisionLatLng}
         driverPos={viewerDriverPos}
         betOptionLabel={
           currentMarket && lastBetMarketId === currentMarket.id
@@ -568,8 +691,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             selectedCheckpointId={selectedCheckpointId}
             showZones={showZones}
             showCheckpoints={true}
-            turnTarget={viewerTurnTarget}
-            driverPins={driverPins}
+            turnTarget={viewerTurnTargetForMap}
+            driverPins={viewerOsrmPreviewPins}
             approachLine={approachLine}
             railPhase={viewerRailPhase}
             destination={room.destination}
@@ -740,8 +863,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               selectedCheckpointId={selectedCheckpointId}
               showZones={showZones}
               showCheckpoints={true}
-              turnTarget={viewerTurnTarget}
-              driverPins={driverPins}
+              turnTarget={viewerTurnTargetForMap}
+              driverPins={viewerOsrmPreviewPins}
               approachLine={approachLine}
               railPhase={viewerRailPhase}
               destination={room.destination}

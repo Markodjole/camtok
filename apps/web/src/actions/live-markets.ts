@@ -15,19 +15,10 @@ import {
   type LiveMarketOption,
 } from "@bettok/live";
 import { isValidGridOptionForSpec, type CityGridSpecCompact } from "@/lib/live/grid/cityGrid500";
+import { LIVE_BET_LOCK_DISTANCE_M } from "@/lib/live/liveBetLockDistance";
 
-/**
- * Distance (meters) at which betting must close — the driver/AI need a
- * runway to actually execute the turn safely. Mirrored on the client so
- * the bet UI disables at the same threshold.
- *
- * We use straight-line haversine here as a simple gate. It is always
- * shorter than or equal to the road-distance from the same two points,
- * so this gate fires *no later* than the equivalent road-distance check
- * on the client (where we have the OSRM-derived value). Acceptable for
- * MVP; can be tightened later by sharing the road-distance value.
- */
-const BET_LOCK_DISTANCE_M = 60;
+/** See `@/lib/live/liveBetLockDistance` — shared with tick route + viewer UI. */
+const BET_LOCK_DISTANCE_M = LIVE_BET_LOCK_DISTANCE_M;
 
 /**
  * Propose a user market on top of the current live room context.
