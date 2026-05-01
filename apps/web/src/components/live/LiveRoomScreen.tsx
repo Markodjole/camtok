@@ -82,6 +82,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [destinationRoute, setDestinationRoute] = useState<
     Array<{ lat: number; lng: number }> | null
   >(null);
+  const destinationRouteRef = useRef(destinationRoute);
+  destinationRouteRef.current = destinationRoute;
   const [destinationEtaSec, setDestinationEtaSec] = useState<number | null>(null);
   const [destinationDistanceM, setDestinationDistanceM] = useState<number | null>(null);
   const [nowTick, setNowTick] = useState(() => Date.now());
@@ -373,9 +375,12 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         /* transient */
       } finally {
         if (!cancelled) {
+          const cur = destinationRouteRef.current;
+          const delay =
+            cur && cur.length > 1 ? 2000 : 1000;
           retryTimer = setTimeout(() => {
             void fetchDest();
-          }, destinationRoute ? 2000 : 1000);
+          }, delay);
         }
       }
     };
@@ -384,7 +389,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       cancelled = true;
       if (retryTimer) clearTimeout(retryTimer);
     };
-  }, [room.roomId, destinationRoute]);
+  }, [room.roomId]);
 
   useEffect(() => {
     let cancelled = false;

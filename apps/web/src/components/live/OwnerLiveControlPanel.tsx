@@ -75,11 +75,6 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
   const [intentLabel, setIntentLabel] = useState("");
   const [destination, setDestination] = useState<PickedDestination | null>(null);
   const [currentPos, setCurrentPos] = useState<{ lat: number; lng: number } | null>(null);
-  const [destRoute, setDestRoute] = useState<{
-    polyline: Array<{ lat: number; lng: number }>;
-    distanceMeters: number;
-    durationSec: number;
-  } | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [roomId, setRoomId] = useState<string | null>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
@@ -369,37 +364,6 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
     };
   }, [roomId, sessionId, routePoints]);
 
-  useEffect(() => {
-    if (!roomId || !sessionId) return;
-    let cancelled = false;
-    const fetchDestRoute = async () => {
-      try {
-        const r = await fetch(
-          `/api/live/rooms/${roomId}/destination-route`,
-          { cache: "no-store" },
-        );
-        if (!r.ok) return;
-        const j = (await r.json()) as {
-          route: {
-            polyline: Array<{ lat: number; lng: number }>;
-            distanceMeters: number;
-            durationSec: number;
-          } | null;
-        };
-        if (cancelled) return;
-        setDestRoute(j.route);
-      } catch {
-        /* transient */
-      }
-    };
-    void fetchDestRoute();
-    const id = setInterval(fetchDestRoute, 4000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [roomId, sessionId]);
-
   // Poll the driver-route endpoint which returns the road-snapped polyline
   // from the current position to the AI checkpoint (a bit past the next
   // turn). Backend caches by market + position bucket so this is cheap.
@@ -623,7 +587,7 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
               approachLine={approachLine}
               railPhase={railPhase}
               destination={destination}
-              destinationRoute={destRoute?.polyline ?? null}
+              destinationRoute={null}
             />
           ) : (
             <LiveVideoPlayer localStream={stream} className="h-full w-full" />
@@ -718,7 +682,7 @@ export function OwnerLiveControlPanel({ characterId }: { characterId: string }) 
                 approachLine={approachLine}
                 railPhase={railPhase}
                 destination={destination}
-                destinationRoute={destRoute?.polyline ?? null}
+                destinationRoute={null}
               />
               {routePoints.length === 0 && (
                 <div className="absolute inset-0 flex items-center justify-center bg-black/60 text-[9px] text-white/40">
