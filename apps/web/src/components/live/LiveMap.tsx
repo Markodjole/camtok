@@ -145,6 +145,21 @@ function normalizeAngleDeg(deg: number): number {
   return v;
 }
 
+/** True Δt between snapshots (viewer DB trail); avoids bogus speed when poll cadence ≠ GPS cadence. */
+function motionSegmentDtSec(
+  prev: RoutePoint | null,
+  last: RoutePoint,
+  fallbackSec: number,
+): number {
+  if (!prev) return fallbackSec;
+  const ta = prev.recordedAt ? Date.parse(prev.recordedAt) : NaN;
+  const tb = last.recordedAt ? Date.parse(last.recordedAt) : NaN;
+  if (Number.isFinite(ta) && Number.isFinite(tb) && tb > ta) {
+    return Math.min(120, Math.max(0.08, (tb - ta) / 1000));
+  }
+  return fallbackSec;
+}
+
 export function LiveMap({
   routePoints,
   className = "",
@@ -191,12 +206,30 @@ export function LiveMap({
   const onUserInteractRef = useRef<(() => void) | undefined>(undefined);
   const motionRafRef = useRef<number | null>(null);
   const lastGpsAtMsRef = useRef<number | null>(null);
+  /** Viewer-only: polls are sparse references — integrate smoothed °/s instead of snapping each poll. */
+  const viewerSmoothRafRef = useRef<number | null>(null);
+  const viewerPollTargetRef = useRef<{ lat: number; lng: number }>({
+    lat: 0,
+    lng: 0,
+  });
+  const viewerVelSmoothedRef = useRef<{ vLat: number; vLng: number }>({
+    vLat: 0,
+    vLng: 0,
+  });
+  const viewerPoseSmoothedRef = useRef<{ lat: number; lng: number } | null>(
+    null,
+  );
+  const viewerLoopLastTsRef = useRef<number>(0);
+  const routePointsLenRef = useRef(0);
+  const followModeRef = useRef(followMode);
   const smoothHeadingRef = useRef<number>(0);
   const [mapReady, setMapReady] = useState(0);
   const [rotationDeg, setRotationDeg] = useState(0);
   useEffect(() => {
     onUserInteractRef.current = onUserInteract;
   }, [onUserInteract]);
+  routePointsLenRef.current = routePoints.length;
+  followModeRef.current = followMode;
   const streamer = audienceRole === "streamer";
   const showHistoryPath = true;
   const smoothMotion = true;
@@ -602,16 +635,16 @@ export function LiveMap({
       // to avoid empty corners while preserving a fully filled frame.
       if (followMode && rotateWithHeading && last.heading != null) {
         const target = -last.heading;
-        if (!hasAppliedInitialZoomRef.current) {
-          smoothHeadingRef.current = target;
-        } else {
-          const delta = normalizeAngleDeg(target - smoothHeadingRef.current);
-          // Lower coefficient = slower rotation. This eases the map into the new
-          // heading over several GPS updates so turns feel gradual.
-          smoothHeadingRef.current = normalizeAngleDeg(
-            smoothHeadingRef.current + delta * 0.12,
-          );
-        }
+        const delta = normalizeAngleDeg(target - smoothHeadingRef.current);
+        // Streamers get gentle easing (few ° per GPS tick). Viewers need the map
+        // aligned with travel direction quickly so left/right bets match reality.
+        const abs = Math.abs(delta);
+        const rotationEase = streamer
+          ? 0.12
+          : Math.min(0.94, 0.52 + (Math.min(abs, 110) / 110) * 0.36);
+        smoothHeadingRef.current = normalizeAngleDeg(
+          smoothHeadingRef.current + delta * rotationEase,
+        );
         setRotationDeg(smoothHeadingRef.current);
       } else if (followMode) {
         smoothHeadingRef.current = 0;
@@ -634,10 +667,89 @@ export function LiveMap({
     followMode,
   ]);
 
+  // Viewer: each poll refreshes target + gently blends measured °/s (poll is guidance, not a snap target).
+  useEffect(() => {
+    if (streamer || routePoints.length === 0) return;
+
+    const last = routePoints[routePoints.length - 1]!;
+    const prev = routePoints.length > 1 ? routePoints[routePoints.length - 2]! : null;
+
+    viewerPollTargetRef.current = { lat: last.lat, lng: last.lng };
+
+    const fallbackDt = 0.9;
+    const segmentDtSec = motionSegmentDtSec(prev, last, fallbackDt);
+
+    let measVLat = prev ? (last.lat - prev.lat) / segmentDtSec : 0;
+    let measVLng = prev ? (last.lng - prev.lng) / segmentDtSec : 0;
+
+    if (
+      last.speedMps != null &&
+      last.speedMps > 0.25 &&
+      last.heading != null &&
+      !Number.isNaN(last.heading)
+    ) {
+      const h = (last.heading * Math.PI) / 180;
+      const latRad = (last.lat * Math.PI) / 180;
+      const mPerDegLat = 111_320;
+      const mPerDegLng = Math.max(4500, 111_320 * Math.cos(latRad));
+      const vn = (last.speedMps * Math.cos(h)) / mPerDegLat;
+      const ve = (last.speedMps * Math.sin(h)) / mPerDegLng;
+      measVLat = measVLat * 0.55 + vn * 0.45;
+      measVLng = measVLng * 0.55 + ve * 0.45;
+    }
+
+    const blend = 0.28;
+    const vr = viewerVelSmoothedRef.current;
+    vr.vLat = vr.vLat * (1 - blend) + measVLat * blend;
+    vr.vLng = vr.vLng * (1 - blend) + measVLng * blend;
+
+    const vmag = Math.hypot(vr.vLat, vr.vLng);
+    const maxDegPerSec = 0.0028;
+    if (vmag > maxDegPerSec) {
+      const s = maxDegPerSec / vmag;
+      vr.vLat *= s;
+      vr.vLng *= s;
+    }
+  }, [routePoints, streamer]);
+
   useEffect(() => {
     const m = mapRef.current;
     const dot = dotRef.current;
-    if (!m || !dot || routePoints.length === 0) return;
+
+    const cancelBurst = () => {
+      if (motionRafRef.current != null) {
+        cancelAnimationFrame(motionRafRef.current);
+        motionRafRef.current = null;
+      }
+    };
+
+    const cancelViewerLoop = () => {
+      if (viewerSmoothRafRef.current != null) {
+        cancelAnimationFrame(viewerSmoothRafRef.current);
+        viewerSmoothRafRef.current = null;
+      }
+      viewerPoseSmoothedRef.current = null;
+      viewerVelSmoothedRef.current = { vLat: 0, vLng: 0 };
+      viewerLoopLastTsRef.current = 0;
+    };
+
+    if (!m || !dot || routePoints.length === 0 || !followMode) {
+      cancelBurst();
+      cancelViewerLoop();
+      return () => {
+        cancelBurst();
+        cancelViewerLoop();
+      };
+    }
+
+    if (!streamer) {
+      cancelBurst();
+      return () => {
+        cancelBurst();
+      };
+    }
+
+    cancelViewerLoop();
 
     const last = routePoints[routePoints.length - 1]!;
     const prev = routePoints.length > 1 ? routePoints[routePoints.length - 2]! : null;
@@ -646,13 +758,21 @@ export function LiveMap({
     const targetPos: [number, number] = [last.lat, last.lng];
 
     const now = performance.now();
-    const sinceLastGpsSec = lastGpsAtMsRef.current != null ? Math.max(0.4, Math.min(2.8, (now - lastGpsAtMsRef.current) / 1000)) : 0.8;
+    const sinceLastGpsSec =
+      lastGpsAtMsRef.current != null
+        ? Math.max(0.4, Math.min(2.8, (now - lastGpsAtMsRef.current) / 1000))
+        : 0.8;
     lastGpsAtMsRef.current = now;
 
-    const vLatPerSec = prev ? (last.lat - prev.lat) / sinceLastGpsSec : 0;
-    const vLngPerSec = prev ? (last.lng - prev.lng) / sinceLastGpsSec : 0;
-    const settleMs = Math.round(Math.min(900, Math.max(450, sinceLastGpsSec * 1000 * 0.7)));
-    const tailMs = Math.round(Math.min(1500, Math.max(600, sinceLastGpsSec * 1000 * 1.1)));
+    const segmentDtSec = motionSegmentDtSec(prev, last, sinceLastGpsSec);
+    const vLatPerSec = prev ? (last.lat - prev.lat) / segmentDtSec : 0;
+    const vLngPerSec = prev ? (last.lng - prev.lng) / segmentDtSec : 0;
+    const settleMs = Math.round(
+      Math.min(900, Math.max(450, sinceLastGpsSec * 1000 * 0.7)),
+    );
+    const tailMs = Math.round(
+      Math.min(1500, Math.max(600, sinceLastGpsSec * 1000 * 1.1)),
+    );
     const totalMs = settleMs + tailMs;
     const frameStart = performance.now();
 
@@ -676,8 +796,6 @@ export function LiveMap({
       if (arRef.current) arRef.current.setLatLng(livePos);
       if (followMode) {
         m.setView(livePos, m.getZoom(), { animate: false });
-        // Rotation is smoothed in the GPS-update effect and eased by CSS;
-        // avoid per-frame snaps here so turns feel gradual.
       }
 
       if (t < totalMs) {
@@ -686,10 +804,103 @@ export function LiveMap({
     };
     motionRafRef.current = requestAnimationFrame(tick);
     return () => {
-      if (motionRafRef.current != null) cancelAnimationFrame(motionRafRef.current);
-      motionRafRef.current = null;
+      cancelBurst();
     };
-  }, [routePoints, followMode, rotateWithHeading, smoothMotion]);
+  }, [routePoints, followMode, rotateWithHeading, smoothMotion, streamer]);
+
+  useEffect(() => {
+    const m = mapRef.current;
+    const dot = dotRef.current;
+
+    const cancelViewerLoop = () => {
+      if (viewerSmoothRafRef.current != null) {
+        cancelAnimationFrame(viewerSmoothRafRef.current);
+        viewerSmoothRafRef.current = null;
+      }
+      viewerPoseSmoothedRef.current = null;
+      viewerVelSmoothedRef.current = { vLat: 0, vLng: 0 };
+      viewerLoopLastTsRef.current = 0;
+    };
+
+    if (
+      streamer ||
+      !followMode ||
+      routePoints.length === 0 ||
+      !m ||
+      !dot
+    ) {
+      cancelViewerLoop();
+      return cancelViewerLoop;
+    }
+
+    const VIEWER_SPRING = 2.15;
+
+    const loop = (now: number) => {
+      const mm = mapRef.current;
+      const dd = dotRef.current;
+      if (
+        !mm ||
+        !dd ||
+        routePointsLenRef.current === 0 ||
+        !followModeRef.current
+      ) {
+        cancelViewerLoop();
+        return;
+      }
+
+      let pose = viewerPoseSmoothedRef.current;
+      if (!pose) {
+        const ll = dd.getLatLng();
+        pose = { lat: ll.lat, lng: ll.lng };
+        viewerPoseSmoothedRef.current = pose;
+      }
+
+      const lastTs =
+        viewerLoopLastTsRef.current > 0 ? viewerLoopLastTsRef.current : now;
+      const dt = Math.min(0.055, Math.max(0.008, (now - lastTs) / 1000));
+      viewerLoopLastTsRef.current = now;
+
+      const target = viewerPollTargetRef.current;
+      const vel = viewerVelSmoothedRef.current;
+
+      let nLat = pose.lat + vel.vLat * dt;
+      let nLng = pose.lng + vel.vLng * dt;
+
+      const dLat = target.lat - nLat;
+      const dLng = target.lng - nLng;
+
+      let corrLat = VIEWER_SPRING * dLat * dt;
+      let corrLng = VIEWER_SPRING * dLng * dt;
+
+      const vmag = Math.hypot(vel.vLat, vel.vLng);
+      const minVm = 8e-8;
+      if (vmag > minVm) {
+        const uLat = vel.vLat / vmag;
+        const uLng = vel.vLng / vmag;
+        const along = corrLat * uLat + corrLng * uLng;
+        if (along < 0) {
+          corrLat -= along * uLat;
+          corrLng -= along * uLng;
+        }
+      }
+
+      nLat += corrLat;
+      nLng += corrLng;
+
+      viewerPoseSmoothedRef.current = { lat: nLat, lng: nLng };
+
+      dd.setLatLng([nLat, nLng]);
+      if (arRef.current) arRef.current.setLatLng([nLat, nLng]);
+      mm.setView([nLat, nLng], mm.getZoom(), { animate: false });
+
+      viewerSmoothRafRef.current = requestAnimationFrame(loop);
+    };
+
+    viewerLoopLastTsRef.current = performance.now();
+    viewerSmoothRafRef.current = requestAnimationFrame(loop);
+
+    return cancelViewerLoop;
+  }, [followMode, streamer, routePoints.length]);
 
   return (
     <div className="relative h-full w-full" style={{ background: "rgba(10,10,20,0.4)" }}>
@@ -702,7 +913,9 @@ export function LiveMap({
                   inset: "-24%",
                   transform: `rotate(${rotationDeg}deg)`,
                   transformOrigin: "50% 50%",
-                  transition: "transform 1100ms cubic-bezier(0.22,0.61,0.36,1)",
+                  transition: streamer
+                    ? "transform 1100ms cubic-bezier(0.22,0.61,0.36,1)"
+                    : "transform 220ms cubic-bezier(0.33,1,0.48,1)",
                 }
               : {
                   position: "absolute",

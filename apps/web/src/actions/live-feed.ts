@@ -11,6 +11,8 @@ export type RoutePoint = {
   heading?: number;
   /** movement speed, m/s (streamer’s device only when available) */
   speedMps?: number;
+  /** Device/server snapshot time (viewers — used for motion smoothing) */
+  recordedAt?: string;
 };
 
 export type LiveFeedRow = {
@@ -141,7 +143,9 @@ export async function getLiveRoomDetail(roomId: string): Promise<{
   const sessionId = data.live_session_id as string;
   const { data: snapshots } = await service
     .from("live_route_snapshots")
-    .select("normalized_lat,normalized_lng,raw_lat,raw_lng,heading_deg,speed_mps")
+    .select(
+      "normalized_lat,normalized_lng,raw_lat,raw_lng,heading_deg,speed_mps,recorded_at",
+    )
     .eq("live_session_id", sessionId)
     .order("recorded_at", { ascending: false })
     .limit(100);
@@ -153,12 +157,14 @@ export async function getLiveRoomDetail(roomId: string): Promise<{
     raw_lng: number;
     heading_deg: number | null;
     speed_mps: number | null;
+    recorded_at: string;
   }>)
     .map((s) => ({
       lat: s.normalized_lat ?? s.raw_lat,
       lng: s.normalized_lng ?? s.raw_lng,
       heading: s.heading_deg ?? undefined,
       speedMps: s.speed_mps != null ? Number(s.speed_mps) : undefined,
+      recordedAt: s.recorded_at,
     }))
     .reverse(); // oldest→newest for path drawing
 
