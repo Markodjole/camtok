@@ -167,7 +167,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       }
     };
     fetchPoints();
-    const id = setInterval(fetchPoints, 450);
+    const id = setInterval(fetchPoints, 330);
     return () => clearInterval(id);
   }, [room.liveSessionId]);
 
@@ -433,7 +433,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       }
     };
     void fetchRoute();
-    const id = setInterval(fetchRoute, 1500);
+    const id = setInterval(fetchRoute, 700);
     return () => {
       cancelled = true;
       clearInterval(id);

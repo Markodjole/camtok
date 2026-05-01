@@ -220,9 +220,14 @@ export function LiveMap({
     vLat: 0,
     vLng: 0,
   });
+  const viewerPoseVelRef = useRef<{ vLat: number; vLng: number }>({
+    vLat: 0,
+    vLng: 0,
+  });
   const viewerPoseSmoothedRef = useRef<{ lat: number; lng: number } | null>(
     null,
   );
+  const viewerLastPollTsRef = useRef<number>(0);
   const viewerLoopLastTsRef = useRef<number>(0);
   const routePointsLenRef = useRef(0);
   const followModeRef = useRef(followMode);
@@ -680,6 +685,7 @@ export function LiveMap({
     const prev = routePoints.length > 1 ? routePoints[routePoints.length - 2]! : null;
 
     viewerPollTargetRef.current = { lat: last.lat, lng: last.lng };
+    viewerLastPollTsRef.current = performance.now();
 
     const fallbackDt = 0.9;
     const segmentDtSec = motionSegmentDtSec(prev, last, fallbackDt);
@@ -735,6 +741,8 @@ export function LiveMap({
       }
       viewerPoseSmoothedRef.current = null;
       viewerVelSmoothedRef.current = { vLat: 0, vLng: 0 };
+      viewerPoseVelRef.current = { vLat: 0, vLng: 0 };
+      viewerLastPollTsRef.current = 0;
       viewerLoopLastTsRef.current = 0;
     };
 
@@ -838,7 +846,11 @@ export function LiveMap({
       return cancelViewerLoop;
     }
 
-    const VIEWER_SPRING = 2.15;
+    const BASE_STIFFNESS = 10.5;
+    const PRECISE_STIFFNESS = 26;
+    const BASE_PROJECT_SEC = 0.75;
+    const PRECISE_PROJECT_SEC = 0.2;
+    const NEGATIVE_SPEED_EPS = 1e-8;
     const TURN_PRECISE_PRE_M = 50;
     const TURN_PRECISE_POST_M = 20;
 
@@ -860,6 +872,7 @@ export function LiveMap({
         const ll = dd.getLatLng();
         pose = { lat: ll.lat, lng: ll.lng };
         viewerPoseSmoothedRef.current = pose;
+        viewerPoseVelRef.current = { vLat: 0, vLng: 0 };
       }
 
       const lastTs =
@@ -897,32 +910,42 @@ export function LiveMap({
         }
       }
 
-      let nLat = pose.lat + vel.vLat * dt;
-      let nLng = pose.lng + vel.vLng * dt;
+      const sincePollSec =
+        viewerLastPollTsRef.current > 0
+          ? Math.max(0, (now - viewerLastPollTsRef.current) / 1000)
+          : 0;
+      const projectedWindowSec = Math.min(
+        viewerPreciseTurnWindow ? PRECISE_PROJECT_SEC : BASE_PROJECT_SEC,
+        sincePollSec,
+      );
+      const desiredLat = target.lat + vel.vLat * projectedWindowSec;
+      const desiredLng = target.lng + vel.vLng * projectedWindowSec;
+      const stiffness = viewerPreciseTurnWindow ? PRECISE_STIFFNESS : BASE_STIFFNESS;
+      const damping = 2 * Math.sqrt(stiffness);
+      const poseVel = viewerPoseVelRef.current;
+      const aLat = stiffness * (desiredLat - pose.lat) - damping * poseVel.vLat;
+      const aLng = stiffness * (desiredLng - pose.lng) - damping * poseVel.vLng;
+      let nextVLat = poseVel.vLat + aLat * dt;
+      let nextVLng = poseVel.vLng + aLng * dt;
+      let nLat = pose.lat + nextVLat * dt;
+      let nLng = pose.lng + nextVLng * dt;
 
-      const dLat = target.lat - nLat;
-      const dLng = target.lng - nLng;
-
-      const preciseSpring = viewerPreciseTurnWindow ? 4.6 : VIEWER_SPRING;
-      let corrLat = preciseSpring * dLat * dt;
-      let corrLng = preciseSpring * dLng * dt;
-
-      const vmag = Math.hypot(vel.vLat, vel.vLng);
-      const minVm = 8e-8;
-      if (vmag > minVm) {
-        const uLat = vel.vLat / vmag;
-        const uLng = vel.vLng / vmag;
-        const along = corrLat * uLat + corrLng * uLng;
-        if (along < 0) {
-          corrLat -= along * uLat;
-          corrLng -= along * uLng;
+      if (!viewerPreciseTurnWindow) {
+        const reverseDot = nextVLat * vel.vLat + nextVLng * vel.vLng;
+        if (reverseDot < -NEGATIVE_SPEED_EPS) {
+          const velMag2 = vel.vLat * vel.vLat + vel.vLng * vel.vLng;
+          if (velMag2 > 1e-12) {
+            const reject = reverseDot / velMag2;
+            nextVLat -= reject * vel.vLat;
+            nextVLng -= reject * vel.vLng;
+            nLat = pose.lat + nextVLat * dt;
+            nLng = pose.lng + nextVLng * dt;
+          }
         }
       }
 
-      nLat += corrLat;
-      nLng += corrLng;
-
       viewerPoseSmoothedRef.current = { lat: nLat, lng: nLng };
+      viewerPoseVelRef.current = { vLat: nextVLat, vLng: nextVLng };
 
       dd.setLatLng([nLat, nLng]);
       if (arRef.current) arRef.current.setLatLng([nLat, nLng]);
