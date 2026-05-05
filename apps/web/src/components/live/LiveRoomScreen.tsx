@@ -17,14 +17,13 @@ import { LiveVideoPlayer } from "./LiveVideoPlayer";
 import { DirectionalBetPad } from "./DirectionalBetPad";
 import { LiveDecisionStatusRibbon } from "./LiveDecisionStatusRibbon";
 import { useCountdown } from "./useCountdown";
-import { TransportModeIcon } from "./TransportModeIcon";
 import { BetPlacedPill, LiveEventToasts, useBetPill } from "./LiveEventToasts";
 import { SkillFeedbackCard, type SkillFeedbackData } from "./SkillFeedbackCard";
 import { ReplaySheet } from "./ReplaySheet";
 import { TopBar } from "@/components/layout/top-bar";
 import { BottomNav } from "@/components/layout/bottom-nav";
 import { useActiveBetRound } from "@/hooks/useActiveBetRound";
-import { betTypeV2Label, engineBetHeadline } from "@/lib/live/betting/betTypeV2Label";
+import { engineBetHeadline } from "@/lib/live/betting/betTypeV2Label";
 import {
   IconRailButton,
   IconLayers,
@@ -32,6 +31,7 @@ import {
   IconCoin,
   IconCrosshair,
 } from "./OwnerLiveControlPanel";
+import { useViewerChromeStore } from "@/stores/viewer-chrome-store";
 
 const LiveMap = dynamic(() => import("./LiveMap").then((m) => m.LiveMap), {
   ssr: false,
@@ -61,7 +61,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [routePoints, setRoutePoints] = useState<RoutePoint[]>(
     initialRoom.routePoints ?? [],
   );
-  const [betAmount, setBetAmount] = useState(10);
+  const lastStakeAmount = useViewerChromeStore((s) => s.lastStakeAmount);
   const [placingOptionId, setPlacingOptionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [mapSheetError, setMapSheetError] = useState<string | null>(null);
@@ -199,11 +199,11 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         body: JSON.stringify({
           marketId: room.currentMarket.id,
           optionId,
-          stakeAmount: betAmount,
+          stakeAmount: lastStakeAmount,
         }),
       });
       if (res.ok) {
-        flash(betAmount);
+        flash(lastStakeAmount);
         let pickedLabel: string | null = null;
         if (room.currentMarket.marketType === "city_grid") {
           const spec = room.currentMarket.cityGridSpec;
@@ -433,10 +433,12 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     ((currentMarket?.marketType === "city_grid" && !!selectedZoneId) ||
       (currentMarket?.marketType !== "city_grid" && !!selectedTargetLabel));
 
-  const sheetBetHeadline =
+  const viewerCurrentBetHeadline =
     activeBettingRound?.roundPlan != null
       ? engineBetHeadline(activeBettingRound.roundPlan.type)
-      : "Live bet";
+      : null;
+
+  const sheetBetHeadline = viewerCurrentBetHeadline ?? "Live bet";
 
   const driverRouteBadges = useMemo(
     () => drivingRouteStyleBadges(room.drivingRouteStyle, room.transportMode),
@@ -664,6 +666,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             ? lastBetOptionLabel
             : null
         }
+        currentBetHeadline={viewerCurrentBetHeadline}
         nowTick={nowTick}
       />
       <BottomNav />
@@ -737,82 +740,45 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       </div>
 
       {room.destination ? (
-        <div className="pointer-events-none absolute inset-x-0 top-[5.25rem] z-30 flex justify-center px-3">
-          <div className="pointer-events-auto flex max-w-[92%] items-center gap-2 rounded-full border border-red-400/50 bg-red-500/25 px-3 py-1 text-[11px] text-red-50 shadow-lg backdrop-blur">
-            <span className="text-base leading-none">📍</span>
-            <span className="truncate font-medium">
-              Destination: {room.destination.label}
-            </span>
+        <div className="pointer-events-none absolute inset-x-0 top-[11.75rem] z-30 flex justify-center px-3">
+          <div className="pointer-events-auto flex max-w-[90%] items-center gap-1 rounded-full border border-red-400/30 bg-red-950/40 px-2 py-0.5 text-[9px] font-medium text-red-100/92 shadow-sm backdrop-blur-sm">
+            <span className="shrink-0 text-[10px] opacity-80">📍</span>
+            <span className="min-w-0 truncate">{room.destination.label}</span>
             {destinationDistanceM != null && (
-              <span className="shrink-0 text-[10px] text-red-100/85">
+              <span className="shrink-0 opacity-80">
                 · {formatDistance(destinationDistanceM)}
-                {destinationEtaSec != null
-                  ? ` · ${formatEta(destinationEtaSec)}`
-                  : ""}
+                {destinationEtaSec != null ? ` · ${formatEta(destinationEtaSec)}` : ""}
               </span>
             )}
           </div>
         </div>
       ) : null}
 
-      {/* ── Top bar — LIVE · name · mode · $amount stepper ── */}
-      <div className="absolute inset-x-0 top-12 z-40 flex items-center gap-2 px-4 py-3 text-sm">
-        <span className="rounded bg-red-500/30 px-2 py-0.5 text-[11px] font-bold text-red-400 tracking-wide">
-          LIVE
+      {/* Corner live dot + compact actions (no stake stepper — use header stake) */}
+      <div
+        className="pointer-events-none fixed left-3 top-14 z-[62]"
+        role="status"
+        aria-label="Live broadcast"
+      >
+        <span
+          className="relative flex h-3 w-3 items-center justify-center"
+          title="Live"
+        >
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-40" />
+          <span className="relative inline-flex h-2 w-2 rounded-full bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.95)]" />
         </span>
-        {activeBettingRound?.roundPlan ? (
-          <span
-            className="rounded-full bg-violet-500/25 px-2 py-0.5 text-[10px] font-semibold text-violet-100 tracking-wide"
-            title={
-              activeBettingRound.driverRouteReason ??
-              `Priority ${activeBettingRound.roundPlan.priority}`
-            }
-          >
-            {betTypeV2Label(activeBettingRound.roundPlan.type)}
-          </span>
-        ) : null}
-        <span className="font-semibold text-white drop-shadow">
-          {room.characterName}
-        </span>
-        <span className="flex items-center gap-1.5 text-white/55 drop-shadow text-xs">
-          <TransportModeIcon mode={room.transportMode} className="h-4 w-4" />
-          {room.transportMode.replace("_", " ")}
-        </span>
-
-        <div className="ml-auto flex items-center gap-1.5">
-          {/* History / replay button */}
-          <button
-            type="button"
-            onClick={() => setShowReplay(true)}
-            className="flex h-6 w-6 items-center justify-center rounded-full bg-white/12 text-xs text-white/60 backdrop-blur active:bg-white/25"
-            title="Decision history"
-          >
-            📋
-          </button>
-
-          {/* Bet amount stepper */}
-          <button
-            type="button"
-            onClick={() => setBetAmount((n) => Math.max(1, n - 5))}
-            className="flex h-6 w-6 items-center justify-center rounded-full bg-white/15 text-sm font-bold text-white backdrop-blur active:bg-white/30"
-          >
-            −
-          </button>
-          <span className="min-w-[2.8rem] text-center text-sm font-semibold text-white drop-shadow">
-            ${betAmount}
-          </span>
-          <button
-            type="button"
-            onClick={() => setBetAmount((n) => n + 5)}
-            className="flex h-6 w-6 items-center justify-center rounded-full bg-white/15 text-sm font-bold text-white backdrop-blur active:bg-white/30"
-          >
-            +
-          </button>
-        </div>
       </div>
+      <button
+        type="button"
+        onClick={() => setShowReplay(true)}
+        className="fixed right-3 top-14 z-[62] flex h-7 w-7 items-center justify-center rounded-full bg-black/35 text-xs text-white/75 shadow-md backdrop-blur active:bg-black/50"
+        title="Decision history"
+      >
+        📋
+      </button>
 
       {mapExpanded ? (
-        <div className="absolute right-4 top-24 z-40 flex flex-col items-center gap-6">
+        <div className="absolute right-4 top-[13.5rem] z-40 flex flex-col items-center gap-5">
           <IconRailButton
             active={showZones}
             onClick={() => setShowZones((v) => !v)}
@@ -1009,7 +975,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               <div className="pointer-events-auto flex flex-col items-center">
                 <DirectionalBetPad
                   options={currentMarket?.options ?? []}
-                  betAmount={betAmount}
+                  betAmount={lastStakeAmount}
                   onBet={async (optionId, _dir) => {
                     await placeBet(optionId);
                   }}

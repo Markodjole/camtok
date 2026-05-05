@@ -1,13 +1,7 @@
 "use client";
 
 /**
- * Debug/status ribbon that surfaces the current decision-point lifecycle so
- * viewers and drivers can actually see the chain of events:
- *
- *   Free driving  →  BETS OPEN (dot appears)  →  BETS CLOSED (rails + blink)
- *                 ←  … turn passed, everything disappears …
- *
- * The ribbon is intentionally verbose; it is removed before shipping.
+ * Viewer status: route/decision lifecycle + current engine bet (dominant) + optional pick.
  */
 
 type Phase = "none" | "pending" | "active";
@@ -19,6 +13,8 @@ interface LiveDecisionStatusRibbonProps {
   turnPoint?: { lat: number; lng: number } | null;
   driverPos?: { lat: number; lng: number } | null;
   betOptionLabel?: string | null;
+  /** Engine headline, e.g. "Count stops bet" — shown most prominently when set. */
+  currentBetHeadline?: string | null;
   nowTick: number;
 }
 
@@ -44,6 +40,7 @@ export function LiveDecisionStatusRibbon({
   turnPoint,
   driverPos,
   betOptionLabel,
+  currentBetHeadline,
   nowTick,
 }: LiveDecisionStatusRibbonProps) {
   const distanceM =
@@ -59,53 +56,70 @@ export function LiveDecisionStatusRibbon({
       0,
       Math.round((Date.parse(locksAt) - nowTick) / 1000),
     );
-    mainLabel = `BETS OPEN · closes in ${secToLock}s${distLabel}`;
+    mainLabel = `Bets open · lock in ${secToLock}s${distLabel}`;
     tone = "open";
   } else if (phase === "pending") {
-    mainLabel = `Decision point detected${distLabel}`;
+    mainLabel = `Decision ahead${distLabel}`;
     tone = "open";
   } else if (phase === "active") {
     const secToTurn = revealAt
       ? Math.max(0, Math.round((Date.parse(revealAt) - nowTick) / 1000))
       : null;
-    mainLabel = `BETS CLOSED · turn in ${secToTurn ?? "?"}s${distLabel}`;
+    mainLabel = `Locked · reveal ~${secToTurn ?? "?"}s${distLabel}`;
     tone = "closed";
   }
 
-  const bg =
+  const statusBg =
     tone === "open"
-      ? "bg-emerald-500/90 text-white border-emerald-300/60"
+      ? "bg-emerald-600/85 text-white border-emerald-300/55"
       : tone === "closed"
-        ? "bg-amber-500/90 text-black border-amber-200/70"
-        : "bg-white/10 text-white/80 border-white/20";
+        ? "bg-amber-500/88 text-black border-amber-200/65"
+        : "bg-emerald-950/55 text-emerald-50/95 border-emerald-500/35";
 
   return (
-    <div className="pointer-events-none absolute left-1/2 top-12 z-[60] -translate-x-1/2">
-      <div
-        className={`flex items-center gap-2 rounded-full border px-3 py-1 text-[11px] font-semibold backdrop-blur ${bg}`}
-      >
-        <span
-          className="inline-block h-2 w-2 rounded-full"
-          style={{
-            background:
-              tone === "open"
-                ? "#22c55e"
-                : tone === "closed"
-                  ? "#f59e0b"
-                  : "#94a3b8",
-            boxShadow:
-              tone === "open"
-                ? "0 0 8px #22c55e"
-                : tone === "closed"
-                  ? "0 0 8px #f59e0b"
-                  : "none",
-          }}
-        />
-        <span className="whitespace-nowrap">{mainLabel}</span>
+    <div className="pointer-events-none absolute left-1/2 top-14 z-[60] w-full max-w-[min(94vw,22rem)] -translate-x-1/2 px-2">
+      <div className="flex flex-col items-stretch gap-2">
+        {currentBetHeadline ? (
+          <div className="rounded-2xl border border-violet-400/45 bg-violet-950/75 px-3 py-2.5 text-center shadow-lg backdrop-blur-md">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-violet-200/90">
+              Current bet
+            </div>
+            <div className="mt-0.5 text-[15px] font-bold leading-snug tracking-tight text-white">
+              {currentBetHeadline}
+            </div>
+          </div>
+        ) : null}
+
+        <div
+          className={`flex flex-wrap items-center justify-center gap-2 rounded-2xl border px-3 py-2 text-[13px] font-semibold leading-snug shadow-md backdrop-blur-md ${statusBg}`}
+        >
+          <span
+            className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
+            style={{
+              background:
+                tone === "open"
+                  ? "#4ade80"
+                  : tone === "closed"
+                    ? "#fbbf24"
+                    : "#6ee7b7",
+              boxShadow:
+                tone === "open"
+                  ? "0 0 10px #4ade80"
+                  : tone === "closed"
+                    ? "0 0 10px #fbbf24"
+                    : "0 0 8px rgba(110,231,183,0.6)",
+            }}
+          />
+          <span className="text-center">{mainLabel}</span>
+        </div>
+
         {betOptionLabel ? (
-          <span className="rounded-full bg-black/30 px-2 py-0.5 text-[10px] font-bold uppercase">
-            your pick: {betOptionLabel}
-          </span>
+          <div className="rounded-xl border border-white/20 bg-black/45 px-3 py-1.5 text-center backdrop-blur-md">
+            <span className="text-[11px] font-semibold text-white/90">
+              Your pick:{" "}
+              <span className="font-bold text-violet-200">{betOptionLabel}</span>
+            </span>
+          </div>
         ) : null}
       </div>
     </div>
