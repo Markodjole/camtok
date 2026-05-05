@@ -23,6 +23,8 @@ import { SkillFeedbackCard, type SkillFeedbackData } from "./SkillFeedbackCard";
 import { ReplaySheet } from "./ReplaySheet";
 import { TopBar } from "@/components/layout/top-bar";
 import { BottomNav } from "@/components/layout/bottom-nav";
+import { useActiveBetRound } from "@/hooks/useActiveBetRound";
+import { betTypeV2Label } from "@/lib/live/betting/betTypeV2Label";
 import {
   IconRailButton,
   IconLayers,
@@ -116,6 +118,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   } | null>(null);
   const skillFeedbackTimerRef = { current: null as ReturnType<typeof setTimeout> | null };
   const { betPill, flash } = useBetPill();
+  const { data: activeBettingRound } = useActiveBetRound(room.roomId);
 
   useEffect(() => {
     setJoyPortalReady(true);
@@ -740,6 +743,19 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         <span className="rounded bg-red-500/30 px-2 py-0.5 text-[11px] font-bold text-red-400 tracking-wide">
           LIVE
         </span>
+        {activeBettingRound ? (
+          <span
+            className="rounded bg-violet-500/25 px-1.5 py-0.5 text-[10px] font-semibold text-violet-200/95 tracking-wide"
+            title={
+              activeBettingRound.driverRouteReason ??
+              (activeBettingRound.roundPlan
+                ? `Engine V2 · priority ${activeBettingRound.roundPlan.priority}`
+                : "Engine V2 · no plan")
+            }
+          >
+            {activeBettingRound.roundPlan?.type ?? "—"}
+          </span>
+        ) : null}
         <span className="font-semibold text-white drop-shadow">
           {room.characterName}
         </span>
@@ -779,6 +795,42 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           </button>
         </div>
       </div>
+
+      {showLiveBets &&
+      activeBettingRound &&
+      activeBettingRound.eligibleRoundPlans.length > 0 ? (
+        <div
+          className={
+            room.destination
+              ? "absolute inset-x-0 top-[8.75rem] z-40 px-3"
+              : "absolute inset-x-0 top-[5.75rem] z-40 px-3"
+          }
+        >
+          <div className="rounded-xl border border-white/12 bg-black/55 px-2 py-2 shadow-lg backdrop-blur">
+            <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-white/50">
+              Engine bets
+            </div>
+            <div className="flex gap-1.5 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              {activeBettingRound.eligibleRoundPlans.map((plan) => {
+                const isPrimary = plan.type === activeBettingRound.roundPlan?.type;
+                return (
+                  <span
+                    key={plan.type}
+                    title={`Priority ${plan.priority} · ${plan.kind.replace(/_/g, " ")}`}
+                    className={
+                      isPrimary
+                        ? "shrink-0 rounded-full border border-violet-400/85 bg-violet-500/40 px-2.5 py-1 text-[10px] font-semibold text-violet-50"
+                        : "shrink-0 rounded-full border border-white/18 bg-white/8 px-2.5 py-1 text-[10px] font-semibold text-white/85"
+                    }
+                  >
+                    {betTypeV2Label(plan.type)}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {mapExpanded ? (
         <div className="absolute right-4 top-24 z-40 flex flex-col items-center gap-6">

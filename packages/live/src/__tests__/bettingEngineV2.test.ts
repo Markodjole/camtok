@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { selectBestRound, canBuildNextTurnRound } from "../betting-engine-v2/selectBestRound";
+import { listEligibleRounds, selectBestRound, canBuildNextTurnRound } from "../betting-engine-v2/selectBestRound";
 import { shouldReplaceRound } from "../betting-engine-v2/roundPolicy";
 import type { BetRoundV2 } from "../betting-engine-v2/types";
 
@@ -24,6 +24,23 @@ describe("BettingEngineV2 selectBestRound", () => {
         nextPinHasValidBranches: false,
       }),
     ).toBe(false);
+  });
+
+  it("lists all eligible MVP plans in priority order", () => {
+    const snap = {
+      distanceToTurnMeters: 120,
+      nextPinHasValidBranches: true,
+      canBuildTimeVsGoogleRound: true,
+      canBuildTurnCountRound: true,
+      canBuildEtaDriftRound: true,
+    };
+    const plans = listEligibleRounds(snap, { mvpOnly: true });
+    expect(plans.map((p) => p.type)).toEqual([
+      "next_turn",
+      "time_vs_google",
+      "eta_drift",
+    ]);
+    expect(selectBestRound(snap, { mvpOnly: true })?.type).toBe("next_turn");
   });
 
   it("falls through to time_vs_google when no turn window (MVP)", () => {

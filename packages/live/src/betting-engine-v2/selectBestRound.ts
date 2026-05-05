@@ -12,39 +12,49 @@ export function canBuildNextTurnRound(s: LiveRoundSelectionSnapshot): boolean {
   );
 }
 
+/** All round plans that pass snapshot gates, highest priority first (first entry is what {@link selectBestRound} returns). */
+export function listEligibleRounds(
+  snapshot: LiveRoundSelectionSnapshot,
+  opts?: { mvpOnly?: boolean },
+): RoundPlanV2[] {
+  const mvpOnly = opts?.mvpOnly ?? true;
+  const out: RoundPlanV2[] = [];
+
+  if (canBuildNextTurnRound(snapshot) && isMvpEnabledFor("next_turn", mvpOnly)) {
+    out.push({ type: "next_turn", priority: 100, kind: "shared_event" });
+  }
+  if (snapshot.canBuildNextZoneRound && isMvpEnabledFor("next_zone", mvpOnly)) {
+    out.push({ type: "next_zone", priority: 80, kind: "personal_snapshot" });
+  }
+  if (snapshot.canBuildZoneExitRound && isMvpEnabledFor("zone_exit_time", mvpOnly)) {
+    out.push({ type: "zone_exit_time", priority: 75, kind: "personal_snapshot" });
+  }
+  if (snapshot.canBuildZoneDurationRound && isMvpEnabledFor("zone_duration", mvpOnly)) {
+    out.push({ type: "zone_duration", priority: 74, kind: "personal_snapshot" });
+  }
+  if (snapshot.canBuildTimeVsGoogleRound && isMvpEnabledFor("time_vs_google", mvpOnly)) {
+    out.push({ type: "time_vs_google", priority: 70, kind: "personal_snapshot" });
+  }
+  if (snapshot.canBuildStopCountRound && isMvpEnabledFor("stop_count", mvpOnly)) {
+    out.push({ type: "stop_count", priority: 60, kind: "personal_snapshot" });
+  }
+  if (snapshot.canBuildTurnsBeforeZoneExitRound && isMvpEnabledFor("turns_before_zone_exit", mvpOnly)) {
+    out.push({ type: "turns_before_zone_exit", priority: 56, kind: "personal_snapshot" });
+  }
+  if (snapshot.canBuildTurnCountRound && isMvpEnabledFor("turn_count_to_pin", mvpOnly)) {
+    out.push({ type: "turn_count_to_pin", priority: 55, kind: "personal_snapshot" });
+  }
+  if (snapshot.canBuildEtaDriftRound && isMvpEnabledFor("eta_drift", mvpOnly)) {
+    out.push({ type: "eta_drift", priority: 40, kind: "personal_snapshot" });
+  }
+
+  return out;
+}
+
 export function selectBestRound(
   snapshot: LiveRoundSelectionSnapshot,
   opts?: { mvpOnly?: boolean },
 ): RoundPlanV2 | null {
-  const mvpOnly = opts?.mvpOnly ?? true;
-
-  if (canBuildNextTurnRound(snapshot) && isMvpEnabledFor("next_turn", mvpOnly)) {
-    return { type: "next_turn", priority: 100, kind: "shared_event" };
-  }
-  if (snapshot.canBuildNextZoneRound && isMvpEnabledFor("next_zone", mvpOnly)) {
-    return { type: "next_zone", priority: 80, kind: "personal_snapshot" };
-  }
-  if (snapshot.canBuildZoneExitRound && isMvpEnabledFor("zone_exit_time", mvpOnly)) {
-    return { type: "zone_exit_time", priority: 75, kind: "personal_snapshot" };
-  }
-  if (snapshot.canBuildZoneDurationRound && isMvpEnabledFor("zone_duration", mvpOnly)) {
-    return { type: "zone_duration", priority: 74, kind: "personal_snapshot" };
-  }
-  if (snapshot.canBuildTimeVsGoogleRound && isMvpEnabledFor("time_vs_google", mvpOnly)) {
-    return { type: "time_vs_google", priority: 70, kind: "personal_snapshot" };
-  }
-  if (snapshot.canBuildStopCountRound && isMvpEnabledFor("stop_count", mvpOnly)) {
-    return { type: "stop_count", priority: 60, kind: "personal_snapshot" };
-  }
-  if (snapshot.canBuildTurnsBeforeZoneExitRound && isMvpEnabledFor("turns_before_zone_exit", mvpOnly)) {
-    return { type: "turns_before_zone_exit", priority: 56, kind: "personal_snapshot" };
-  }
-  if (snapshot.canBuildTurnCountRound && isMvpEnabledFor("turn_count_to_pin", mvpOnly)) {
-    return { type: "turn_count_to_pin", priority: 55, kind: "personal_snapshot" };
-  }
-  if (snapshot.canBuildEtaDriftRound && isMvpEnabledFor("eta_drift", mvpOnly)) {
-    return { type: "eta_drift", priority: 40, kind: "personal_snapshot" };
-  }
-
-  return null;
+  const plans = listEligibleRounds(snapshot, opts);
+  return plans[0] ?? null;
 }
