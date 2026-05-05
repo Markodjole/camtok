@@ -115,6 +115,44 @@ export function cellIdForPosition(
   return cellId(row, col);
 }
 
+/** SW then NE corners in Leaflet order: `[[southLat, westLng], [northLat, eastLng]]`. */
+export type Wgs84LatLngBoundsTuple = [[number, number], [number, number]];
+
+export function latLngBoundsForGridCell(
+  spec: CityGridSpecCompact,
+  row: number,
+  col: number,
+): Wgs84LatLngBoundsTuple {
+  const swLat = spec.swLat + row * spec.dLat;
+  const swLng = spec.swLng + col * spec.dLng;
+  const neLat = spec.swLat + (row + 1) * spec.dLat;
+  const neLng = spec.swLng + (col + 1) * spec.dLng;
+  return [
+    [swLat, swLng],
+    [neLat, neLng],
+  ];
+}
+
+/** Up to 3×3 around `(row,col)`, clipped to the grid — pick next zone / nearby cells. */
+export function latLngBoundsForGridNeighborhood3x3(
+  spec: CityGridSpecCompact,
+  row: number,
+  col: number,
+): Wgs84LatLngBoundsTuple {
+  const r0 = Math.max(0, row - 1);
+  const r1 = Math.min(spec.nRows - 1, row + 1);
+  const c0 = Math.max(0, col - 1);
+  const c1 = Math.min(spec.nCols - 1, col + 1);
+  const swLat = spec.swLat + r0 * spec.dLat;
+  const swLng = spec.swLng + c0 * spec.dLng;
+  const neLat = spec.swLat + (r1 + 1) * spec.dLat;
+  const neLng = spec.swLng + (c1 + 1) * spec.dLng;
+  return [
+    [swLat, swLng],
+    [neLat, neLng],
+  ];
+}
+
 const GRID_ID = /^grid:r(\d+):c(\d+)$/;
 
 export function parseGridOptionId(

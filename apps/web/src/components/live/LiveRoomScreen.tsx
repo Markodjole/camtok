@@ -5,8 +5,11 @@ import { usePathname } from "next/navigation";
 import { createPortal } from "react-dom";
 import {
   type CityGridSpecCompact,
+  cellIdForPosition,
   cellLabel,
   enumerateGridCells,
+  latLngBoundsForGridCell,
+  latLngBoundsForGridNeighborhood3x3,
   parseGridOptionId,
 } from "@/lib/live/grid/cityGrid500";
 import { drivingRouteStyleBadges } from "@/lib/live/routing/drivingRouteStyle";
@@ -35,7 +38,6 @@ import {
   IconCrosshair,
 } from "./OwnerLiveControlPanel";
 import { useViewerChromeStore } from "@/stores/viewer-chrome-store";
-import { mapProfile } from "./LiveMap";
 
 const LiveMap = dynamic(() => import("./LiveMap").then((m) => m.LiveMap), {
   ssr: false,
@@ -325,33 +327,45 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
   const effectiveShowZones = zoneEngineBetActive || showZones;
 
-  const viewerFollowZoomForBet = useMemo(() => {
-    if (currentMarket?.marketType !== "city_grid" || zones.length === 0) return null;
-    const t = activeBettingRound?.roundPlan?.type;
-    const z = mapProfile(room.transportMode, "viewer").zoom;
-    const wide = () => Math.max(8.75, z - 6.75);
-    const inZone = () => Math.max(10.25, z - 3.75);
-    if (
-      t === "zone_exit_time" ||
-      t === "zone_duration" ||
-      t === "turns_before_zone_exit" ||
-      t === "stop_count"
-    ) {
-      return inZone();
-    }
-    return wide();
-  }, [
-    activeBettingRound?.roundPlan?.type,
-    currentMarket?.marketType,
-    room.transportMode,
-    zones.length,
-  ]);
-
   const zonesVisualStyleForBet = zoneEngineBetActive ? "muted" : "default";
 
   const PASSED_HIDE_PIN_LINE_M = 12;
   const routeLast =
     routePoints.length > 0 ? routePoints[routePoints.length - 1]! : null;
+
+  const viewerFollowLatLngBoundsForBet = useMemo(() => {
+    if (
+      currentMarket?.marketType !== "city_grid" ||
+      !cityGridSpec ||
+      !routeLast
+    ) {
+      return null;
+    }
+    const t = activeBettingRound?.roundPlan?.type;
+    const cell = cellIdForPosition(
+      cityGridSpec,
+      routeLast.lat,
+      routeLast.lng,
+    );
+    if (!cell) return null;
+    const p = parseGridOptionId(cell);
+    if (!p) return null;
+    const inZone =
+      t === "zone_exit_time" ||
+      t === "zone_duration" ||
+      t === "turns_before_zone_exit" ||
+      t === "stop_count";
+    if (inZone) {
+      return latLngBoundsForGridCell(cityGridSpec, p.row, p.col);
+    }
+    return latLngBoundsForGridNeighborhood3x3(cityGridSpec, p.row, p.col);
+  }, [
+    activeBettingRound?.roundPlan?.type,
+    cityGridSpec,
+    currentMarket?.marketType,
+    routeLast?.lat,
+    routeLast?.lng,
+  ]);
 
   const passedMarketTurn =
     !!viewerTurnTarget &&
@@ -801,7 +815,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             destinationRoute={destinationRoute}
             destinationRouteLabel="Google suggested route"
             driverRouteBadges={driverRouteBadges}
-            viewerFollowZoom={viewerFollowZoomForBet}
+            viewerFollowLatLngBounds={viewerFollowLatLngBoundsForBet}
             onZoneSelect={(id) => {
               setSelectedZoneId(id);
               if (id) setSelectedCheckpointId(null);
@@ -957,7 +971,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               destinationRoute={destinationRoute}
               destinationRouteLabel="Google suggested route"
               driverRouteBadges={driverRouteBadges}
-              viewerFollowZoom={viewerFollowZoomForBet}
+              viewerFollowLatLngBounds={viewerFollowLatLngBoundsForBet}
             />
             {routePoints.length === 0 && (
               <div className="absolute inset-0 flex items-center justify-center bg-black/30 text-[9px] text-white/70">

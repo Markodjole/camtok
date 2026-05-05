@@ -99,10 +99,15 @@ export interface LiveMapProps {
   /** Short labels derived from `driving_route_style` (shown to viewers & streamer). */
   driverRouteBadges?: string[] | null;
   /**
-   * Viewer + followMode: fixed zoom level for the camera-follow loop (grid pick
-   * vs in-zone bets). Null keeps previous behavior (preserve zoom after first frame).
+   * Viewer + followMode: fixed zoom when not using `viewerFollowLatLngBounds`.
    */
   viewerFollowZoom?: number | null;
+  /**
+   * Viewer + followMode: fit map to this WGS84 bounds when set
+   * `[[southLat, westLng], [northLat, eastLng]]` (Leaflet order). Overrides
+   * `viewerFollowZoom` for framing (zoom is taken from `fitBounds`).
+   */
+  viewerFollowLatLngBounds?: [[number, number], [number, number]] | null;
   /** Muted polygons for engine-highlighted zone overlays. */
   zonesVisualStyle?: "default" | "muted";
 }
@@ -205,6 +210,7 @@ export function LiveMap({
   destinationRouteLabel = "Google suggested route",
   driverRouteBadges = null,
   viewerFollowZoom = null,
+  viewerFollowLatLngBounds = null,
   zonesVisualStyle = "default",
 }: LiveMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -244,6 +250,8 @@ export function LiveMap({
   const routePointsLenRef = useRef(0);
   const followModeRef = useRef(followMode);
   const viewerFollowZoomRef = useRef<number | null>(null);
+  /** Zoom implied by last `fitBounds` when `viewerFollowLatLngBounds` is used. */
+  const viewerBoundsZoomRef = useRef<number | null>(null);
   const smoothHeadingRef = useRef<number>(0);
   /** CSS wrapper rotation target (degrees); `-vehicleHeading`. Viewer RAF eases toward this. */
   const viewerMapRotationTargetRef = useRef<number>(0);
@@ -267,11 +275,56 @@ export function LiveMap({
   useEffect(() => {
     const m = mapRef.current;
     if (!m || streamer || !followMode) return;
+    if (viewerFollowLatLngBounds != null) return;
     if (viewerFollowZoom == null || !Number.isFinite(viewerFollowZoom)) return;
     const c = m.getCenter();
     if (Math.abs(m.getZoom() - viewerFollowZoom) < 0.06) return;
     m.setView(c, viewerFollowZoom, { animate: true, duration: 0.45 });
-  }, [viewerFollowZoom, followMode, streamer]);
+  }, [viewerFollowZoom, viewerFollowLatLngBounds, followMode, streamer]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const m = mapRef.current;
+      if (!m || streamer || !followMode) {
+        viewerBoundsZoomRef.current = null;
+        return;
+      }
+      const raw = viewerFollowLatLngBounds;
+      if (
+        !raw ||
+        raw.length !== 2 ||
+        raw[0].length !== 2 ||
+        raw[1].length !== 2
+      ) {
+        viewerBoundsZoomRef.current = null;
+        return;
+      }
+      const L = (await import("leaflet")).default;
+      if (cancelled) return;
+      const bounds = L.latLngBounds(
+        [raw[0][0], raw[0][1]] as [number, number],
+        [raw[1][0], raw[1][1]] as [number, number],
+      );
+      if (!bounds.isValid()) {
+        viewerBoundsZoomRef.current = null;
+        return;
+      }
+      const heightM = (raw[1][0] - raw[0][0]) * 111_320;
+      const padPx = heightM < 700 ? 40 : 22;
+      const maxZ = heightM < 700 ? 19 : 18.25;
+      m.invalidateSize(false);
+      m.fitBounds(bounds, {
+        padding: [padPx, padPx],
+        maxZoom: maxZ,
+        animate: false,
+      });
+      viewerBoundsZoomRef.current = m.getZoom();
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [viewerFollowLatLngBounds, followMode, streamer, mapReady]);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -627,7 +680,9 @@ export function LiveMap({
       const pos: [number, number] = [last.lat, last.lng];
       const latlngs: [number, number][] = routePoints.map((p) => [p.lat, p.lng]);
       const isFirstFollowFrame = !hasAppliedInitialZoomRef.current;
-      const baseZoom = viewerFollowZoom ?? profile.zoom;
+      const baseZoom = viewerFollowLatLngBounds
+        ? viewerBoundsZoomRef.current ?? profile.zoom
+        : viewerFollowZoom ?? profile.zoom;
       const targetZoom = interactive
         ? hasAppliedInitialZoomRef.current
           ? m.getZoom()
@@ -717,6 +772,7 @@ export function LiveMap({
     mapReady,
     profile.zoom,
     viewerFollowZoom,
+    viewerFollowLatLngBounds,
     profile.lineWeight,
     rotateWithHeading,
     followMode,
@@ -1015,7 +1071,10 @@ export function LiveMap({
 
       dd.setLatLng([nLat, nLng]);
       if (arRef.current) arRef.current.setLatLng([nLat, nLng]);
-      const z = viewerFollowZoomRef.current ?? mm.getZoom();
+      const z =
+        viewerBoundsZoomRef.current ??
+        viewerFollowZoomRef.current ??
+        mm.getZoom();
       mm.setView([nLat, nLng], z, { animate: false });
 
       viewerSmoothRafRef.current = requestAnimationFrame(loop);
@@ -1025,7 +1084,7 @@ export function LiveMap({
     viewerSmoothRafRef.current = requestAnimationFrame(loop);
 
     return cancelViewerLoop;
-  }, [followMode, streamer, routePoints.length, driverPins, viewerFollowZoom]);
+  }, [followMode, streamer, routePoints.length, driverPins, viewerFollowZoom, viewerFollowLatLngBounds]);
 
   return (
     <div className="relative h-full w-full" style={{ background: "rgba(10,10,20,0.4)" }}>
