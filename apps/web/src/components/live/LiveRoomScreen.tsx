@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { usePathname } from "next/navigation";
 import { createPortal } from "react-dom";
 import {
   type CityGridSpecCompact,
@@ -20,6 +21,7 @@ import { useCountdown } from "./useCountdown";
 import { BetPlacedPill, LiveEventToasts, useBetPill } from "./LiveEventToasts";
 import { SkillFeedbackCard, type SkillFeedbackData } from "./SkillFeedbackCard";
 import { ReplaySheet } from "./ReplaySheet";
+import { LiveViewerStakePicker } from "./LiveViewerStakePicker";
 import { TopBar } from "@/components/layout/top-bar";
 import { BottomNav } from "@/components/layout/bottom-nav";
 import { useActiveBetRound } from "@/hooks/useActiveBetRound";
@@ -57,6 +59,9 @@ type MapCheckpoint = {
 };
 
 export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
+  const pathname = usePathname();
+  const immersiveLiveRoom = (pathname ?? "").startsWith("/live/rooms/");
+
   const [room, setRoom] = useState<LiveFeedRow>(initialRoom);
   const [routePoints, setRoutePoints] = useState<RoutePoint[]>(
     initialRoom.routePoints ?? [],
@@ -330,30 +335,36 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           ? { lat: driverPins[0].lat, lng: driverPins[0].lng }
           : null);
 
-  /** Server locks on `live_betting_markets.turn_point_*` — mirror that for UI + joystick. */
-  const bettingDistanceTarget =
-    currentMarket?.marketType !== "city_grid" && viewerTurnTarget && currentMarket
-      ? { lat: viewerTurnTarget.lat, lng: viewerTurnTarget.lng }
-      : viewerDecisionLatLng;
-
-  // Distance gate: betting closes when the vehicle is within LIVE_BET_LOCK_DISTANCE_M
-  // of the market turn point (same as tick + placeLiveBet).
+  // Distance gate: only when market defines a turn point (matches server placeLiveBet).
   const isDistanceLocked =
     currentMarket?.marketType === "city_grid"
       ? false
       : (() => {
+          if (
+            currentMarket?.turnPointLat == null ||
+            currentMarket?.turnPointLng == null
+          ) {
+            return false;
+          }
           const last = routePoints[routePoints.length - 1];
-          if (!last || !bettingDistanceTarget) return false;
+          if (!last) return false;
           return (
             metersBetween(
               { lat: last.lat, lng: last.lng },
-              bettingDistanceTarget,
+              {
+                lat: currentMarket.turnPointLat,
+                lng: currentMarket.turnPointLng,
+              },
             ) <= LIVE_BET_LOCK_DISTANCE_M
           );
         })();
   const isTimeLocked = currentMarket
-    ? new Date(currentMarket.locksAt) <= new Date()
-    : true;
+    ? (() => {
+        const t = Date.parse(currentMarket.locksAt);
+        if (!Number.isFinite(t)) return false;
+        return t <= Date.now();
+      })()
+    : false;
   const isLocked = isTimeLocked || isDistanceLocked;
 
   /** Ribbon: open vs closed from lock distance (+ time safety net), not revealAt flicker. */
@@ -364,8 +375,12 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     const last = routePoints[routePoints.length - 1];
     if (!last) return "pending";
     const distBet =
-      bettingDistanceTarget != null
-        ? metersBetween(last, bettingDistanceTarget)
+      currentMarket?.turnPointLat != null &&
+      currentMarket?.turnPointLng != null
+        ? metersBetween(last, {
+            lat: currentMarket.turnPointLat,
+            lng: currentMarket.turnPointLng,
+          })
         : Number.POSITIVE_INFINITY;
     const timeClosed =
       !!currentMarket &&
@@ -670,7 +685,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
   return (
     <div className="relative h-[100dvh] w-full overflow-hidden bg-black">
-      <TopBar />
+      {immersiveLiveRoom ? null : <TopBar />}
+      {immersiveLiveRoom ? <LiveViewerStakePicker /> : null}
       <LiveDecisionStatusRibbon
         phase={viewerRailPhase}
         locksAt={currentMarket?.locksAt ?? null}
@@ -756,7 +772,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       </div>
 
       {room.destination ? (
-        <div className="pointer-events-none absolute inset-x-0 top-[11.75rem] z-30 flex justify-center px-3">
+        <div className="pointer-events-none absolute inset-x-0 top-[6.75rem] z-30 flex justify-center px-3">
           <div className="pointer-events-auto flex max-w-[90%] items-center gap-1 rounded-full border border-red-400/30 bg-red-950/40 px-2 py-0.5 text-[9px] font-medium text-red-100/92 shadow-sm backdrop-blur-sm">
             <span className="shrink-0 text-[10px] opacity-80">📍</span>
             <span className="min-w-0 truncate">{room.destination.label}</span>
@@ -772,7 +788,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
       {/* Corner live dot + compact actions (no stake stepper — use header stake) */}
       <div
-        className="pointer-events-none fixed left-3 top-14 z-[62]"
+        className="pointer-events-none fixed left-3 top-3 z-[62]"
         role="status"
         aria-label="Live broadcast"
       >
@@ -787,14 +803,14 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       <button
         type="button"
         onClick={() => setShowReplay(true)}
-        className="fixed right-3 top-14 z-[62] flex h-7 w-7 items-center justify-center rounded-full bg-black/35 text-xs text-white/75 shadow-md backdrop-blur active:bg-black/50"
+        className="fixed right-3 top-3 z-[62] flex h-7 w-7 items-center justify-center rounded-full bg-black/35 text-xs text-white/75 shadow-md backdrop-blur active:bg-black/50"
         title="Decision history"
       >
         📋
       </button>
 
       {mapExpanded ? (
-        <div className="absolute right-4 top-[13.5rem] z-40 flex flex-col items-center gap-5">
+        <div className="absolute right-4 top-[10.5rem] z-40 flex flex-col items-center gap-5">
           <IconRailButton
             active={showZones}
             onClick={() => setShowZones((v) => !v)}

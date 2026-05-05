@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Viewer status: route/decision lifecycle + current engine bet (dominant) + optional pick.
+ * Viewer status: compact engine bet label + plain-text route status (no heavy pills).
  */
 
 type Phase = "none" | "pending" | "active";
@@ -13,7 +13,6 @@ interface LiveDecisionStatusRibbonProps {
   turnPoint?: { lat: number; lng: number } | null;
   driverPos?: { lat: number; lng: number } | null;
   betOptionLabel?: string | null;
-  /** Engine headline, e.g. "Count stops bet" — shown most prominently when set. */
   currentBetHeadline?: string | null;
   nowTick: number;
 }
@@ -46,79 +45,70 @@ export function LiveDecisionStatusRibbon({
   const distanceM =
     turnPoint && driverPos ? haversineMeters(driverPos, turnPoint) : null;
   const distLabel =
-    distanceM != null ? ` · ${Math.round(distanceM)} m ahead` : "";
+    distanceM != null ? ` · ${Math.round(distanceM)} m` : "";
 
   let mainLabel = "Free driving · no decision yet";
-  let tone: "neutral" | "open" | "closed" | "done" = "neutral";
+  let dotTone: "muted" | "open" | "closed" = "muted";
 
   if (phase === "pending" && locksAt) {
     const secToLock = Math.max(
       0,
       Math.round((Date.parse(locksAt) - nowTick) / 1000),
     );
-    mainLabel = `Bets open · lock in ${secToLock}s${distLabel}`;
-    tone = "open";
+    mainLabel = `Bets open · lock ${secToLock}s${distLabel}`;
+    dotTone = "open";
   } else if (phase === "pending") {
     mainLabel = `Decision ahead${distLabel}`;
-    tone = "open";
+    dotTone = "open";
   } else if (phase === "active") {
     const secToTurn = revealAt
       ? Math.max(0, Math.round((Date.parse(revealAt) - nowTick) / 1000))
       : null;
-    mainLabel = `Locked · reveal ~${secToTurn ?? "?"}s${distLabel}`;
-    tone = "closed";
+    mainLabel = `Locked · ~${secToTurn ?? "?"}s${distLabel}`;
+    dotTone = "closed";
   }
 
-  const statusBg =
-    tone === "open"
-      ? "bg-emerald-600/85 text-white border-emerald-300/55"
-      : tone === "closed"
-        ? "bg-amber-500/88 text-black border-amber-200/65"
-        : "bg-emerald-950/55 text-emerald-50/95 border-emerald-500/35";
+  const dotColor =
+    dotTone === "open"
+      ? "#4ade80"
+      : dotTone === "closed"
+        ? "#fbbf24"
+        : "rgba(148,163,184,0.95)";
 
   return (
-    <div className="pointer-events-none absolute left-1/2 top-14 z-[60] w-full max-w-[min(94vw,22rem)] -translate-x-1/2 px-2">
-      <div className="flex flex-col items-stretch gap-2">
+    <div className="pointer-events-none absolute left-1/2 top-3 z-[60] w-full max-w-[min(94vw,20rem)] -translate-x-1/2 px-2">
+      <div className="flex flex-col items-center gap-1">
         {currentBetHeadline ? (
-          <div className="rounded-2xl border border-violet-400/45 bg-violet-950/75 px-3 py-2.5 text-center shadow-lg backdrop-blur-md">
-            <div className="text-[10px] font-bold uppercase tracking-wider text-violet-200/90">
+          <div className="text-center drop-shadow-md">
+            <div className="text-[8px] font-semibold uppercase tracking-wide text-violet-200/85">
               Current bet
             </div>
-            <div className="mt-0.5 text-[15px] font-bold leading-snug tracking-tight text-white">
+            <div className="text-[11px] font-bold leading-tight text-white">
               {currentBetHeadline}
             </div>
           </div>
         ) : null}
 
-        <div
-          className={`flex flex-wrap items-center justify-center gap-2 rounded-2xl border px-3 py-2 text-[13px] font-semibold leading-snug shadow-md backdrop-blur-md ${statusBg}`}
-        >
+        <div className="flex max-w-full items-center justify-center gap-1 px-0.5 text-[10px] font-medium leading-snug text-white drop-shadow-md [text-shadow:0_1px_2px_rgba(0,0,0,0.85)]">
           <span
-            className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
+            className="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full"
             style={{
-              background:
-                tone === "open"
-                  ? "#4ade80"
-                  : tone === "closed"
-                    ? "#fbbf24"
-                    : "#6ee7b7",
+              background: dotColor,
               boxShadow:
-                tone === "open"
-                  ? "0 0 10px #4ade80"
-                  : tone === "closed"
-                    ? "0 0 10px #fbbf24"
-                    : "0 0 8px rgba(110,231,183,0.6)",
+                dotTone === "open"
+                  ? "0 0 6px #4ade80"
+                  : dotTone === "closed"
+                    ? "0 0 6px #fbbf24"
+                    : "none",
             }}
           />
           <span className="text-center">{mainLabel}</span>
         </div>
 
         {betOptionLabel ? (
-          <div className="rounded-xl border border-white/20 bg-black/45 px-3 py-1.5 text-center backdrop-blur-md">
-            <span className="text-[11px] font-semibold text-white/90">
-              Your pick:{" "}
-              <span className="font-bold text-violet-200">{betOptionLabel}</span>
-            </span>
+          <div className="text-[9px] font-medium leading-tight text-white/90 drop-shadow-md [text-shadow:0_1px_2px_rgba(0,0,0,0.8)]">
+            Pick:{" "}
+            <span className="font-bold text-violet-200">{betOptionLabel}</span>
           </div>
         ) : null}
       </div>

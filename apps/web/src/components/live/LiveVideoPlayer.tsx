@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { Volume2, VolumeX } from "lucide-react";
 import { startViewerP2p } from "./liveP2pBroadcast";
 
 /**
@@ -97,9 +98,15 @@ export function LiveVideoPlayer({
         <button
           type="button"
           onClick={() => setSoundOn((prev) => !prev)}
-          className="absolute bottom-2 right-2 z-10 rounded-md bg-black/45 px-2 py-1 text-[10px] text-white/90 backdrop-blur-sm"
+          className="absolute bottom-2 right-2 z-10 flex h-8 w-8 items-center justify-center rounded-full border border-white/15 bg-black/50 text-white/90 shadow-md backdrop-blur-sm active:bg-black/70"
+          title={soundOn ? "Mute" : "Sound on"}
+          aria-label={soundOn ? "Mute stream" : "Unmute stream"}
         >
-          {soundOn ? "Sound on" : "Sound off"}
+          {soundOn ? (
+            <Volume2 className="h-4 w-4" />
+          ) : (
+            <VolumeX className="h-4 w-4" />
+          )}
         </button>
       ) : null}
       {signalError ? (
