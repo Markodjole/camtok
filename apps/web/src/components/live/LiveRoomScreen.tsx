@@ -427,11 +427,27 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const selectedCheckpoint = checkpoints.find((c) => c.id === selectedCheckpointId) ?? null;
   const selectedTargetLabel = selectedZone?.name ?? selectedCheckpoint?.name ?? null;
 
-  const mapBetSheetOpen =
+  /** Subtitle for directional sheet — zone/checkpoint name, else selected market option. */
+  const directionalPickLabel =
+    selectedTargetLabel ??
+    (currentMarket && currentMarket.marketType !== "city_grid"
+      ? (currentMarket.options?.find((o) => o.id === selectedMapOptionId)?.shortLabel ??
+          currentMarket.options?.find((o) => o.id === selectedMapOptionId)?.label ??
+          null)
+      : null);
+
+  const [betPanelDismissed, setBetPanelDismissed] = useState(false);
+  useEffect(() => {
+    setBetPanelDismissed(false);
+  }, [currentMarket?.id, mapExpanded]);
+
+  const showBetBottomSheet =
     mapExpanded &&
     showLiveBets &&
-    ((currentMarket?.marketType === "city_grid" && !!selectedZoneId) ||
-      (currentMarket?.marketType !== "city_grid" && !!selectedTargetLabel));
+    currentMarket != null &&
+    !betPanelDismissed;
+
+  const mapBetSheetOpen = showBetBottomSheet;
 
   const viewerCurrentBetHeadline =
     activeBettingRound?.roundPlan != null
@@ -899,7 +915,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       {/* ── Bottom gradient scrim ────────────────────────── */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-44 bg-gradient-to-t from-black/70 to-transparent" />
 
-      {mapExpanded && showLiveBets && currentMarket?.marketType === "city_grid" && selectedZoneId ? (
+      {showBetBottomSheet && currentMarket?.marketType === "city_grid" ? (
         <MapSelectionBottomSheet
           betHeadline={sheetBetHeadline}
           selectionDetail={
@@ -918,6 +934,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             setSelectedZoneId(null);
             setSelectedCheckpointId(null);
             setMapSheetError(null);
+            setBetPanelDismissed(true);
           }}
           onPlaceBet={async () => {
             if (!selectedZoneId) return;
@@ -931,14 +948,13 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           gridMode
         />
       ) : null}
-      {mapExpanded &&
-      showLiveBets &&
-      currentMarket?.marketType !== "city_grid" &&
-      selectedTargetLabel ? (
+      {showBetBottomSheet && currentMarket?.marketType !== "city_grid" ? (
         <MapSelectionBottomSheet
           betHeadline={sheetBetHeadline}
           selectionDetail={
-            selectedTargetLabel ? `At · ${selectedTargetLabel}` : null
+            directionalPickLabel
+              ? `Pick · ${directionalPickLabel}`
+              : "Use the pad or the list to choose"
           }
           marketOptions={currentMarket?.options ?? []}
           selectedOptionId={selectedMapOptionId}
@@ -951,6 +967,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             setSelectedZoneId(null);
             setSelectedCheckpointId(null);
             setMapSheetError(null);
+            setBetPanelDismissed(true);
           }}
           onPlaceBet={async () => {
             if (!selectedMapOptionId) return;
@@ -962,6 +979,19 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             }
           }}
         />
+      ) : null}
+
+      {betPanelDismissed &&
+      mapExpanded &&
+      showLiveBets &&
+      currentMarket != null ? (
+        <button
+          type="button"
+          onClick={() => setBetPanelDismissed(false)}
+          className="fixed bottom-[calc(4.75rem+env(safe-area-inset-bottom,0px))] left-1/2 z-[199] -translate-x-1/2 rounded-full border border-violet-400/35 bg-violet-950/75 px-4 py-2 text-[11px] font-semibold text-violet-100 shadow-lg backdrop-blur-md active:bg-violet-900/85"
+        >
+          Show bet card
+        </button>
       ) : null}
 
       {joyPortalReady && showJoystick
@@ -1058,8 +1088,8 @@ function MapSelectionBottomSheet({
 }) {
   const sorted = [...marketOptions].sort((a, b) => a.displayOrder - b.displayOrder);
   return (
-    <div className="absolute inset-x-0 bottom-0 z-[65] px-3 pb-[calc(4.5rem+env(safe-area-inset-bottom,0px))]">
-      <div className="rounded-xl border border-white/10 bg-black/40 p-2 text-white shadow-lg backdrop-blur-md">
+    <div className="pointer-events-none fixed inset-x-0 bottom-0 z-[200] px-3 pb-[calc(4.75rem+env(safe-area-inset-bottom,0px))]">
+      <div className="pointer-events-auto rounded-xl border border-white/10 bg-black/40 p-2 text-white shadow-lg backdrop-blur-md">
         <div className="mb-1 flex items-start gap-2">
           <div className="min-w-0 flex-1">
             <div className="text-[11px] font-semibold leading-snug text-white">
