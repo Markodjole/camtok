@@ -98,6 +98,13 @@ export interface LiveMapProps {
   destinationRouteLabel?: string | null;
   /** Short labels derived from `driving_route_style` (shown to viewers & streamer). */
   driverRouteBadges?: string[] | null;
+  /**
+   * Viewer + followMode: fixed zoom level for the camera-follow loop (grid pick
+   * vs in-zone bets). Null keeps previous behavior (preserve zoom after first frame).
+   */
+  viewerFollowZoom?: number | null;
+  /** Muted polygons for engine-highlighted zone overlays. */
+  zonesVisualStyle?: "default" | "muted";
 }
 
 const C = {
@@ -118,7 +125,7 @@ function headingDivIcon(
   return L.divIcon({ html, className: "camtok-h", iconSize: [52, 52], iconAnchor: [26, 26] });
 }
 
-function mapProfile(
+export function mapProfile(
   mode?: string,
   role: "streamer" | "viewer" = "viewer",
 ): {
@@ -197,6 +204,8 @@ export function LiveMap({
   destinationRoute = null,
   destinationRouteLabel = "Google suggested route",
   driverRouteBadges = null,
+  viewerFollowZoom = null,
+  zonesVisualStyle = "default",
 }: LiveMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<import("leaflet").Map | null>(null);
@@ -234,6 +243,7 @@ export function LiveMap({
   const viewerLoopLastTsRef = useRef<number>(0);
   const routePointsLenRef = useRef(0);
   const followModeRef = useRef(followMode);
+  const viewerFollowZoomRef = useRef<number | null>(null);
   const smoothHeadingRef = useRef<number>(0);
   /** CSS wrapper rotation target (degrees); `-vehicleHeading`. Viewer RAF eases toward this. */
   const viewerMapRotationTargetRef = useRef<number>(0);
@@ -246,12 +256,22 @@ export function LiveMap({
   }, [onUserInteract]);
   routePointsLenRef.current = routePoints.length;
   followModeRef.current = followMode;
+  viewerFollowZoomRef.current = viewerFollowZoom ?? null;
   rotateWithHeadingRef.current = rotateWithHeading;
   const streamer = audienceRole === "streamer";
   const showHistoryPath = true;
   const smoothMotion = true;
   const col = streamer ? C.streamer : C.viewer;
   const profile = mapProfile(transportMode, streamer ? "streamer" : "viewer");
+
+  useEffect(() => {
+    const m = mapRef.current;
+    if (!m || streamer || !followMode) return;
+    if (viewerFollowZoom == null || !Number.isFinite(viewerFollowZoom)) return;
+    const c = m.getCenter();
+    if (Math.abs(m.getZoom() - viewerFollowZoom) < 0.06) return;
+    m.setView(c, viewerFollowZoom, { animate: true, duration: 0.45 });
+  }, [viewerFollowZoom, followMode, streamer]);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -359,13 +379,28 @@ export function LiveMap({
               skipped++;
               return;
             }
+            const muted = zonesVisualStyle === "muted";
             const poly = L.polygon(latlngs, {
-              color: selected ? "#ffffff" : color,
-              weight: selected ? 5 : 4,
-              fillColor: color,
-              fillOpacity: isActive ? (selected ? 0.55 : 0.4) : 0.15,
-              opacity: 1,
-              dashArray: selected ? undefined : "6 4",
+              color: muted
+                ? selected
+                  ? "rgba(255,255,255,0.75)"
+                  : "rgba(148,163,184,0.5)"
+                : selected
+                  ? "#ffffff"
+                  : color,
+              weight: muted ? (selected ? 2 : 1) : selected ? 5 : 4,
+              fillColor: muted ? "rgba(148,163,184,0.55)" : color,
+              fillOpacity: muted
+                ? selected
+                  ? 0.12
+                  : isActive
+                    ? 0.07
+                    : 0.04
+                : isActive
+                  ? (selected ? 0.55 : 0.4)
+                  : 0.15,
+              opacity: muted ? 0.9 : 1,
+              dashArray: selected ? undefined : muted ? "5 4" : "6 4",
             });
             if (interactive && onZoneSelect) {
               poly.on("click", () => onZoneSelect(selected ? null : zone.id));
@@ -388,7 +423,7 @@ export function LiveMap({
     return () => {
       aborted = true;
     };
-  }, [zones, selectedZoneId, showZones, interactive, onZoneSelect, mapReady, audienceRole]);
+  }, [zones, selectedZoneId, showZones, interactive, onZoneSelect, mapReady, audienceRole, zonesVisualStyle]);
 
   useEffect(() => {
     const group = checkpointLayerRef.current;
@@ -592,11 +627,12 @@ export function LiveMap({
       const pos: [number, number] = [last.lat, last.lng];
       const latlngs: [number, number][] = routePoints.map((p) => [p.lat, p.lng]);
       const isFirstFollowFrame = !hasAppliedInitialZoomRef.current;
+      const baseZoom = viewerFollowZoom ?? profile.zoom;
       const targetZoom = interactive
         ? hasAppliedInitialZoomRef.current
           ? m.getZoom()
-          : profile.zoom
-        : profile.zoom;
+          : baseZoom
+        : baseZoom;
 
       if (showHistoryPath) {
         if (plRef.current) {
@@ -680,6 +716,7 @@ export function LiveMap({
     col.r,
     mapReady,
     profile.zoom,
+    viewerFollowZoom,
     profile.lineWeight,
     rotateWithHeading,
     followMode,
@@ -978,7 +1015,8 @@ export function LiveMap({
 
       dd.setLatLng([nLat, nLng]);
       if (arRef.current) arRef.current.setLatLng([nLat, nLng]);
-      mm.setView([nLat, nLng], mm.getZoom(), { animate: false });
+      const z = viewerFollowZoomRef.current ?? mm.getZoom();
+      mm.setView([nLat, nLng], z, { animate: false });
 
       viewerSmoothRafRef.current = requestAnimationFrame(loop);
     };
@@ -987,7 +1025,7 @@ export function LiveMap({
     viewerSmoothRafRef.current = requestAnimationFrame(loop);
 
     return cancelViewerLoop;
-  }, [followMode, streamer, routePoints.length, driverPins]);
+  }, [followMode, streamer, routePoints.length, driverPins, viewerFollowZoom]);
 
   return (
     <div className="relative h-full w-full" style={{ background: "rgba(10,10,20,0.4)" }}>
@@ -1038,18 +1076,27 @@ export function LiveMap({
         </div>
       )}
       <div className="pointer-events-none absolute left-2 right-2 top-2 z-[2000] flex flex-wrap items-start justify-between gap-2">
-        <div className="flex flex-wrap gap-1">
+        <div className="flex flex-wrap items-center gap-1">
           {destinationRoute && destinationRoute.length > 1 ? (
-            <span className="rounded-full border border-red-300/60 bg-red-500/80 px-2 py-1 text-[10px] font-semibold tracking-wide text-white shadow-md">
-              {destinationRouteLabel ?? "Google suggested route"}
+            <span
+              className="inline-flex items-center gap-1 rounded-md border border-red-400/20 bg-black/30 px-1 py-px text-[7px] font-medium text-white/45 shadow-none backdrop-blur-[2px]"
+              title={destinationRouteLabel ?? "Suggested path to destination on map"}
+            >
+              <span className="whitespace-nowrap">Google Maps</span>
+              <span
+                className="select-none font-mono text-[8px] font-semibold leading-none tracking-tight text-red-400/70"
+                aria-hidden
+              >
+                − − −
+              </span>
             </span>
           ) : null}
         </div>
-        <div className="flex max-w-[min(92%,280px)] flex-wrap justify-end gap-1">
+        <div className="flex max-w-[min(92%,280px)] flex-wrap justify-end gap-0.5 opacity-85">
           {(driverRouteBadges ?? []).map((label) => (
             <span
               key={label}
-              className="rounded-full border border-sky-300/55 bg-sky-950/88 px-2 py-0.5 text-[9px] font-semibold leading-tight text-sky-50 shadow-md backdrop-blur-sm"
+              className="rounded-full border border-sky-400/35 bg-sky-950/55 px-1.5 py-px text-[8px] font-medium leading-tight text-sky-100/80 shadow-sm backdrop-blur-sm"
             >
               {label}
             </span>

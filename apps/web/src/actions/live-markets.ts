@@ -16,6 +16,9 @@ import {
 } from "@bettok/live";
 import { isValidGridOptionForSpec, type CityGridSpecCompact } from "@/lib/live/grid/cityGrid500";
 import { LIVE_BET_LOCK_DISTANCE_M } from "@/lib/live/liveBetLockDistance";
+import { liveBetRelaxServer } from "@/lib/live/liveBetRelax";
+import { buildServerClickSnapshot } from "@/lib/live/betting/clickSnapshot";
+import { computeDriverRouteInstruction } from "@/lib/live/routing/computeDriverRouteInstruction";
 
 /** See `@/lib/live/liveBetLockDistance` — shared with tick route + viewer UI. */
 const BET_LOCK_DISTANCE_M = LIVE_BET_LOCK_DISTANCE_M;
@@ -108,7 +111,7 @@ export async function placeLiveBet(input: PlaceLiveBetInput) {
     return { error: "Market not open" };
   }
   const locksAt = new Date((market as { locks_at: string }).locks_at).getTime();
-  if (Date.now() >= locksAt) {
+  if (!liveBetRelaxServer() && Date.now() >= locksAt) {
     return { error: "Market has locked" };
   }
 
@@ -121,30 +124,43 @@ export async function placeLiveBet(input: PlaceLiveBetInput) {
   const turnLat = (market as { turn_point_lat: number | null }).turn_point_lat;
   const turnLng = (market as { turn_point_lng: number | null }).turn_point_lng;
   const sessionId = (market as { live_session_id: string | null }).live_session_id;
-  if (turnLat != null && turnLng != null && sessionId) {
-    const { data: latestGps } = await service
-      .from("live_route_snapshots")
-      .select("normalized_lat,normalized_lng,raw_lat,raw_lng")
-      .eq("live_session_id", sessionId)
-      .order("recorded_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (latestGps) {
-      const gps = latestGps as {
-        normalized_lat: number | null;
-        normalized_lng: number | null;
-        raw_lat: number;
-        raw_lng: number;
-      };
-      const lat = gps.normalized_lat ?? gps.raw_lat;
-      const lng = gps.normalized_lng ?? gps.raw_lng;
-      const dist = metersBetween(
-        { lat, lng },
-        { lat: turnLat, lng: turnLng },
-      );
-      if (dist <= BET_LOCK_DISTANCE_M) {
-        return { error: "Too close to turn — betting closed" };
-      }
+
+  const { data: latestGpsRow } = sessionId
+    ? await service
+        .from("live_route_snapshots")
+        .select(
+          "normalized_lat,normalized_lng,raw_lat,raw_lng,heading_deg,speed_mps,confidence_score",
+        )
+        .eq("live_session_id", sessionId)
+        .order("recorded_at", { ascending: false })
+        .limit(1)
+        .maybeSingle()
+    : { data: null };
+
+  if (
+    !liveBetRelaxServer() &&
+    turnLat != null &&
+    turnLng != null &&
+    sessionId &&
+    latestGpsRow
+  ) {
+    const gps = latestGpsRow as {
+      normalized_lat: number | null;
+      normalized_lng: number | null;
+      raw_lat: number;
+      raw_lng: number;
+      heading_deg: number | null;
+      speed_mps: number | null;
+      confidence_score: number | null;
+    };
+    const lat = gps.normalized_lat ?? gps.raw_lat;
+    const lng = gps.normalized_lng ?? gps.raw_lng;
+    const dist = metersBetween(
+      { lat, lng },
+      { lat: turnLat, lng: turnLng },
+    );
+    if (dist <= BET_LOCK_DISTANCE_M) {
+      return { error: "Too close to turn — betting closed" };
     }
   }
 
@@ -166,6 +182,44 @@ export async function placeLiveBet(input: PlaceLiveBetInput) {
     return { error: "Stake too high (max 50 for now)" };
   }
 
+  const roomIdForRoom = (market as { room_id: string }).room_id;
+  let nextPinId: string | null = null;
+  try {
+    const drv = await computeDriverRouteInstruction(roomIdForRoom);
+    if (drv.instruction?.pins[0]) {
+      nextPinId = String(drv.instruction.pins[0].id);
+    }
+  } catch {
+    /* optional enrichment */
+  }
+
+  let clickSnapshot: ReturnType<typeof buildServerClickSnapshot> | null = null;
+  if (sessionId && latestGpsRow) {
+    const s = latestGpsRow as {
+      normalized_lat: number | null;
+      normalized_lng: number | null;
+      raw_lat: number;
+      raw_lng: number;
+      heading_deg: number | null;
+      speed_mps: number | null;
+      confidence_score: number | null;
+    };
+    const lat = s.normalized_lat ?? s.raw_lat;
+    const lng = s.normalized_lng ?? s.raw_lng;
+    clickSnapshot = buildServerClickSnapshot({
+      lat,
+      lng,
+      headingDeg: s.heading_deg,
+      speedMps: s.speed_mps != null ? Number(s.speed_mps) : null,
+      confidenceScore: s.confidence_score,
+      turnPoint:
+        turnLat != null && turnLng != null
+          ? { lat: turnLat, lng: turnLng }
+          : null,
+      nextPinId,
+    });
+  }
+
   const { data: walletRow } = await service
     .from("wallets")
     .select("balance_demo")
@@ -185,6 +239,7 @@ export async function placeLiveBet(input: PlaceLiveBetInput) {
       option_id: parsed.data.optionId,
       stake_amount: parsed.data.stakeAmount,
       status: "active",
+      click_snapshot: clickSnapshot,
     })
     .select("*")
     .single();
@@ -220,7 +275,7 @@ export async function placeLiveBet(input: PlaceLiveBetInput) {
       .eq("id", parsed.data.marketId);
   }
 
-  return { betId: bet.id };
+  return { betId: bet.id, clickSnapshot };
 }
 
 type MarketDraftOption = {
@@ -491,10 +546,11 @@ export async function openSystemMarketForRoom(roomId: string) {
   // so the distance-based trigger fires first under normal driving. If
   // the distance trigger never fires (e.g. GPS lost, vehicle stopped),
   // this acts as a safety timeout.
+  const relax = liveBetRelaxServer();
   const effectiveBetOpenSec = Math.max(
     betOpenSec,
     decision.triggerEtaSeconds - preTurnBufferSec,
-    600,
+    relax ? 3600 : 600,
   );
   const now = new Date();
   const opensAt = now;

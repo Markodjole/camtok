@@ -5,6 +5,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { buildCityGrid500 } from "@/lib/live/grid/cityGrid500";
 import { fetchCityViewportFromGoogle } from "@/lib/live/grid/googleCityViewport";
 import { Safety, type LiveMarketOption, type TransportMode } from "@bettok/live";
+import { liveBetRelaxServer } from "@/lib/live/liveBetRelax";
 
 /**
  * Opens a system market whose options are 500 m × 500 m grid cells over the
@@ -129,8 +130,10 @@ export async function openCityGridMarketForRoom(roomId: string) {
 
   const now = new Date();
   const opensAt = now;
-  const locksAt = new Date(now.getTime() + 50_000);
-  const revealAt = new Date(now.getTime() + 95_000);
+  const lockMs = liveBetRelaxServer() ? 900_000 : 50_000;
+  const revealMs = liveBetRelaxServer() ? 960_000 : 95_000;
+  const locksAt = new Date(now.getTime() + lockMs);
+  const revealAt = new Date(now.getTime() + revealMs);
 
   const { data: market, error: marketError } = await service
     .from("live_betting_markets")

@@ -4,6 +4,7 @@ import { openSystemMarketForRoom } from "@/actions/live-markets";
 import { openCityGridMarketForRoom } from "@/actions/live-city-grid-market";
 import { lockMarket, revealAndSettleMarket } from "@/actions/live-settlement";
 import { LIVE_BET_LOCK_DISTANCE_M } from "@/lib/live/liveBetLockDistance";
+import { liveBetRelaxServer } from "@/lib/live/liveBetRelax";
 import { metersBetween } from "@/lib/live/routing/geometry";
 
 /**
@@ -75,7 +76,12 @@ export async function POST(
       const turnLat = (market as { turn_point_lat: number | null }).turn_point_lat;
       const turnLng = (market as { turn_point_lng: number | null }).turn_point_lng;
       const sessionId = (market as { live_session_id: string | null }).live_session_id;
-      if (turnLat != null && turnLng != null && sessionId) {
+      if (
+        !liveBetRelaxServer() &&
+        turnLat != null &&
+        turnLng != null &&
+        sessionId
+      ) {
         const { data: latestGps } = await service
           .from("live_route_snapshots")
           .select("normalized_lat,normalized_lng,raw_lat,raw_lng")

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { usePathname } from "next/navigation";
 import { createPortal } from "react-dom";
 import {
   type CityGridSpecCompact,
@@ -12,17 +13,20 @@ import { drivingRouteStyleBadges } from "@/lib/live/routing/drivingRouteStyle";
 import dynamic from "next/dynamic";
 import type { LiveFeedRow, RoutePoint } from "@/actions/live-feed";
 import { LIVE_BET_LOCK_DISTANCE_M } from "@/lib/live/liveBetLockDistance";
+import { liveBetRelaxClient } from "@/lib/live/liveBetRelax";
 import { metersBetween } from "@/lib/live/routing/geometry";
 import { LiveVideoPlayer } from "./LiveVideoPlayer";
 import { DirectionalBetPad } from "./DirectionalBetPad";
 import { LiveDecisionStatusRibbon } from "./LiveDecisionStatusRibbon";
 import { useCountdown } from "./useCountdown";
-import { TransportModeIcon } from "./TransportModeIcon";
 import { BetPlacedPill, LiveEventToasts, useBetPill } from "./LiveEventToasts";
 import { SkillFeedbackCard, type SkillFeedbackData } from "./SkillFeedbackCard";
 import { ReplaySheet } from "./ReplaySheet";
+import { LiveViewerStakePicker } from "./LiveViewerStakePicker";
 import { TopBar } from "@/components/layout/top-bar";
 import { BottomNav } from "@/components/layout/bottom-nav";
+import { useActiveBetRound } from "@/hooks/useActiveBetRound";
+import { engineBetHeadline } from "@/lib/live/betting/betTypeV2Label";
 import {
   IconRailButton,
   IconLayers,
@@ -30,6 +34,8 @@ import {
   IconCoin,
   IconCrosshair,
 } from "./OwnerLiveControlPanel";
+import { useViewerChromeStore } from "@/stores/viewer-chrome-store";
+import { mapProfile } from "./LiveMap";
 
 const LiveMap = dynamic(() => import("./LiveMap").then((m) => m.LiveMap), {
   ssr: false,
@@ -55,11 +61,14 @@ type MapCheckpoint = {
 };
 
 export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
+  const pathname = usePathname();
+  const immersiveLiveRoom = (pathname ?? "").startsWith("/live/rooms/");
+
   const [room, setRoom] = useState<LiveFeedRow>(initialRoom);
   const [routePoints, setRoutePoints] = useState<RoutePoint[]>(
     initialRoom.routePoints ?? [],
   );
-  const [betAmount, setBetAmount] = useState(10);
+  const lastStakeAmount = useViewerChromeStore((s) => s.lastStakeAmount);
   const [placingOptionId, setPlacingOptionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [mapSheetError, setMapSheetError] = useState<string | null>(null);
@@ -116,6 +125,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   } | null>(null);
   const skillFeedbackTimerRef = { current: null as ReturnType<typeof setTimeout> | null };
   const { betPill, flash } = useBetPill();
+  const { data: activeBettingRound } = useActiveBetRound(room.roomId, 2500);
 
   useEffect(() => {
     setJoyPortalReady(true);
@@ -196,11 +206,11 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         body: JSON.stringify({
           marketId: room.currentMarket.id,
           optionId,
-          stakeAmount: betAmount,
+          stakeAmount: lastStakeAmount,
         }),
       });
       if (res.ok) {
-        flash(betAmount);
+        flash(lastStakeAmount);
         let pickedLabel: string | null = null;
         if (room.currentMarket.marketType === "city_grid") {
           const spec = room.currentMarket.cityGridSpec;
@@ -299,6 +309,46 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     }));
   }, [cityGridSpec]);
 
+  const zoneEngineBetActive = (() => {
+    const t = activeBettingRound?.roundPlan?.type;
+    if (!t || zones.length === 0 || currentMarket?.marketType !== "city_grid") {
+      return false;
+    }
+    return (
+      t === "next_zone" ||
+      t === "zone_exit_time" ||
+      t === "zone_duration" ||
+      t === "turns_before_zone_exit" ||
+      t === "stop_count"
+    );
+  })();
+
+  const effectiveShowZones = zoneEngineBetActive || showZones;
+
+  const viewerFollowZoomForBet = useMemo(() => {
+    if (currentMarket?.marketType !== "city_grid" || zones.length === 0) return null;
+    const t = activeBettingRound?.roundPlan?.type;
+    const z = mapProfile(room.transportMode, "viewer").zoom;
+    const wide = () => Math.max(8.75, z - 6.75);
+    const inZone = () => Math.max(10.25, z - 3.75);
+    if (
+      t === "zone_exit_time" ||
+      t === "zone_duration" ||
+      t === "turns_before_zone_exit" ||
+      t === "stop_count"
+    ) {
+      return inZone();
+    }
+    return wide();
+  }, [
+    activeBettingRound?.roundPlan?.type,
+    currentMarket?.marketType,
+    room.transportMode,
+    zones.length,
+  ]);
+
+  const zonesVisualStyleForBet = zoneEngineBetActive ? "muted" : "default";
+
   const PASSED_HIDE_PIN_LINE_M = 12;
   const routeLast =
     routePoints.length > 0 ? routePoints[routePoints.length - 1]! : null;
@@ -327,30 +377,37 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           ? { lat: driverPins[0].lat, lng: driverPins[0].lng }
           : null);
 
-  /** Server locks on `live_betting_markets.turn_point_*` — mirror that for UI + joystick. */
-  const bettingDistanceTarget =
-    currentMarket?.marketType !== "city_grid" && viewerTurnTarget && currentMarket
-      ? { lat: viewerTurnTarget.lat, lng: viewerTurnTarget.lng }
-      : viewerDecisionLatLng;
-
-  // Distance gate: betting closes when the vehicle is within LIVE_BET_LOCK_DISTANCE_M
-  // of the market turn point (same as tick + placeLiveBet).
+  // Distance gate: only when market defines a turn point (matches server placeLiveBet).
   const isDistanceLocked =
-    currentMarket?.marketType === "city_grid"
-      ? false
-      : (() => {
-          const last = routePoints[routePoints.length - 1];
-          if (!last || !bettingDistanceTarget) return false;
-          return (
-            metersBetween(
-              { lat: last.lat, lng: last.lng },
-              bettingDistanceTarget,
-            ) <= LIVE_BET_LOCK_DISTANCE_M
-          );
-        })();
-  const isTimeLocked = currentMarket
-    ? new Date(currentMarket.locksAt) <= new Date()
-    : true;
+    !liveBetRelaxClient() &&
+    currentMarket?.marketType !== "city_grid" &&
+    (() => {
+      if (
+        currentMarket?.turnPointLat == null ||
+        currentMarket?.turnPointLng == null
+      ) {
+        return false;
+      }
+      const last = routePoints[routePoints.length - 1];
+      if (!last) return false;
+      return (
+        metersBetween(
+          { lat: last.lat, lng: last.lng },
+          {
+            lat: currentMarket.turnPointLat,
+            lng: currentMarket.turnPointLng,
+          },
+        ) <= LIVE_BET_LOCK_DISTANCE_M
+      );
+    })();
+  const isTimeLocked =
+    !liveBetRelaxClient() &&
+    !!currentMarket &&
+    (() => {
+      const t = Date.parse(currentMarket.locksAt);
+      if (!Number.isFinite(t)) return false;
+      return t <= Date.now();
+    })();
   const isLocked = isTimeLocked || isDistanceLocked;
 
   /** Ribbon: open vs closed from lock distance (+ time safety net), not revealAt flicker. */
@@ -361,14 +418,21 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     const last = routePoints[routePoints.length - 1];
     if (!last) return "pending";
     const distBet =
-      bettingDistanceTarget != null
-        ? metersBetween(last, bettingDistanceTarget)
+      currentMarket?.turnPointLat != null &&
+      currentMarket?.turnPointLng != null
+        ? metersBetween(last, {
+            lat: currentMarket.turnPointLat,
+            lng: currentMarket.turnPointLng,
+          })
         : Number.POSITIVE_INFINITY;
     const timeClosed =
+      !liveBetRelaxClient() &&
       !!currentMarket &&
       Number.isFinite(Date.parse(currentMarket.locksAt)) &&
       nowTick >= Date.parse(currentMarket.locksAt);
-    if (distBet <= LIVE_BET_LOCK_DISTANCE_M || timeClosed) return "active";
+    const distClosed =
+      !liveBetRelaxClient() && distBet <= LIVE_BET_LOCK_DISTANCE_M;
+    if (distClosed || timeClosed) return "active";
     return "pending";
   })();
 
@@ -423,6 +487,35 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const selectedZone = zones.find((z) => z.id === selectedZoneId) ?? null;
   const selectedCheckpoint = checkpoints.find((c) => c.id === selectedCheckpointId) ?? null;
   const selectedTargetLabel = selectedZone?.name ?? selectedCheckpoint?.name ?? null;
+
+  /** Subtitle for directional sheet — zone/checkpoint name, else selected market option. */
+  const directionalPickLabel =
+    selectedTargetLabel ??
+    (currentMarket && currentMarket.marketType !== "city_grid"
+      ? (currentMarket.options?.find((o) => o.id === selectedMapOptionId)?.shortLabel ??
+          currentMarket.options?.find((o) => o.id === selectedMapOptionId)?.label ??
+          null)
+      : null);
+
+  const [betPanelDismissed, setBetPanelDismissed] = useState(false);
+  useEffect(() => {
+    setBetPanelDismissed(false);
+  }, [currentMarket?.id, mapExpanded]);
+
+  const showBetBottomSheet =
+    mapExpanded &&
+    showLiveBets &&
+    currentMarket != null &&
+    !betPanelDismissed;
+
+  const mapBetSheetOpen = showBetBottomSheet;
+
+  const viewerCurrentBetHeadline =
+    activeBettingRound?.roundPlan != null
+      ? engineBetHeadline(activeBettingRound.roundPlan.type)
+      : null;
+
+  const sheetBetHeadline = viewerCurrentBetHeadline ?? "Live bet";
 
   const driverRouteBadges = useMemo(
     () => drivingRouteStyleBadges(room.drivingRouteStyle, room.transportMode),
@@ -612,7 +705,13 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     setPipPos({ top: nextTop, left: nextLeft });
   };
 
-  const showDirectionalJoystick = showLiveBets;
+  const showJoystick =
+    joyPortalReady &&
+    showLiveBets &&
+    currentMarket != null &&
+    currentMarket.marketType !== "city_grid" &&
+    (!mapBetSheetOpen || activeBettingRound?.roundPlan?.type === "next_turn");
+
   const joystickLocked =
     isLocked ||
     !currentMarket ||
@@ -632,7 +731,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
   return (
     <div className="relative h-[100dvh] w-full overflow-hidden bg-black">
-      <TopBar />
+      {immersiveLiveRoom ? null : <TopBar />}
+      {immersiveLiveRoom ? <LiveViewerStakePicker /> : null}
       <LiveDecisionStatusRibbon
         phase={viewerRailPhase}
         locksAt={currentMarket?.locksAt ?? null}
@@ -644,6 +744,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             ? lastBetOptionLabel
             : null
         }
+        currentBetHeadline={viewerCurrentBetHeadline}
         nowTick={nowTick}
       />
       <BottomNav />
@@ -689,7 +790,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             checkpoints={checkpoints}
             selectedZoneId={selectedZoneId}
             selectedCheckpointId={selectedCheckpointId}
-            showZones={showZones}
+            showZones={effectiveShowZones}
+            zonesVisualStyle={zonesVisualStyleForBet}
             showCheckpoints={true}
             turnTarget={viewerTurnTargetForMap}
             driverPins={viewerOsrmPreviewPins}
@@ -699,6 +801,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             destinationRoute={destinationRoute}
             destinationRouteLabel="Google suggested route"
             driverRouteBadges={driverRouteBadges}
+            viewerFollowZoom={viewerFollowZoomForBet}
             onZoneSelect={(id) => {
               setSelectedZoneId(id);
               if (id) setSelectedCheckpointId(null);
@@ -717,75 +820,57 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       </div>
 
       {room.destination ? (
-        <div className="pointer-events-none absolute inset-x-0 top-[5.25rem] z-30 flex justify-center px-3">
-          <div className="pointer-events-auto flex max-w-[92%] items-center gap-2 rounded-full border border-red-400/50 bg-red-500/25 px-3 py-1 text-[11px] text-red-50 shadow-lg backdrop-blur">
-            <span className="text-base leading-none">📍</span>
-            <span className="truncate font-medium">
-              Destination: {room.destination.label}
+        <div className="pointer-events-none fixed bottom-[4.75rem] left-2 z-30 max-w-[min(72vw,14rem)]">
+          <div className="pointer-events-auto flex items-center gap-1 rounded-md border border-white/10 bg-black/35 px-1.5 py-px text-[8px] font-normal leading-tight text-white/55 shadow-none backdrop-blur-sm">
+            <span className="shrink-0 opacity-70" aria-hidden>
+              📍
             </span>
+            <span className="min-w-0 flex-1 truncate">{room.destination.label}</span>
             {destinationDistanceM != null && (
-              <span className="shrink-0 text-[10px] text-red-100/85">
+              <span className="shrink-0 tabular-nums opacity-60">
                 · {formatDistance(destinationDistanceM)}
-                {destinationEtaSec != null
-                  ? ` · ${formatEta(destinationEtaSec)}`
-                  : ""}
+                {destinationEtaSec != null ? ` · ${formatEta(destinationEtaSec)}` : ""}
               </span>
             )}
           </div>
         </div>
       ) : null}
 
-      {/* ── Top bar — LIVE · name · mode · $amount stepper ── */}
-      <div className="absolute inset-x-0 top-12 z-40 flex items-center gap-2 px-4 py-3 text-sm">
-        <span className="rounded bg-red-500/30 px-2 py-0.5 text-[11px] font-bold text-red-400 tracking-wide">
-          LIVE
+      {/* Corner live dot + compact actions (no stake stepper — use header stake) */}
+      <div
+        className="pointer-events-none fixed left-3 top-3 z-[62]"
+        role="status"
+        aria-label="Live broadcast"
+      >
+        <span
+          className="relative flex h-3 w-3 items-center justify-center"
+          title="Live"
+        >
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-40" />
+          <span className="relative inline-flex h-2 w-2 rounded-full bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.95)]" />
         </span>
-        <span className="font-semibold text-white drop-shadow">
-          {room.characterName}
-        </span>
-        <span className="flex items-center gap-1.5 text-white/55 drop-shadow text-xs">
-          <TransportModeIcon mode={room.transportMode} className="h-4 w-4" />
-          {room.transportMode.replace("_", " ")}
-        </span>
-
-        <div className="ml-auto flex items-center gap-1.5">
-          {/* History / replay button */}
-          <button
-            type="button"
-            onClick={() => setShowReplay(true)}
-            className="flex h-6 w-6 items-center justify-center rounded-full bg-white/12 text-xs text-white/60 backdrop-blur active:bg-white/25"
-            title="Decision history"
-          >
-            📋
-          </button>
-
-          {/* Bet amount stepper */}
-          <button
-            type="button"
-            onClick={() => setBetAmount((n) => Math.max(1, n - 5))}
-            className="flex h-6 w-6 items-center justify-center rounded-full bg-white/15 text-sm font-bold text-white backdrop-blur active:bg-white/30"
-          >
-            −
-          </button>
-          <span className="min-w-[2.8rem] text-center text-sm font-semibold text-white drop-shadow">
-            ${betAmount}
-          </span>
-          <button
-            type="button"
-            onClick={() => setBetAmount((n) => n + 5)}
-            className="flex h-6 w-6 items-center justify-center rounded-full bg-white/15 text-sm font-bold text-white backdrop-blur active:bg-white/30"
-          >
-            +
-          </button>
-        </div>
       </div>
+      <button
+        type="button"
+        onClick={() => setShowReplay(true)}
+        className="fixed right-3 top-3 z-[62] flex h-7 w-7 items-center justify-center rounded-full bg-black/35 text-xs text-white/75 shadow-md backdrop-blur active:bg-black/50"
+        title="Decision history"
+      >
+        📋
+      </button>
 
       {mapExpanded ? (
-        <div className="absolute right-4 top-24 z-40 flex flex-col items-center gap-6">
+        <div className="absolute right-4 top-[10.5rem] z-40 flex flex-col items-center gap-5">
           <IconRailButton
-            active={showZones}
+            active={effectiveShowZones}
             onClick={() => setShowZones((v) => !v)}
-            title={showZones ? "Hide zones" : "Show zones"}
+            title={
+              zoneEngineBetActive
+                ? "Zones on for this bet"
+                : effectiveShowZones
+                  ? "Hide zones"
+                  : "Show zones"
+            }
           >
             <IconLayers />
           </IconRailButton>
@@ -861,7 +946,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               checkpoints={checkpoints}
               selectedZoneId={selectedZoneId}
               selectedCheckpointId={selectedCheckpointId}
-              showZones={showZones}
+              showZones={effectiveShowZones}
+              zonesVisualStyle={zonesVisualStyleForBet}
               showCheckpoints={true}
               turnTarget={viewerTurnTargetForMap}
               driverPins={viewerOsrmPreviewPins}
@@ -871,6 +957,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               destinationRoute={destinationRoute}
               destinationRouteLabel="Google suggested route"
               driverRouteBadges={driverRouteBadges}
+              viewerFollowZoom={viewerFollowZoomForBet}
             />
             {routePoints.length === 0 && (
               <div className="absolute inset-0 flex items-center justify-center bg-black/30 text-[9px] text-white/70">
@@ -902,10 +989,14 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       {/* ── Bottom gradient scrim ────────────────────────── */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-44 bg-gradient-to-t from-black/70 to-transparent" />
 
-      {mapExpanded && showLiveBets && currentMarket?.marketType === "city_grid" && selectedZoneId ? (
+      {showBetBottomSheet && currentMarket?.marketType === "city_grid" ? (
         <MapSelectionBottomSheet
-          selectedLabel={selectedZone?.name ?? selectedZoneId}
-          marketTitle={currentMarket?.title ?? "Live market"}
+          betHeadline={currentMarket.title ?? sheetBetHeadline}
+          selectionDetail={
+            selectedZone
+              ? `Selected · ${selectedZone.name}`
+              : "Tap the map once to pick a cell, then tap Place bet."
+          }
           marketOptions={[]}
           selectedOptionId={selectedZoneId}
           onSelectOption={() => undefined}
@@ -917,6 +1008,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             setSelectedZoneId(null);
             setSelectedCheckpointId(null);
             setMapSheetError(null);
+            setBetPanelDismissed(true);
           }}
           onPlaceBet={async () => {
             if (!selectedZoneId) return;
@@ -930,13 +1022,14 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           gridMode
         />
       ) : null}
-      {mapExpanded &&
-      showLiveBets &&
-      currentMarket?.marketType !== "city_grid" &&
-      selectedTargetLabel ? (
+      {showBetBottomSheet && currentMarket?.marketType !== "city_grid" ? (
         <MapSelectionBottomSheet
-          selectedLabel={selectedTargetLabel}
-          marketTitle={currentMarket?.title ?? "Live market"}
+          betHeadline={sheetBetHeadline}
+          selectionDetail={
+            directionalPickLabel
+              ? `Pick · ${directionalPickLabel}`
+              : "Use the pad or the list to choose"
+          }
           marketOptions={currentMarket?.options ?? []}
           selectedOptionId={selectedMapOptionId}
           onSelectOption={setSelectedMapOptionId}
@@ -948,6 +1041,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             setSelectedZoneId(null);
             setSelectedCheckpointId(null);
             setMapSheetError(null);
+            setBetPanelDismissed(true);
           }}
           onPlaceBet={async () => {
             if (!selectedMapOptionId) return;
@@ -961,7 +1055,20 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         />
       ) : null}
 
-      {joyPortalReady && showDirectionalJoystick
+      {betPanelDismissed &&
+      mapExpanded &&
+      showLiveBets &&
+      currentMarket != null ? (
+        <button
+          type="button"
+          onClick={() => setBetPanelDismissed(false)}
+          className="fixed bottom-[calc(4.75rem+env(safe-area-inset-bottom,0px))] left-1/2 z-[199] -translate-x-1/2 rounded-full border border-violet-400/35 bg-violet-950/75 px-4 py-2 text-[11px] font-semibold text-violet-100 shadow-lg backdrop-blur-md active:bg-violet-900/85"
+        >
+          Show bet card
+        </button>
+      ) : null}
+
+      {joyPortalReady && showJoystick
         ? createPortal(
             <div
               className="pointer-events-none fixed right-3 z-[380] flex max-w-[100vw] flex-col items-end"
@@ -972,7 +1079,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               <div className="pointer-events-auto flex flex-col items-center">
                 <DirectionalBetPad
                   options={currentMarket?.options ?? []}
-                  betAmount={betAmount}
+                  betAmount={lastStakeAmount}
                   onBet={async (optionId, _dir) => {
                     await placeBet(optionId);
                   }}
@@ -1027,8 +1134,8 @@ function MarketTimer({ locksAt }: { locksAt: string }) {
 }
 
 function MapSelectionBottomSheet({
-  selectedLabel,
-  marketTitle,
+  betHeadline,
+  selectionDetail,
   marketOptions,
   selectedOptionId,
   onSelectOption,
@@ -1040,8 +1147,8 @@ function MapSelectionBottomSheet({
   onPlaceBet,
   gridMode = false,
 }: {
-  selectedLabel: string;
-  marketTitle: string;
+  betHeadline: string;
+  selectionDetail: string | null;
   marketOptions: Array<{ id: string; label: string; shortLabel?: string; displayOrder: number }>;
   selectedOptionId: string | null;
   onSelectOption: (id: string) => void;
@@ -1055,26 +1162,36 @@ function MapSelectionBottomSheet({
 }) {
   const sorted = [...marketOptions].sort((a, b) => a.displayOrder - b.displayOrder);
   return (
-    <div className="absolute inset-x-0 bottom-0 z-[65] px-3 pb-[calc(5.2rem+env(safe-area-inset-bottom,0px))]">
-      <div className="rounded-2xl border border-white/15 bg-black/75 p-3 text-white shadow-2xl backdrop-blur">
-        <div className="mb-2 flex items-center gap-2">
-          <div className="text-xs font-semibold">{selectedLabel}</div>
-          <div className="ml-auto text-[10px] text-white/60">{countdown}</div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-full bg-white/10 px-2 py-0.5 text-[10px] text-white/70"
-          >
-            Close
-          </button>
-        </div>
-        <div className="mb-2 text-[10px] text-white/65">{marketTitle}</div>
-        {gridMode ? (
-          <div className="rounded-lg border border-cyan-500/40 bg-cyan-500/15 px-2 py-2 text-[11px] text-cyan-50">
-            500 m cell · tap map to change
+    <div className="pointer-events-none fixed inset-x-0 bottom-0 z-[200] px-3 pb-[calc(4.75rem+env(safe-area-inset-bottom,0px))]">
+      <div className="pointer-events-auto rounded-xl border border-white/10 bg-black/40 p-2 text-white shadow-lg backdrop-blur-md">
+        <div className="mb-1 flex items-start gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="text-[11px] font-semibold leading-snug text-white">
+              {betHeadline}
+            </div>
+            {selectionDetail ? (
+              <div
+                className={`mt-1 text-[10px] leading-snug ${
+                  gridMode ? "text-white/70" : "mt-0.5 text-white/55"
+                }`}
+              >
+                {selectionDetail}
+              </div>
+            ) : null}
           </div>
-        ) : (
-          <div className="space-y-1">
+          <div className="flex shrink-0 items-center gap-1.5">
+            <div className="text-[10px] text-white/55">{countdown}</div>
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-full bg-white/10 px-2 py-0.5 text-[10px] text-white/75"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+        {gridMode ? null : (
+          <div className="max-h-28 space-y-1 overflow-y-auto">
             {sorted.map((opt) => {
               const active = selectedOptionId === opt.id;
               return (
@@ -1082,10 +1199,10 @@ function MapSelectionBottomSheet({
                   key={opt.id}
                   type="button"
                   onClick={() => onSelectOption(opt.id)}
-                  className={`block w-full rounded-lg px-2 py-1.5 text-left text-[11px] ${
+                  className={`block w-full rounded-lg px-2 py-1 text-left text-[10px] ${
                     active
-                      ? "border border-red-400/60 bg-red-500/20 text-white"
-                      : "border border-transparent bg-white/5 text-white/85"
+                      ? "border border-red-400/55 bg-red-500/15 text-white"
+                      : "border border-transparent bg-white/5 text-white/80"
                   }`}
                 >
                   {opt.shortLabel ?? opt.label}
@@ -1094,24 +1211,22 @@ function MapSelectionBottomSheet({
             })}
           </div>
         )}
-        {error ? <div className="mt-2 text-[10px] text-red-300">{error}</div> : null}
+        {error ? <div className="mt-1.5 text-[10px] text-red-300">{error}</div> : null}
         <button
           type="button"
           disabled={bettingClosed || !selectedOptionId || isPlacing}
           onClick={() => void onPlaceBet()}
-          className="mt-3 w-full rounded-xl bg-red-500 px-3 py-2 text-xs font-semibold text-white disabled:bg-white/20 disabled:text-white/50"
+          className="mt-2 w-full rounded-lg bg-red-500/90 px-2 py-1.5 text-[11px] font-semibold text-white disabled:bg-white/15 disabled:text-white/45"
         >
           {bettingClosed
             ? "Betting closed"
             : isPlacing
-              ? "Placing..."
+              ? "Placing…"
               : !selectedOptionId
                 ? gridMode
-                  ? "Select a square"
+                  ? "Choose a cell on the map"
                   : "Select option"
-                : gridMode
-                  ? `Place bet on ${selectedLabel}`
-                  : "Place bet"}
+                : "Place bet"}
         </button>
       </div>
     </div>
