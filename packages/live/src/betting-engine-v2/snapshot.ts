@@ -32,7 +32,6 @@ export const MVP_BET_TYPES_V2: ReadonlySet<BetTypeV2> = new Set([
   "time_vs_google",
   "zone_exit_time",
   "stop_count",
-  "eta_drift",
 ]);
 
 export function isMvpBetType(type: BetTypeV2): boolean {

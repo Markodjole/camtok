@@ -35,11 +35,7 @@ describe("BettingEngineV2 selectBestRound", () => {
       canBuildEtaDriftRound: true,
     };
     const plans = listEligibleRounds(snap, { mvpOnly: true });
-    expect(plans.map((p) => p.type)).toEqual([
-      "next_turn",
-      "time_vs_google",
-      "eta_drift",
-    ]);
+    expect(plans.map((p) => p.type)).toEqual(["next_turn", "time_vs_google"]);
     expect(selectBestRound(snap, { mvpOnly: true })?.type).toBe("next_turn");
   });
 

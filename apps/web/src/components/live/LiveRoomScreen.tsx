@@ -24,7 +24,7 @@ import { ReplaySheet } from "./ReplaySheet";
 import { TopBar } from "@/components/layout/top-bar";
 import { BottomNav } from "@/components/layout/bottom-nav";
 import { useActiveBetRound } from "@/hooks/useActiveBetRound";
-import { betTypeV2Label } from "@/lib/live/betting/betTypeV2Label";
+import { betTypeV2Label, engineBetHeadline } from "@/lib/live/betting/betTypeV2Label";
 import {
   IconRailButton,
   IconLayers,
@@ -427,6 +427,17 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const selectedCheckpoint = checkpoints.find((c) => c.id === selectedCheckpointId) ?? null;
   const selectedTargetLabel = selectedZone?.name ?? selectedCheckpoint?.name ?? null;
 
+  const mapBetSheetOpen =
+    mapExpanded &&
+    showLiveBets &&
+    ((currentMarket?.marketType === "city_grid" && !!selectedZoneId) ||
+      (currentMarket?.marketType !== "city_grid" && !!selectedTargetLabel));
+
+  const sheetBetHeadline =
+    activeBettingRound?.roundPlan != null
+      ? engineBetHeadline(activeBettingRound.roundPlan.type)
+      : "Live bet";
+
   const driverRouteBadges = useMemo(
     () => drivingRouteStyleBadges(room.drivingRouteStyle, room.transportMode),
     [
@@ -615,7 +626,13 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     setPipPos({ top: nextTop, left: nextLeft });
   };
 
-  const showDirectionalJoystick = showLiveBets;
+  const showJoystick =
+    joyPortalReady &&
+    showLiveBets &&
+    currentMarket != null &&
+    currentMarket.marketType !== "city_grid" &&
+    (!mapBetSheetOpen || activeBettingRound?.roundPlan?.type === "next_turn");
+
   const joystickLocked =
     isLocked ||
     !currentMarket ||
@@ -743,17 +760,15 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         <span className="rounded bg-red-500/30 px-2 py-0.5 text-[11px] font-bold text-red-400 tracking-wide">
           LIVE
         </span>
-        {activeBettingRound ? (
+        {activeBettingRound?.roundPlan ? (
           <span
-            className="rounded bg-violet-500/25 px-1.5 py-0.5 text-[10px] font-semibold text-violet-200/95 tracking-wide"
+            className="rounded-full bg-violet-500/25 px-2 py-0.5 text-[10px] font-semibold text-violet-100 tracking-wide"
             title={
               activeBettingRound.driverRouteReason ??
-              (activeBettingRound.roundPlan
-                ? `Engine V2 · priority ${activeBettingRound.roundPlan.priority}`
-                : "Engine V2 · no plan")
+              `Priority ${activeBettingRound.roundPlan.priority}`
             }
           >
-            {activeBettingRound.roundPlan?.type ?? "—"}
+            {betTypeV2Label(activeBettingRound.roundPlan.type)}
           </span>
         ) : null}
         <span className="font-semibold text-white drop-shadow">
@@ -795,42 +810,6 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           </button>
         </div>
       </div>
-
-      {showLiveBets &&
-      activeBettingRound &&
-      activeBettingRound.eligibleRoundPlans.length > 0 ? (
-        <div
-          className={
-            room.destination
-              ? "absolute inset-x-0 top-[8.75rem] z-40 px-3"
-              : "absolute inset-x-0 top-[5.75rem] z-40 px-3"
-          }
-        >
-          <div className="rounded-xl border border-white/12 bg-black/55 px-2 py-2 shadow-lg backdrop-blur">
-            <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-white/50">
-              Engine bets
-            </div>
-            <div className="flex gap-1.5 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-              {activeBettingRound.eligibleRoundPlans.map((plan) => {
-                const isPrimary = plan.type === activeBettingRound.roundPlan?.type;
-                return (
-                  <span
-                    key={plan.type}
-                    title={`Priority ${plan.priority} · ${plan.kind.replace(/_/g, " ")}`}
-                    className={
-                      isPrimary
-                        ? "shrink-0 rounded-full border border-violet-400/85 bg-violet-500/40 px-2.5 py-1 text-[10px] font-semibold text-violet-50"
-                        : "shrink-0 rounded-full border border-white/18 bg-white/8 px-2.5 py-1 text-[10px] font-semibold text-white/85"
-                    }
-                  >
-                    {betTypeV2Label(plan.type)}
-                  </span>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      ) : null}
 
       {mapExpanded ? (
         <div className="absolute right-4 top-24 z-40 flex flex-col items-center gap-6">
@@ -956,8 +935,12 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
       {mapExpanded && showLiveBets && currentMarket?.marketType === "city_grid" && selectedZoneId ? (
         <MapSelectionBottomSheet
-          selectedLabel={selectedZone?.name ?? selectedZoneId}
-          marketTitle={currentMarket?.title ?? "Live market"}
+          betHeadline={sheetBetHeadline}
+          selectionDetail={
+            selectedZone
+              ? `500 m cell · ${selectedZone.name}`
+              : "Tap the map to choose a square"
+          }
           marketOptions={[]}
           selectedOptionId={selectedZoneId}
           onSelectOption={() => undefined}
@@ -987,8 +970,10 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       currentMarket?.marketType !== "city_grid" &&
       selectedTargetLabel ? (
         <MapSelectionBottomSheet
-          selectedLabel={selectedTargetLabel}
-          marketTitle={currentMarket?.title ?? "Live market"}
+          betHeadline={sheetBetHeadline}
+          selectionDetail={
+            selectedTargetLabel ? `At · ${selectedTargetLabel}` : null
+          }
           marketOptions={currentMarket?.options ?? []}
           selectedOptionId={selectedMapOptionId}
           onSelectOption={setSelectedMapOptionId}
@@ -1013,7 +998,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         />
       ) : null}
 
-      {joyPortalReady && showDirectionalJoystick
+      {joyPortalReady && showJoystick
         ? createPortal(
             <div
               className="pointer-events-none fixed right-3 z-[380] flex max-w-[100vw] flex-col items-end"
@@ -1079,8 +1064,8 @@ function MarketTimer({ locksAt }: { locksAt: string }) {
 }
 
 function MapSelectionBottomSheet({
-  selectedLabel,
-  marketTitle,
+  betHeadline,
+  selectionDetail,
   marketOptions,
   selectedOptionId,
   onSelectOption,
@@ -1092,8 +1077,8 @@ function MapSelectionBottomSheet({
   onPlaceBet,
   gridMode = false,
 }: {
-  selectedLabel: string;
-  marketTitle: string;
+  betHeadline: string;
+  selectionDetail: string | null;
   marketOptions: Array<{ id: string; label: string; shortLabel?: string; displayOrder: number }>;
   selectedOptionId: string | null;
   onSelectOption: (id: string) => void;
@@ -1107,26 +1092,36 @@ function MapSelectionBottomSheet({
 }) {
   const sorted = [...marketOptions].sort((a, b) => a.displayOrder - b.displayOrder);
   return (
-    <div className="absolute inset-x-0 bottom-0 z-[65] px-3 pb-[calc(5.2rem+env(safe-area-inset-bottom,0px))]">
-      <div className="rounded-2xl border border-white/15 bg-black/75 p-3 text-white shadow-2xl backdrop-blur">
-        <div className="mb-2 flex items-center gap-2">
-          <div className="text-xs font-semibold">{selectedLabel}</div>
-          <div className="ml-auto text-[10px] text-white/60">{countdown}</div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-full bg-white/10 px-2 py-0.5 text-[10px] text-white/70"
-          >
-            Close
-          </button>
+    <div className="absolute inset-x-0 bottom-0 z-[65] px-3 pb-[calc(4.5rem+env(safe-area-inset-bottom,0px))]">
+      <div className="rounded-xl border border-white/10 bg-black/40 p-2 text-white shadow-lg backdrop-blur-md">
+        <div className="mb-1 flex items-start gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="text-[11px] font-semibold leading-snug text-white">
+              {betHeadline}
+            </div>
+            {selectionDetail ? (
+              <div className="mt-0.5 text-[10px] leading-snug text-white/55">
+                {selectionDetail}
+              </div>
+            ) : null}
+          </div>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <div className="text-[10px] text-white/55">{countdown}</div>
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-full bg-white/10 px-2 py-0.5 text-[10px] text-white/75"
+            >
+              Close
+            </button>
+          </div>
         </div>
-        <div className="mb-2 text-[10px] text-white/65">{marketTitle}</div>
         {gridMode ? (
-          <div className="rounded-lg border border-cyan-500/40 bg-cyan-500/15 px-2 py-2 text-[11px] text-cyan-50">
-            500 m cell · tap map to change
+          <div className="rounded-md border border-cyan-400/20 bg-cyan-500/10 px-2 py-1 text-[10px] text-cyan-100/85">
+            Tap map to move your pick
           </div>
         ) : (
-          <div className="space-y-1">
+          <div className="max-h-28 space-y-1 overflow-y-auto">
             {sorted.map((opt) => {
               const active = selectedOptionId === opt.id;
               return (
@@ -1134,10 +1129,10 @@ function MapSelectionBottomSheet({
                   key={opt.id}
                   type="button"
                   onClick={() => onSelectOption(opt.id)}
-                  className={`block w-full rounded-lg px-2 py-1.5 text-left text-[11px] ${
+                  className={`block w-full rounded-lg px-2 py-1 text-left text-[10px] ${
                     active
-                      ? "border border-red-400/60 bg-red-500/20 text-white"
-                      : "border border-transparent bg-white/5 text-white/85"
+                      ? "border border-red-400/55 bg-red-500/15 text-white"
+                      : "border border-transparent bg-white/5 text-white/80"
                   }`}
                 >
                   {opt.shortLabel ?? opt.label}
@@ -1146,24 +1141,22 @@ function MapSelectionBottomSheet({
             })}
           </div>
         )}
-        {error ? <div className="mt-2 text-[10px] text-red-300">{error}</div> : null}
+        {error ? <div className="mt-1.5 text-[10px] text-red-300">{error}</div> : null}
         <button
           type="button"
           disabled={bettingClosed || !selectedOptionId || isPlacing}
           onClick={() => void onPlaceBet()}
-          className="mt-3 w-full rounded-xl bg-red-500 px-3 py-2 text-xs font-semibold text-white disabled:bg-white/20 disabled:text-white/50"
+          className="mt-2 w-full rounded-lg bg-red-500/90 px-2 py-1.5 text-[11px] font-semibold text-white disabled:bg-white/15 disabled:text-white/45"
         >
           {bettingClosed
             ? "Betting closed"
             : isPlacing
-              ? "Placing..."
+              ? "Placing…"
               : !selectedOptionId
                 ? gridMode
-                  ? "Select a square"
+                  ? "Pick a square"
                   : "Select option"
-                : gridMode
-                  ? `Place bet on ${selectedLabel}`
-                  : "Place bet"}
+                : "Place bet"}
         </button>
       </div>
     </div>
