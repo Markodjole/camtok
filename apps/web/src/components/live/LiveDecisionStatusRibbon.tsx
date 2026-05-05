@@ -76,39 +76,34 @@ export function LiveDecisionStatusRibbon({
         : "rgba(148,163,184,0.95)";
 
   return (
-    <div className="pointer-events-none absolute left-1/2 top-3 z-[60] w-full max-w-[min(94vw,20rem)] -translate-x-1/2 px-2">
-      <div className="flex flex-col items-center gap-1">
-        {currentBetHeadline ? (
-          <div className="text-center drop-shadow-md">
-            <div className="text-[8px] font-semibold uppercase tracking-wide text-violet-200/85">
-              Current bet
-            </div>
-            <div className="text-[11px] font-bold leading-tight text-white">
-              {currentBetHeadline}
-            </div>
-          </div>
-        ) : null}
-
-        <div className="flex max-w-full items-center justify-center gap-1 px-0.5 text-[10px] font-medium leading-snug text-white drop-shadow-md [text-shadow:0_1px_2px_rgba(0,0,0,0.85)]">
+    <div className="pointer-events-none absolute left-1/2 top-[6.75rem] z-[60] w-full max-w-[min(94vw,20rem)] -translate-x-1/2 px-2">
+      <div className="flex flex-col items-center gap-1.5">
+        <div className="flex max-w-full items-center justify-center gap-1 rounded-full border border-emerald-500/20 bg-emerald-950/30 px-2 py-0.5 text-[9px] font-medium leading-snug text-emerald-50/80 shadow-sm backdrop-blur-sm [text-shadow:0_1px_2px_rgba(0,0,0,0.55)]">
           <span
             className="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full"
             style={{
               background: dotColor,
               boxShadow:
                 dotTone === "open"
-                  ? "0 0 6px #4ade80"
+                  ? "0 0 5px #4ade8055"
                   : dotTone === "closed"
-                    ? "0 0 6px #fbbf24"
+                    ? "0 0 5px #fbbf2455"
                     : "none",
             }}
           />
           <span className="text-center">{mainLabel}</span>
         </div>
 
+        {currentBetHeadline ? (
+          <div className="max-w-full truncate rounded-full border border-white/10 bg-black/40 px-2.5 py-1 text-center text-[10px] font-semibold leading-tight text-white/90 shadow-sm backdrop-blur-sm [text-shadow:0_1px_2px_rgba(0,0,0,0.65)]">
+            {currentBetHeadline}
+          </div>
+        ) : null}
+
         {betOptionLabel ? (
-          <div className="text-[9px] font-medium leading-tight text-white/90 drop-shadow-md [text-shadow:0_1px_2px_rgba(0,0,0,0.8)]">
+          <div className="text-[9px] font-medium leading-tight text-white/75 [text-shadow:0_1px_2px_rgba(0,0,0,0.8)]">
             Pick:{" "}
-            <span className="font-bold text-violet-200">{betOptionLabel}</span>
+            <span className="font-bold text-violet-200/90">{betOptionLabel}</span>
           </div>
         ) : null}
       </div>

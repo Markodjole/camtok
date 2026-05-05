@@ -815,12 +815,14 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       </div>
 
       {room.destination ? (
-        <div className="pointer-events-none absolute inset-x-0 top-[6.75rem] z-30 flex justify-center px-3">
-          <div className="pointer-events-auto flex max-w-[90%] items-center gap-1 rounded-full border border-red-400/30 bg-red-950/40 px-2 py-0.5 text-[9px] font-medium text-red-100/92 shadow-sm backdrop-blur-sm">
-            <span className="shrink-0 text-[10px] opacity-80">📍</span>
-            <span className="min-w-0 truncate">{room.destination.label}</span>
+        <div className="pointer-events-none fixed bottom-[4.75rem] left-2 z-30 max-w-[min(72vw,14rem)]">
+          <div className="pointer-events-auto flex items-center gap-1 rounded-md border border-white/10 bg-black/35 px-1.5 py-px text-[8px] font-normal leading-tight text-white/55 shadow-none backdrop-blur-sm">
+            <span className="shrink-0 opacity-70" aria-hidden>
+              📍
+            </span>
+            <span className="min-w-0 flex-1 truncate">{room.destination.label}</span>
             {destinationDistanceM != null && (
-              <span className="shrink-0 opacity-80">
+              <span className="shrink-0 tabular-nums opacity-60">
                 · {formatDistance(destinationDistanceM)}
                 {destinationEtaSec != null ? ` · ${formatEta(destinationEtaSec)}` : ""}
               </span>

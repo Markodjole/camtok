@@ -1067,18 +1067,27 @@ export function LiveMap({
         </div>
       )}
       <div className="pointer-events-none absolute left-2 right-2 top-2 z-[2000] flex flex-wrap items-start justify-between gap-2">
-        <div className="flex flex-wrap gap-1">
+        <div className="flex flex-wrap items-center gap-1">
           {destinationRoute && destinationRoute.length > 1 ? (
-            <span className="rounded-full border border-red-300/60 bg-red-500/80 px-2 py-1 text-[10px] font-semibold tracking-wide text-white shadow-md">
-              {destinationRouteLabel ?? "Google suggested route"}
+            <span
+              className="inline-flex items-center gap-1 rounded-md border border-red-400/20 bg-black/30 px-1 py-px text-[7px] font-medium text-white/45 shadow-none backdrop-blur-[2px]"
+              title={destinationRouteLabel ?? "Suggested path to destination on map"}
+            >
+              <span className="whitespace-nowrap">Google Maps</span>
+              <span
+                className="select-none font-mono text-[8px] font-semibold leading-none tracking-tight text-red-400/70"
+                aria-hidden
+              >
+                − − −
+              </span>
             </span>
           ) : null}
         </div>
-        <div className="flex max-w-[min(92%,280px)] flex-wrap justify-end gap-1">
+        <div className="flex max-w-[min(92%,280px)] flex-wrap justify-end gap-0.5 opacity-85">
           {(driverRouteBadges ?? []).map((label) => (
             <span
               key={label}
-              className="rounded-full border border-sky-300/55 bg-sky-950/88 px-2 py-0.5 text-[9px] font-semibold leading-tight text-sky-50 shadow-md backdrop-blur-sm"
+              className="rounded-full border border-sky-400/35 bg-sky-950/55 px-1.5 py-px text-[8px] font-medium leading-tight text-sky-100/80 shadow-sm backdrop-blur-sm"
             >
               {label}
             </span>
