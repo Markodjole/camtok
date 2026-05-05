@@ -16,6 +16,7 @@ import {
 } from "@bettok/live";
 import { isValidGridOptionForSpec, type CityGridSpecCompact } from "@/lib/live/grid/cityGrid500";
 import { LIVE_BET_LOCK_DISTANCE_M } from "@/lib/live/liveBetLockDistance";
+import { liveBetRelaxServer } from "@/lib/live/liveBetRelax";
 import { buildServerClickSnapshot } from "@/lib/live/betting/clickSnapshot";
 import { computeDriverRouteInstruction } from "@/lib/live/routing/computeDriverRouteInstruction";
 
@@ -110,7 +111,7 @@ export async function placeLiveBet(input: PlaceLiveBetInput) {
     return { error: "Market not open" };
   }
   const locksAt = new Date((market as { locks_at: string }).locks_at).getTime();
-  if (Date.now() >= locksAt) {
+  if (!liveBetRelaxServer() && Date.now() >= locksAt) {
     return { error: "Market has locked" };
   }
 
@@ -136,7 +137,13 @@ export async function placeLiveBet(input: PlaceLiveBetInput) {
         .maybeSingle()
     : { data: null };
 
-  if (turnLat != null && turnLng != null && sessionId && latestGpsRow) {
+  if (
+    !liveBetRelaxServer() &&
+    turnLat != null &&
+    turnLng != null &&
+    sessionId &&
+    latestGpsRow
+  ) {
     const gps = latestGpsRow as {
       normalized_lat: number | null;
       normalized_lng: number | null;
@@ -539,10 +546,11 @@ export async function openSystemMarketForRoom(roomId: string) {
   // so the distance-based trigger fires first under normal driving. If
   // the distance trigger never fires (e.g. GPS lost, vehicle stopped),
   // this acts as a safety timeout.
+  const relax = liveBetRelaxServer();
   const effectiveBetOpenSec = Math.max(
     betOpenSec,
     decision.triggerEtaSeconds - preTurnBufferSec,
-    600,
+    relax ? 3600 : 600,
   );
   const now = new Date();
   const opensAt = now;

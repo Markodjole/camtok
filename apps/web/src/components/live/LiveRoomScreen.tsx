@@ -13,6 +13,7 @@ import { drivingRouteStyleBadges } from "@/lib/live/routing/drivingRouteStyle";
 import dynamic from "next/dynamic";
 import type { LiveFeedRow, RoutePoint } from "@/actions/live-feed";
 import { LIVE_BET_LOCK_DISTANCE_M } from "@/lib/live/liveBetLockDistance";
+import { liveBetRelaxClient } from "@/lib/live/liveBetRelax";
 import { metersBetween } from "@/lib/live/routing/geometry";
 import { LiveVideoPlayer } from "./LiveVideoPlayer";
 import { DirectionalBetPad } from "./DirectionalBetPad";
@@ -124,7 +125,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   } | null>(null);
   const skillFeedbackTimerRef = { current: null as ReturnType<typeof setTimeout> | null };
   const { betPill, flash } = useBetPill();
-  const { data: activeBettingRound } = useActiveBetRound(room.roomId);
+  const { data: activeBettingRound } = useActiveBetRound(room.roomId, 2500);
 
   useEffect(() => {
     setJoyPortalReady(true);
@@ -327,18 +328,18 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const viewerFollowZoomForBet = useMemo(() => {
     if (currentMarket?.marketType !== "city_grid" || zones.length === 0) return null;
     const t = activeBettingRound?.roundPlan?.type;
-    if (!t) return null;
     const z = mapProfile(room.transportMode, "viewer").zoom;
-    if (t === "next_zone") return Math.max(10.5, z - 5);
+    const wide = () => Math.max(8.75, z - 6.75);
+    const inZone = () => Math.max(10.25, z - 3.75);
     if (
       t === "zone_exit_time" ||
       t === "zone_duration" ||
       t === "turns_before_zone_exit" ||
       t === "stop_count"
     ) {
-      return Math.max(12.5, z - 2.25);
+      return inZone();
     }
-    return null;
+    return wide();
   }, [
     activeBettingRound?.roundPlan?.type,
     currentMarket?.marketType,
@@ -378,34 +379,35 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
   // Distance gate: only when market defines a turn point (matches server placeLiveBet).
   const isDistanceLocked =
-    currentMarket?.marketType === "city_grid"
-      ? false
-      : (() => {
-          if (
-            currentMarket?.turnPointLat == null ||
-            currentMarket?.turnPointLng == null
-          ) {
-            return false;
-          }
-          const last = routePoints[routePoints.length - 1];
-          if (!last) return false;
-          return (
-            metersBetween(
-              { lat: last.lat, lng: last.lng },
-              {
-                lat: currentMarket.turnPointLat,
-                lng: currentMarket.turnPointLng,
-              },
-            ) <= LIVE_BET_LOCK_DISTANCE_M
-          );
-        })();
-  const isTimeLocked = currentMarket
-    ? (() => {
-        const t = Date.parse(currentMarket.locksAt);
-        if (!Number.isFinite(t)) return false;
-        return t <= Date.now();
-      })()
-    : false;
+    !liveBetRelaxClient() &&
+    currentMarket?.marketType !== "city_grid" &&
+    (() => {
+      if (
+        currentMarket?.turnPointLat == null ||
+        currentMarket?.turnPointLng == null
+      ) {
+        return false;
+      }
+      const last = routePoints[routePoints.length - 1];
+      if (!last) return false;
+      return (
+        metersBetween(
+          { lat: last.lat, lng: last.lng },
+          {
+            lat: currentMarket.turnPointLat,
+            lng: currentMarket.turnPointLng,
+          },
+        ) <= LIVE_BET_LOCK_DISTANCE_M
+      );
+    })();
+  const isTimeLocked =
+    !liveBetRelaxClient() &&
+    !!currentMarket &&
+    (() => {
+      const t = Date.parse(currentMarket.locksAt);
+      if (!Number.isFinite(t)) return false;
+      return t <= Date.now();
+    })();
   const isLocked = isTimeLocked || isDistanceLocked;
 
   /** Ribbon: open vs closed from lock distance (+ time safety net), not revealAt flicker. */
@@ -424,10 +426,13 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           })
         : Number.POSITIVE_INFINITY;
     const timeClosed =
+      !liveBetRelaxClient() &&
       !!currentMarket &&
       Number.isFinite(Date.parse(currentMarket.locksAt)) &&
       nowTick >= Date.parse(currentMarket.locksAt);
-    if (distBet <= LIVE_BET_LOCK_DISTANCE_M || timeClosed) return "active";
+    const distClosed =
+      !liveBetRelaxClient() && distBet <= LIVE_BET_LOCK_DISTANCE_M;
+    if (distClosed || timeClosed) return "active";
     return "pending";
   })();
 
@@ -986,11 +991,11 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
       {showBetBottomSheet && currentMarket?.marketType === "city_grid" ? (
         <MapSelectionBottomSheet
-          betHeadline={sheetBetHeadline}
+          betHeadline={currentMarket.title ?? sheetBetHeadline}
           selectionDetail={
             selectedZone
-              ? `500 m cell · ${selectedZone.name}`
-              : "Tap the map to choose a square"
+              ? `Selected · ${selectedZone.name}`
+              : "Tap the map once to pick a cell, then tap Place bet."
           }
           marketOptions={[]}
           selectedOptionId={selectedZoneId}
@@ -1165,7 +1170,11 @@ function MapSelectionBottomSheet({
               {betHeadline}
             </div>
             {selectionDetail ? (
-              <div className="mt-0.5 text-[10px] leading-snug text-white/55">
+              <div
+                className={`mt-1 text-[10px] leading-snug ${
+                  gridMode ? "text-white/70" : "mt-0.5 text-white/55"
+                }`}
+              >
                 {selectionDetail}
               </div>
             ) : null}
@@ -1181,11 +1190,7 @@ function MapSelectionBottomSheet({
             </button>
           </div>
         </div>
-        {gridMode ? (
-          <div className="rounded-md border border-cyan-400/20 bg-cyan-500/10 px-2 py-1 text-[10px] text-cyan-100/85">
-            Tap map to move your pick
-          </div>
-        ) : (
+        {gridMode ? null : (
           <div className="max-h-28 space-y-1 overflow-y-auto">
             {sorted.map((opt) => {
               const active = selectedOptionId === opt.id;
@@ -1219,7 +1224,7 @@ function MapSelectionBottomSheet({
               ? "Placing…"
               : !selectedOptionId
                 ? gridMode
-                  ? "Pick a square"
+                  ? "Choose a cell on the map"
                   : "Select option"
                 : "Place bet"}
         </button>

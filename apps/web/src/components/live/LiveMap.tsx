@@ -265,6 +265,15 @@ export function LiveMap({
   const profile = mapProfile(transportMode, streamer ? "streamer" : "viewer");
 
   useEffect(() => {
+    const m = mapRef.current;
+    if (!m || streamer || !followMode) return;
+    if (viewerFollowZoom == null || !Number.isFinite(viewerFollowZoom)) return;
+    const c = m.getCenter();
+    if (Math.abs(m.getZoom() - viewerFollowZoom) < 0.06) return;
+    m.setView(c, viewerFollowZoom, { animate: true, duration: 0.45 });
+  }, [viewerFollowZoom, followMode, streamer]);
+
+  useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
     let done = false;
