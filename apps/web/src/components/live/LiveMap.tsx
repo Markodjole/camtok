@@ -163,6 +163,13 @@ function normalizeAngleDeg(deg: number): number {
 /** Viewer bearing blend toward GPS heading (~Google Maps navigation feel). */
 const VIEWER_MAP_ROTATION_TAU_SEC = 2;
 
+/** Zoom target approaches this fraction of the remaining delta per animation frame (~60fps). */
+const VIEWER_ZOOM_BLEND_PER_FRAME = 0.035;
+
+/** Slower `setView` / zoom ramp — **city grid bounds framing only** (see `smoothGridFramingRef`). */
+const MAP_SET_VIEW_DURATION_SEC = 1.35;
+const MAP_SET_VIEW_EASE_LINEARITY = 0.26;
+
 /** True Δt between snapshots (viewer DB trail); avoids bogus speed when poll cadence ≠ GPS cadence. */
 function motionSegmentDtSec(
   prev: RoutePoint | null,
@@ -252,6 +259,8 @@ export function LiveMap({
   const viewerFollowZoomRef = useRef<number | null>(null);
   /** Zoom implied by last `fitBounds` when `viewerFollowLatLngBounds` is used. */
   const viewerBoundsZoomRef = useRef<number | null>(null);
+  /** Grid city bounds framing uses eased zoom; turn/directional bets keep legacy snap zoom. */
+  const smoothGridFramingRef = useRef(false);
   const smoothHeadingRef = useRef<number>(0);
   /** CSS wrapper rotation target (degrees); `-vehicleHeading`. Viewer RAF eases toward this. */
   const viewerMapRotationTargetRef = useRef<number>(0);
@@ -265,6 +274,7 @@ export function LiveMap({
   routePointsLenRef.current = routePoints.length;
   followModeRef.current = followMode;
   viewerFollowZoomRef.current = viewerFollowZoom ?? null;
+  smoothGridFramingRef.current = viewerFollowLatLngBounds != null;
   rotateWithHeadingRef.current = rotateWithHeading;
   const streamer = audienceRole === "streamer";
   const showHistoryPath = true;
@@ -277,10 +287,22 @@ export function LiveMap({
     if (!m || streamer || !followMode) return;
     if (viewerFollowLatLngBounds != null) return;
     if (viewerFollowZoom == null || !Number.isFinite(viewerFollowZoom)) return;
+    // Viewer motion loop eases zoom; avoid a competing animated setView.
+    if (routePoints.length > 0) return;
     const c = m.getCenter();
-    if (Math.abs(m.getZoom() - viewerFollowZoom) < 0.06) return;
-    m.setView(c, viewerFollowZoom, { animate: true, duration: 0.45 });
-  }, [viewerFollowZoom, viewerFollowLatLngBounds, followMode, streamer]);
+    if (Math.abs(m.getZoom() - viewerFollowZoom) < 0.05) return;
+    m.setView(c, viewerFollowZoom, {
+      animate: true,
+      duration: 0.45,
+      easeLinearity: 0.28,
+    });
+  }, [
+    viewerFollowZoom,
+    viewerFollowLatLngBounds,
+    followMode,
+    streamer,
+    routePoints.length,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -314,12 +336,14 @@ export function LiveMap({
       const padPx = heightM < 700 ? 40 : 22;
       const maxZ = heightM < 700 ? 19 : 18.25;
       m.invalidateSize(false);
-      m.fitBounds(bounds, {
-        padding: [padPx, padPx],
-        maxZoom: maxZ,
-        animate: false,
-      });
-      viewerBoundsZoomRef.current = m.getZoom();
+      const padPt = L.point(padPx, padPx);
+      let zFit = m.getBoundsZoom(bounds, false, padPt);
+      if (!Number.isFinite(zFit)) {
+        viewerBoundsZoomRef.current = null;
+        return;
+      }
+      zFit = Math.min(maxZ, zFit);
+      viewerBoundsZoomRef.current = zFit;
     })();
     return () => {
       cancelled = true;
@@ -733,7 +757,24 @@ export function LiveMap({
       }
       if (followMode) {
         if (isFirstFollowFrame) {
-          m.setView(pos, targetZoom, { animate: true, duration: 0.45 });
+          const gridFraming = viewerFollowLatLngBounds != null;
+          m.setView(pos, targetZoom, {
+            animate: true,
+            duration: streamer
+              ? gridFraming
+                ? 0.72
+                : 0.55
+              : gridFraming
+                ? MAP_SET_VIEW_DURATION_SEC
+                : 0.45,
+            easeLinearity: streamer
+              ? gridFraming
+                ? 0.26
+                : 0.28
+              : gridFraming
+                ? MAP_SET_VIEW_EASE_LINEARITY
+                : 0.28,
+          });
         }
         hasAppliedInitialZoomRef.current = true;
       }
@@ -1071,10 +1112,22 @@ export function LiveMap({
 
       dd.setLatLng([nLat, nLng]);
       if (arRef.current) arRef.current.setLatLng([nLat, nLng]);
-      const z =
-        viewerBoundsZoomRef.current ??
-        viewerFollowZoomRef.current ??
-        mm.getZoom();
+      const targetZ =
+        viewerBoundsZoomRef.current ?? viewerFollowZoomRef.current ?? null;
+      const curZ = mm.getZoom();
+      let z = curZ;
+      if (followMode && targetZ != null && Number.isFinite(targetZ)) {
+        if (smoothGridFramingRef.current) {
+          const dz = targetZ - curZ;
+          if (Math.abs(dz) < 0.012) {
+            z = targetZ;
+          } else {
+            z = curZ + dz * VIEWER_ZOOM_BLEND_PER_FRAME;
+          }
+        } else {
+          z = targetZ;
+        }
+      }
       mm.setView([nLat, nLng], z, { animate: false });
 
       viewerSmoothRafRef.current = requestAnimationFrame(loop);

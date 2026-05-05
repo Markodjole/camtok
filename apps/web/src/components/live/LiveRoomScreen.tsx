@@ -311,9 +311,12 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     }));
   }, [cityGridSpec]);
 
+  const zoneMarketActive =
+    currentMarket?.marketType === "city_grid" && zones.length > 0;
+
   const zoneEngineBetActive = (() => {
     const t = activeBettingRound?.roundPlan?.type;
-    if (!t || zones.length === 0 || currentMarket?.marketType !== "city_grid") {
+    if (!t || !zoneMarketActive) {
       return false;
     }
     return (
@@ -325,7 +328,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     );
   })();
 
-  const effectiveShowZones = zoneEngineBetActive || showZones;
+  /** Same as toggling the layers button on whenever the live bet uses the grid. */
+  const effectiveShowZones = zoneMarketActive || showZones;
 
   const zonesVisualStyleForBet = zoneEngineBetActive ? "muted" : "default";
 
@@ -879,7 +883,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             active={effectiveShowZones}
             onClick={() => setShowZones((v) => !v)}
             title={
-              zoneEngineBetActive
+              zoneMarketActive
                 ? "Zones on for this bet"
                 : effectiveShowZones
                   ? "Hide zones"
