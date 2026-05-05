@@ -34,6 +34,7 @@ import {
   IconCrosshair,
 } from "./OwnerLiveControlPanel";
 import { useViewerChromeStore } from "@/stores/viewer-chrome-store";
+import { mapProfile } from "./LiveMap";
 
 const LiveMap = dynamic(() => import("./LiveMap").then((m) => m.LiveMap), {
   ssr: false,
@@ -306,6 +307,46 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       polygon: c.polygon,
     }));
   }, [cityGridSpec]);
+
+  const zoneEngineBetActive = (() => {
+    const t = activeBettingRound?.roundPlan?.type;
+    if (!t || zones.length === 0 || currentMarket?.marketType !== "city_grid") {
+      return false;
+    }
+    return (
+      t === "next_zone" ||
+      t === "zone_exit_time" ||
+      t === "zone_duration" ||
+      t === "turns_before_zone_exit" ||
+      t === "stop_count"
+    );
+  })();
+
+  const effectiveShowZones = zoneEngineBetActive || showZones;
+
+  const viewerFollowZoomForBet = useMemo(() => {
+    if (currentMarket?.marketType !== "city_grid" || zones.length === 0) return null;
+    const t = activeBettingRound?.roundPlan?.type;
+    if (!t) return null;
+    const z = mapProfile(room.transportMode, "viewer").zoom;
+    if (t === "next_zone") return Math.max(10.5, z - 5);
+    if (
+      t === "zone_exit_time" ||
+      t === "zone_duration" ||
+      t === "turns_before_zone_exit" ||
+      t === "stop_count"
+    ) {
+      return Math.max(12.5, z - 2.25);
+    }
+    return null;
+  }, [
+    activeBettingRound?.roundPlan?.type,
+    currentMarket?.marketType,
+    room.transportMode,
+    zones.length,
+  ]);
+
+  const zonesVisualStyleForBet = zoneEngineBetActive ? "muted" : "default";
 
   const PASSED_HIDE_PIN_LINE_M = 12;
   const routeLast =
@@ -744,7 +785,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             checkpoints={checkpoints}
             selectedZoneId={selectedZoneId}
             selectedCheckpointId={selectedCheckpointId}
-            showZones={showZones}
+            showZones={effectiveShowZones}
+            zonesVisualStyle={zonesVisualStyleForBet}
             showCheckpoints={true}
             turnTarget={viewerTurnTargetForMap}
             driverPins={viewerOsrmPreviewPins}
@@ -754,6 +796,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             destinationRoute={destinationRoute}
             destinationRouteLabel="Google suggested route"
             driverRouteBadges={driverRouteBadges}
+            viewerFollowZoom={viewerFollowZoomForBet}
             onZoneSelect={(id) => {
               setSelectedZoneId(id);
               if (id) setSelectedCheckpointId(null);
@@ -812,9 +855,15 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       {mapExpanded ? (
         <div className="absolute right-4 top-[10.5rem] z-40 flex flex-col items-center gap-5">
           <IconRailButton
-            active={showZones}
+            active={effectiveShowZones}
             onClick={() => setShowZones((v) => !v)}
-            title={showZones ? "Hide zones" : "Show zones"}
+            title={
+              zoneEngineBetActive
+                ? "Zones on for this bet"
+                : effectiveShowZones
+                  ? "Hide zones"
+                  : "Show zones"
+            }
           >
             <IconLayers />
           </IconRailButton>
@@ -890,7 +939,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               checkpoints={checkpoints}
               selectedZoneId={selectedZoneId}
               selectedCheckpointId={selectedCheckpointId}
-              showZones={showZones}
+              showZones={effectiveShowZones}
+              zonesVisualStyle={zonesVisualStyleForBet}
               showCheckpoints={true}
               turnTarget={viewerTurnTargetForMap}
               driverPins={viewerOsrmPreviewPins}
@@ -900,6 +950,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               destinationRoute={destinationRoute}
               destinationRouteLabel="Google suggested route"
               driverRouteBadges={driverRouteBadges}
+              viewerFollowZoom={viewerFollowZoomForBet}
             />
             {routePoints.length === 0 && (
               <div className="absolute inset-0 flex items-center justify-center bg-black/30 text-[9px] text-white/70">
