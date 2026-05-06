@@ -164,7 +164,10 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   }, [room.currentMarket?.id]);
 
   const effectiveEngineType: BetTypeV2 | null =
-    viewerEnginePillType ?? activeBettingRound?.roundPlan?.type ?? null;
+    viewerEnginePillType ??
+    activeBettingRound?.roundPlan?.type ??
+    activeBettingRound?.eligibleRoundPlans?.[0]?.type ??
+    null;
 
   useEffect(() => {
     setJoyPortalReady(true);
@@ -383,7 +386,20 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const routeLast =
     routePoints.length > 0 ? routePoints[routePoints.length - 1]! : null;
 
-  /** Viewer map: `next_zone` (pick a cell) uses 1.5 km framing; all other grid engines use ~one cell only. */
+  /**
+   * Single source of truth for "what bet is the viewer looking at right now".
+   * Pill click > active round plan > first eligible plan > null.
+   * Drives **headline, zoom framing, sheet copy** so they always agree with
+   * what the user sees on the engine pill.
+   */
+  const displayBetType: BetTypeV2 | null = effectiveEngineType;
+
+  /**
+   * Viewer follow framing:
+   *  - `next_zone` (pick a square) → wide 1500 m square — multiple cells visible.
+   *  - All other zone engines on city grid → tight square ~ one cell only.
+   *  - All other markets → no fixed bounds (LiveMap uses profile zoom).
+   */
   const VIEWER_PICK_ZONE_FRAMING_METERS = 1500;
 
   const viewerGridMapFraming = useMemo((): {
@@ -423,28 +439,17 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         }
       }
 
-      const pickNextZone = effectiveEngineType === "next_zone";
+      const pickZone = displayBetType === "next_zone";
       const cellM = Math.max(420, cityGridSpec.cellMeters ?? 500);
-      const tightM = cellM * 1.08;
+      const tightM = cellM * 1.04;
 
       return {
         bounds: squareWgs84BoundsFromCenter(
           centerLat,
           centerLng,
-          pickNextZone ? VIEWER_PICK_ZONE_FRAMING_METERS : tightM,
+          pickZone ? VIEWER_PICK_ZONE_FRAMING_METERS : tightM,
         ),
-        minZoom: pickNextZone ? 18.2 : 18.85,
-      };
-    }
-
-    if (room.destination) {
-      return {
-        bounds: squareWgs84BoundsFromCenter(
-          routeLast.lat,
-          routeLast.lng,
-          680,
-        ),
-        minZoom: 18.75,
+        minZoom: pickZone ? 15 : 16.5,
       };
     }
 
@@ -452,11 +457,10 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   }, [
     currentMarket?.marketType,
     cityGridSpec,
-    effectiveEngineType,
+    displayBetType,
     routeLast?.lat,
     routeLast?.lng,
     selectedZoneId,
-    room.destination,
   ]);
 
   const passedMarketTurn =
@@ -622,29 +626,45 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const showViewerGridBetSheet =
     showBetBottomSheet &&
     currentMarket?.marketType === "city_grid" &&
-    isViewerZoneEngineType(effectiveEngineType);
+    isViewerZoneEngineType(displayBetType);
 
   const showViewerDirectionalBetSheet =
     showBetBottomSheet &&
     currentMarket != null &&
     (currentMarket.marketType !== "city_grid" ||
-      effectiveEngineType === "next_turn") &&
-    !isViewerZoneEngineType(effectiveEngineType);
+      displayBetType === "next_turn") &&
+    !isViewerZoneEngineType(displayBetType);
 
   const mapBetSheetOpen =
     showViewerGridBetSheet || showViewerDirectionalBetSheet;
 
-  const displayBetTypeForHeadline: BetTypeV2 | null =
-    effectiveEngineType ??
-    activeBettingRound?.eligibleRoundPlans?.[0]?.type ??
-    null;
-
   const viewerCurrentBetHeadline =
-    displayBetTypeForHeadline != null
-      ? engineBetHeadline(displayBetTypeForHeadline)
-      : null;
+    displayBetType != null ? engineBetHeadline(displayBetType) : null;
 
   const sheetBetHeadline = viewerCurrentBetHeadline ?? "Live bet";
+
+  /** Subtitle copy for the grid sheet — driven by the active engine pill. */
+  function gridSheetSubtitle(): string {
+    if (!displayBetType) return "Tap the map to pick a cell.";
+    switch (displayBetType) {
+      case "next_zone":
+        return selectedZone
+          ? `Selected · ${selectedZone.name}`
+          : "Tap the map to pick a square, then Place bet.";
+      case "turns_before_zone_exit":
+        return "How many turns before the driver leaves this zone?";
+      case "stop_count":
+        return "How many stops in this zone?";
+      case "zone_exit_time":
+        return "How long until the driver leaves this zone?";
+      case "zone_duration":
+        return "How long will the driver stay in this zone?";
+      default:
+        return selectedZone
+          ? `Selected · ${selectedZone.name}`
+          : "Tap the map once to pick a cell, then tap Place bet.";
+    }
+  }
 
   const driverRouteBadges = useMemo(
     () => drivingRouteStyleBadges(room.drivingRouteStyle, room.transportMode),
@@ -1140,11 +1160,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             currentMarket.title ??
             sheetBetHeadline
           }
-          selectionDetail={
-            selectedZone
-              ? `Selected · ${selectedZone.name}`
-              : "Tap the map once to pick a cell, then tap Place bet."
-          }
+          selectionDetail={gridSheetSubtitle()}
           marketOptions={[]}
           selectedOptionId={selectedZoneId}
           onSelectOption={() => undefined}

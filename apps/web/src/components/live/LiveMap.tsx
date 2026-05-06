@@ -186,19 +186,19 @@ const VIEWER_MAP_ROTATION_TAU_SEC = 2;
 const VIEWER_ZOOM_BLEND_PER_FRAME = 0.16;
 
 /** With `viewerFollowLatLngBounds`, never go wider than this (higher = closer). */
-const VIEWER_FOLLOW_BOUNDS_ZOOM_FLOOR = 18.65;
+const VIEWER_FOLLOW_BOUNDS_ZOOM_FLOOR = 14;
 
 /**
  * After `getBoundsZoom`, nudge **in** (viewer only) — fitBounds alone kept the
  * camera too loose for navigation-style follow.
  */
-const VIEWER_FIT_BOUNDS_ZOOM_BIAS = 0.75;
+const VIEWER_FIT_BOUNDS_ZOOM_BIAS = 0.25;
 
 /**
  * Added to `mapProfile().zoom` for viewers only (streamer unchanged).
- * Users consistently want the spectator map tighter than the driver baseline.
+ * Modest extra so spectators sit a little closer than driver baseline.
  */
-const VIEWER_FOLLOW_ZOOM_EXTRA = 1.35;
+const VIEWER_FOLLOW_ZOOM_EXTRA = 0.3;
 
 /** Slower `setView` / zoom ramp — **city grid bounds framing only** (see `smoothGridFramingRef`). */
 const MAP_SET_VIEW_DURATION_SEC = 1.35;
@@ -685,7 +685,10 @@ export function LiveMap({
             <div style="width:18px;height:18px;border-radius:50%;background:#ef4444;border:2px solid white;box-shadow:0 0 8px rgba(0,0,0,0.85)"></div>
             <div style="width:2px;height:10px;background:#ef4444;box-shadow:0 0 4px rgba(0,0,0,0.6)"></div>
           </div>`;
-        const html = `<div class="camtok-dest-screen-flat" style="display:flex;flex-direction:column;align-items:center;transform:rotate(0deg);transform-origin:50% 100%">${labelHtml}${pinHtml}</div>`;
+        const transitionCss = streamer
+          ? "transform 1100ms cubic-bezier(0.22,0.61,0.36,1)"
+          : "none";
+        const html = `<div class="camtok-dest-screen-flat" style="display:flex;flex-direction:column;align-items:center;transform:rotate(0deg);transform-origin:50% 100%;transition:${transitionCss};will-change:transform">${labelHtml}${pinHtml}</div>`;
         const w = 280;
         const h = (labelRaw ? 30 : 0) + 30;
         const icon = L.divIcon({
@@ -725,6 +728,7 @@ export function LiveMap({
     destination?.label,
     destinationRoute,
     mapReady,
+    streamer,
   ]);
 
   useEffect(() => {
@@ -822,7 +826,7 @@ export function LiveMap({
             driverPins.length > 0 &&
             Number.isFinite(driverPins[0]?.lat)));
       const navZoomFloor = viewerTurnPinActive
-        ? Math.max(viewerFollowProfileZoom, 19)
+        ? Math.max(viewerFollowProfileZoom, 17.5)
         : viewerFollowProfileZoom;
       viewerTurnNavZoomRef.current = viewerTurnPinActive ? navZoomFloor : null;
       const baseZoom = viewerFollowLatLngBounds
@@ -912,14 +916,32 @@ export function LiveMap({
             smoothHeadingRef.current + delta * rotationEase,
           );
           setRotationDeg(smoothHeadingRef.current);
+          const root = containerRef.current;
+          if (root) {
+            const deg = -smoothHeadingRef.current;
+            root
+              .querySelectorAll<HTMLElement>(".camtok-dest-screen-flat")
+              .forEach((node) => {
+                node.style.transform = `rotate(${deg}deg)`;
+                node.style.transformOrigin = "50% 100%";
+              });
+          }
         } else {
           viewerMapRotationTargetRef.current = target;
-          // Viewer: smoothed every animation frame in the motion loop (~VIEWER_MAP_ROTATION_TAU_SEC).
         }
       } else if (followMode) {
         smoothHeadingRef.current = 0;
         viewerMapRotationTargetRef.current = 0;
         setRotationDeg(0);
+        const root = containerRef.current;
+        if (root) {
+          root
+            .querySelectorAll<HTMLElement>(".camtok-dest-screen-flat")
+            .forEach((node) => {
+              node.style.transform = "rotate(0deg)";
+              node.style.transformOrigin = "50% 100%";
+            });
+        }
       }
     })();
   }, [
@@ -1154,6 +1176,16 @@ export function LiveMap({
           smoothHeadingRef.current + rotDelta * rotAlpha,
         );
         setRotationDeg(smoothHeadingRef.current);
+        const root = containerRef.current;
+        if (root) {
+          const deg = -smoothHeadingRef.current;
+          root
+            .querySelectorAll<HTMLElement>(".camtok-dest-screen-flat")
+            .forEach((node) => {
+              node.style.transform = `rotate(${deg}deg)`;
+              node.style.transformOrigin = "50% 100%";
+            });
+        }
       }
 
       const target = viewerPollTargetRef.current;
