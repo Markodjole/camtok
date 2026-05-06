@@ -476,7 +476,12 @@ export function LiveMap({
       m.on("dragstart", () => {
         onUserInteractRef.current?.();
       });
-      const t = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, opacity: 0.4 });
+      const t = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19,
+        opacity: 0.4,
+        keepBuffer: 8,
+        updateWhenIdle: false,
+      });
       t.addTo(m);
       zoneLayerRef.current = L.layerGroup().addTo(m);
       checkpointLayerRef.current = L.layerGroup().addTo(m);
@@ -516,6 +521,17 @@ export function LiveMap({
   useEffect(() => {
     layerRef.current?.setOpacity(tileOpacity);
   }, [tileOpacity]);
+
+  // When heading-rotation mode changes the container expands from viewport → 1.48× viewport.
+  // Leaflet must re-measure its container so it loads tiles for the full enlarged area.
+  useEffect(() => {
+    const m = mapRef.current;
+    if (!m || !mapReady) return;
+    const id = setTimeout(() => {
+      try { m.invalidateSize(false); } catch { /* noop */ }
+    }, 80);
+    return () => clearTimeout(id);
+  }, [rotateWithHeading, followMode, mapReady]);
 
   useEffect(() => {
     const group = zoneLayerRef.current;
@@ -596,13 +612,6 @@ export function LiveMap({
               poly.on("click", () => onZoneSelect(selected ? null : zone.id));
             }
             poly.addTo(group);
-            if (/^[A-Z][A-Z]*\d+$/.test(zone.name) && zones.length <= 140) {
-              poly.bindTooltip(zone.name, {
-                permanent: true,
-                direction: "center",
-                className: "camtok-grid-cell-lbl",
-              });
-            }
             added++;
           });
         }
@@ -1117,7 +1126,7 @@ export function LiveMap({
       if (followMode) {
         const sz = m.getSize();
         const isMapRotating = rotateWithHeadingRef.current && followModeRef.current;
-        const viewportH = isMapRotating ? sz.y / 1.48 : sz.y;
+        const viewportH = isMapRotating ? sz.y / 1.8 : sz.y;
         const S = viewportH * 0.10;
         const rotRad = isMapRotating ? (rotationDegRef.current * Math.PI) / 180 : 0;
         const driverPt = m.latLngToLayerPoint(livePos);
@@ -1316,7 +1325,7 @@ export function LiveMap({
       const sz = mm.getSize();
       // Container is expanded 24% on each side when rotating; recover viewport height.
       const isMapRotating = rotateWithHeadingRef.current && followModeRef.current;
-      const viewportH = isMapRotating ? sz.y / 1.48 : sz.y;
+      const viewportH = isMapRotating ? sz.y / 1.8 : sz.y;
       const S = viewportH * 0.10;                                   // 10% below centre = 60% from top
       const rotRad = isMapRotating ? (smoothHeadingRef.current * Math.PI) / 180 : 0;
       const driverPt = mm.latLngToLayerPoint([nLat, nLng]);
@@ -1344,7 +1353,7 @@ export function LiveMap({
                 rotateWithHeading && followMode ? `${rotationDeg}deg` : "0deg",
               ...(rotateWithHeading && followMode
                 ? {
-                    inset: "-24%",
+                    inset: "-40%",
                     transform: `rotate(${rotationDeg}deg)`,
                     transformOrigin: "50% 50%",
                     transition: streamer

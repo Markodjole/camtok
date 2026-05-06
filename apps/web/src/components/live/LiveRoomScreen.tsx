@@ -709,17 +709,19 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     !viewerHasBetOnCurrentMarket &&
     !isLocked;
 
+  // Grid cell-picker sheet: only for next_zone on city_grid markets.
   const showViewerGridBetSheet =
     showBetBottomSheet &&
     currentMarket?.marketType === "city_grid" &&
-    isViewerZoneEngineType(displayBetType);
+    displayBetType === "next_zone";
 
+  // Info/action sheet for every other bet type (including stop_count, time_vs_google,
+  // turns_before_zone_exit, zone_exit_time) on ANY market type.
   const showViewerDirectionalBetSheet =
     showBetBottomSheet &&
     currentMarket != null &&
     displayBetType !== "next_turn" &&
-    currentMarket.marketType !== "city_grid" &&
-    !isViewerZoneEngineType(displayBetType);
+    displayBetType !== "next_zone";
 
   const mapBetSheetOpen =
     showViewerGridBetSheet || showViewerDirectionalBetSheet;
