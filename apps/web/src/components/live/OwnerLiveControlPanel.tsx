@@ -88,6 +88,7 @@ export function OwnerLiveControlPanel({
   const [currentPos, setCurrentPos] = useState<{ lat: number; lng: number } | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [roomId, setRoomId] = useState<string | null>(null);
+  const wakeLockRef = useRef<WakeLockSentinel | null>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
@@ -110,6 +111,39 @@ export function OwnerLiveControlPanel({
   const [osmCheckpoints, setOsmCheckpoints] = useState<MapCheckpoint[]>([]);
   const [pipPos, setPipPos] = useState({ top: 48, left: 12 });
   const [pipDragReady, setPipDragReady] = useState(false);
+
+  // Keep the screen awake for the entire live session.
+  useEffect(() => {
+    if (!sessionId) return;
+    if (!("wakeLock" in navigator)) return;
+
+    let active = true;
+
+    const acquire = () => {
+      if (!active || document.visibilityState !== "visible") return;
+      navigator.wakeLock.request("screen").then((sentinel) => {
+        if (!active) { void sentinel.release(); return; }
+        wakeLockRef.current = sentinel;
+        sentinel.addEventListener("release", () => {
+          wakeLockRef.current = null;
+        });
+      }).catch(() => {/* silently ignore unsupported/denied */});
+    };
+
+    acquire();
+
+    // Re-acquire after the page becomes visible again (browser releases lock on hide).
+    document.addEventListener("visibilitychange", acquire);
+
+    return () => {
+      active = false;
+      document.removeEventListener("visibilitychange", acquire);
+      if (wakeLockRef.current) {
+        void wakeLockRef.current.release();
+        wakeLockRef.current = null;
+      }
+    };
+  }, [sessionId]);
 
   const driverRouteBadges = useMemo(
     () =>
