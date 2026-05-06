@@ -128,7 +128,7 @@ export interface LiveMapProps {
    */
   viewerFollowBoundsMinZoom?: number | null;
   /** Muted polygons for engine-highlighted zone overlays. */
-  zonesVisualStyle?: "default" | "muted";
+  zonesVisualStyle?: "default" | "muted" | "pick_zone";
 }
 
 const C = {
@@ -183,7 +183,7 @@ function normalizeAngleDeg(deg: number): number {
 const VIEWER_MAP_ROTATION_TAU_SEC = 2;
 
 /** Zoom target approaches this fraction of the remaining delta per animation frame (~60fps). */
-const VIEWER_ZOOM_BLEND_PER_FRAME = 0.16;
+const VIEWER_ZOOM_BLEND_PER_FRAME = 0.06;
 
 /** With `viewerFollowLatLngBounds`, never go wider than this (higher = closer). */
 const VIEWER_FOLLOW_BOUNDS_ZOOM_FLOOR = 14;
@@ -253,7 +253,7 @@ export function LiveMap({
   viewerFollowZoom = null,
   viewerFollowLatLngBounds = null,
   viewerFollowBoundsMinZoom = null,
-  zonesVisualStyle = "default",
+  zonesVisualStyle = "default" as "default" | "muted" | "pick_zone",
 }: LiveMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<import("leaflet").Map | null>(null);
@@ -548,32 +548,49 @@ export function LiveMap({
               return;
             }
             const muted = zonesVisualStyle === "muted";
+            const pickZone = zonesVisualStyle === "pick_zone";
             // Light strokes + very low fill so roads read; zone hue only hints inside cells.
+            let strokeColor: string;
+            let strokeWeight: number;
+            let fillC: string;
+            let fillOp: number;
+            let dashArr: string | undefined;
+            if (pickZone) {
+              // All non-current cells: visible border + subtle pastel tint.
+              // Current cell (selected or active): highlighted.
+              strokeColor = selected
+                ? "rgba(255,255,255,0.90)"
+                : "rgba(148,163,184,0.75)";
+              strokeWeight = selected ? 2.5 : 1.6;
+              fillC = selected ? color : color;
+              fillOp = selected ? 0.18 : isActive ? 0.09 : 0.04;
+              dashArr = selected ? undefined : undefined;
+            } else if (muted) {
+              strokeColor = selected
+                ? "rgba(255,255,255,0.62)"
+                : "rgba(203,213,225,0.42)";
+              strokeWeight = selected ? 1.75 : 1.1;
+              fillC = "rgba(148,163,184,0.5)";
+              fillOp = selected ? 0.06 : isActive ? 0.035 : 0.02;
+              dashArr = selected ? undefined : "6 5";
+            } else {
+              strokeColor = selected
+                ? "rgba(255,255,255,0.78)"
+                : "rgba(248,250,252,0.38)";
+              strokeWeight = selected ? 2.25 : 1.5;
+              fillC = color;
+              fillOp = selected
+                ? isActive ? 0.1 : 0.05
+                : isActive ? 0.055 : 0.028;
+              dashArr = selected ? undefined : "7 5";
+            }
             const poly = L.polygon(latlngs, {
-              color: muted
-                ? selected
-                  ? "rgba(255,255,255,0.62)"
-                  : "rgba(203,213,225,0.42)"
-                : selected
-                  ? "rgba(255,255,255,0.78)"
-                  : "rgba(248,250,252,0.38)",
-              weight: muted ? (selected ? 1.75 : 1.1) : selected ? 2.25 : 1.5,
-              fillColor: muted ? "rgba(148,163,184,0.5)" : color,
-              fillOpacity: muted
-                ? selected
-                  ? 0.06
-                  : isActive
-                    ? 0.035
-                    : 0.02
-                : selected
-                  ? isActive
-                    ? 0.1
-                    : 0.05
-                  : isActive
-                    ? 0.055
-                    : 0.028,
+              color: strokeColor,
+              weight: strokeWeight,
+              fillColor: fillC,
+              fillOpacity: fillOp,
               opacity: 1,
-              dashArray: selected ? undefined : muted ? "6 5" : "7 5",
+              dashArray: dashArr,
             });
             if (interactive && onZoneSelect) {
               poly.on("click", () => onZoneSelect(selected ? null : zone.id));
@@ -663,9 +680,9 @@ export function LiveMap({
         );
         const line = L.polyline(pts, {
           color: "#ef4444",
-          weight: 5,
-          opacity: 0.85,
-          dashArray: "10 8",
+          weight: 3,
+          opacity: 0.38,
+          dashArray: "7 9",
           lineCap: "round",
           lineJoin: "round",
         }).addTo(group);
@@ -1096,7 +1113,13 @@ export function LiveMap({
       dot.setLatLng(livePos);
       if (arRef.current) arRef.current.setLatLng(livePos);
       if (followMode) {
-        m.setView(livePos, m.getZoom(), { animate: false });
+        // Offset center upward so vehicle appears ~60% down the screen instead of 50%.
+        const sz = m.getSize();
+        const offsetPx = sz.y * 0.12;
+        const driverPt = m.latLngToLayerPoint(livePos);
+        const centerPt = { x: driverPt.x, y: driverPt.y - offsetPx };
+        const centerLatLng = m.layerPointToLatLng(centerPt as import("leaflet").Point);
+        m.setView(centerLatLng, m.getZoom(), { animate: false });
       }
 
       if (t < totalMs) {
@@ -1274,18 +1297,21 @@ export function LiveMap({
       const curZ = mm.getZoom();
       let z = curZ;
       if (followMode && targetZ != null && Number.isFinite(targetZ)) {
-        if (smoothGridFramingRef.current) {
-          const dz = targetZ - curZ;
-          if (Math.abs(dz) < 0.012) {
-            z = targetZ;
-          } else {
-            z = curZ + dz * VIEWER_ZOOM_BLEND_PER_FRAME;
-          }
-        } else {
+        // Always blend smoothly regardless of smoothGridFramingRef.
+        const dz = targetZ - curZ;
+        if (Math.abs(dz) < 0.01) {
           z = targetZ;
+        } else {
+          z = curZ + dz * VIEWER_ZOOM_BLEND_PER_FRAME;
         }
       }
-      mm.setView([nLat, nLng], z, { animate: false });
+      // Offset center so vehicle sits ~60% down the screen (not centered).
+      const sz = mm.getSize();
+      const offsetPx = sz.y * 0.12;
+      const driverPt = mm.latLngToLayerPoint([nLat, nLng]);
+      const centerPt = { x: driverPt.x, y: driverPt.y - offsetPx };
+      const centerLatLng = mm.layerPointToLatLng(centerPt as import("leaflet").Point);
+      mm.setView(centerLatLng, z, { animate: false });
 
       viewerSmoothRafRef.current = requestAnimationFrame(loop);
     };

@@ -29,9 +29,11 @@ export type LiveRoundSelectionSnapshot = {
  */
 export const MVP_BET_TYPES_V2: ReadonlySet<BetTypeV2> = new Set([
   "next_turn",
-  "time_vs_google",
-  "zone_exit_time",
+  "next_zone",
+  "turns_before_zone_exit",
   "stop_count",
+  "zone_exit_time",
+  "time_vs_google",
 ]);
 
 export function isMvpBetType(type: BetTypeV2): boolean {

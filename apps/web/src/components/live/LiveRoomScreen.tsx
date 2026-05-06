@@ -169,6 +169,47 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     activeBettingRound?.eligibleRoundPlans?.[0]?.type ??
     null;
 
+  /**
+   * Stable display bet — only switches to a new type when:
+   *  1. The user explicitly tapped a pill (`viewerEnginePillType` changed), OR
+   *  2. The effective engine type changed AND the current type has been shown for ≥5 s
+   *     AND the new type is expected to last ≥5 s (we can't perfectly predict this,
+   *     so we just enforce the 5 s minimum hold on the outgoing type).
+   */
+  const [stableDisplayBetType, setStableDisplayBetType] = useState<BetTypeV2 | null>(
+    effectiveEngineType,
+  );
+  const stableDisplayLastChangedAtRef = useRef<number>(0);
+  const BET_MIN_DISPLAY_MS = 5_000;
+
+  useEffect(() => {
+    if (viewerEnginePillType != null) {
+      // User explicitly selected a pill — switch immediately.
+      setStableDisplayBetType(viewerEnginePillType);
+      stableDisplayLastChangedAtRef.current = Date.now();
+      return;
+    }
+    if (effectiveEngineType === stableDisplayBetType) return;
+    const elapsed = Date.now() - stableDisplayLastChangedAtRef.current;
+    if (elapsed >= BET_MIN_DISPLAY_MS) {
+      setStableDisplayBetType(effectiveEngineType);
+      stableDisplayLastChangedAtRef.current = Date.now();
+    } else {
+      // Schedule a re-check when the hold period expires.
+      const remaining = BET_MIN_DISPLAY_MS - elapsed;
+      const t = setTimeout(() => {
+        setStableDisplayBetType((prev) => {
+          if (prev !== effectiveEngineType) {
+            stableDisplayLastChangedAtRef.current = Date.now();
+            return effectiveEngineType;
+          }
+          return prev;
+        });
+      }, remaining);
+      return () => clearTimeout(t);
+    }
+  }, [effectiveEngineType, viewerEnginePillType]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     setJoyPortalReady(true);
   }, []);
@@ -380,38 +421,41 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   /** Same as toggling the layers button on whenever the live bet uses the grid. */
   const effectiveShowZones = zoneMarketActive || showZones;
 
-  const zonesVisualStyleForBet = zoneEngineBetActive ? "muted" : "default";
-
   const PASSED_HIDE_PIN_LINE_M = 12;
   const routeLast =
     routePoints.length > 0 ? routePoints[routePoints.length - 1]! : null;
 
   /**
    * Single source of truth for "what bet is the viewer looking at right now".
-   * Pill click > active round plan > first eligible plan > null.
-   * Drives **headline, zoom framing, sheet copy** so they always agree with
-   * what the user sees on the engine pill.
+   * Uses the stable (≥5 s hold) version so the UI doesn't flicker.
+   * Pill click bypasses the hold and switches immediately.
    */
-  const displayBetType: BetTypeV2 | null = effectiveEngineType;
+  const displayBetType: BetTypeV2 | null = stableDisplayBetType;
+
+  const zonesVisualStyleForBet =
+    displayBetType === "next_zone" ? "pick_zone" : zoneEngineBetActive ? "muted" : "default";
 
   /**
-   * Viewer follow framing:
-   *  - `next_zone` (pick a square) → wide 1500 m square — multiple cells visible.
-   *  - All other zone engines on city grid → tight square ~ one cell only.
-   *  - All other markets → no fixed bounds (LiveMap uses profile zoom).
+   * Viewer follow framing rules:
+   *  - `next_turn`  → no fixed bounds; LiveMap uses normal profile zoom (navigation feel).
+   *  - `next_zone`  → 1000 m visible width square around current/selected cell center.
+   *  - all other bets on city_grid → 500 m visible width square.
+   *  - non–city_grid markets → no fixed bounds.
    */
-  const VIEWER_PICK_ZONE_FRAMING_METERS = 1500;
-
   const viewerGridMapFraming = useMemo((): {
     bounds: Wgs84LatLngBoundsTuple | null;
     minZoom: number | null;
   } => {
-    if (!routeLast) return { bounds: null, minZoom: null };
+    // next_turn: standard nav zoom, no bounds override.
+    if (displayBetType === "next_turn" || !routeLast) {
+      return { bounds: null, minZoom: null };
+    }
 
     if (currentMarket?.marketType === "city_grid" && cityGridSpec) {
       let centerLat = routeLast.lat;
       let centerLng = routeLast.lng;
 
+      // Prefer the selected cell's center; fall back to driver's cell.
       const sel = selectedZoneId ? parseGridOptionId(selectedZoneId) : null;
       if (
         sel != null &&
@@ -440,19 +484,16 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       }
 
       const pickZone = displayBetType === "next_zone";
-      const cellM = Math.max(420, cityGridSpec.cellMeters ?? 500);
-      const tightM = cellM * 1.04;
+      // next_zone: ~1000 m width so several neighbouring cells show; other bets: ~500 m.
+      const framingM = pickZone ? 1000 : 500;
 
       return {
-        bounds: squareWgs84BoundsFromCenter(
-          centerLat,
-          centerLng,
-          pickZone ? VIEWER_PICK_ZONE_FRAMING_METERS : tightM,
-        ),
-        minZoom: pickZone ? 15 : 16.5,
+        bounds: squareWgs84BoundsFromCenter(centerLat, centerLng, framingM),
+        minZoom: pickZone ? 15.5 : 16.5,
       };
     }
 
+    // Non–city_grid markets: no bounds override.
     return { bounds: null, minZoom: null };
   }, [
     currentMarket?.marketType,
@@ -621,7 +662,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     showLiveBets &&
     currentMarket != null &&
     !betPanelDismissed &&
-    !viewerHasBetOnCurrentMarket;
+    !viewerHasBetOnCurrentMarket &&
+    !isLocked;
 
   const showViewerGridBetSheet =
     showBetBottomSheet &&

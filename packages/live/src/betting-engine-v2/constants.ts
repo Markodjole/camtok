@@ -6,8 +6,14 @@
 import type { BetTypeV2 } from "./types";
 
 /** Offer next-turn(shared) when distance to decision is within this band (m). */
-export const TURN_BET_OFFER_MAX_M = 200;
+export const TURN_BET_OFFER_MAX_M = 250;
 export const TURN_BET_OFFER_MIN_M = 50;
+
+/**
+ * In-zone bets (`turns_before_zone_exit`, `stop_count`) fire after entering a zone.
+ * `next_zone` fires when the driver is past the first ~40 % of the cell (middle-ish).
+ */
+export const ZONE_MIDDLE_FRACTION = 0.4;
 
 /** Primary close trigger: closer than this locks the shared turn round (m). */
 export const TURN_BET_LOCK_DISTANCE_M = 60;

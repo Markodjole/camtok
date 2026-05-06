@@ -59,21 +59,38 @@ export async function getActiveBettingRoundPayload(
   }
 
   const firstPinBranches = planning?.meaningfulBranchesPerPin[0];
+  const hasPins = (instruction?.pins?.length ?? 0) > 0;
+  const inZone = Boolean(room.regionLabel);
+
+  // ---------- bet-eligibility rules requested by product ----------
+  // • next_turn   : 250 m → 50 m from decision pin (handled in selectBestRound gate)
+  // • turns_before_zone_exit / stop_count : driver is inside a known zone
+  // • next_zone   : driver is in a zone AND NOT close to a turn (middle-of-zone feeling)
+  //                 We suppress it when turn is < 250 m so it doesn't compete.
+  const nearTurn =
+    distanceToTurnM != null &&
+    Number.isFinite(distanceToTurnM) &&
+    distanceToTurnM <= 250;
+  // next_zone only when we're in a zone and not already near a turn decision
+  const canNextZone = inZone && !nearTurn && hasPins;
+  // in-zone bets: always available while in a zone (engine's priority ordering keeps them below next_turn)
+  const canInZone = inZone;
+  // time_vs_google / turn_count: useful whenever we can see a next pin
+  const pinVisible = hasPins && distanceToTurnM != null && distanceToTurnM <= 500;
+
   const snapshot: LiveRoundSelectionSnapshot = {
     distanceToTurnMeters: distanceToTurnM,
     nextPinHasValidBranches: (firstPinBranches ?? 0) >= 2,
     nextPinId:
       instruction?.pins[0] != null ? String(instruction.pins[0]!.id) : null,
-    isInOrNearZone: Boolean(room.regionLabel ?? mkt),
-    canBuildNextZoneRound: false,
-    canBuildZoneExitRound: Boolean(room.regionLabel && mkt),
+    isInOrNearZone: inZone,
+    canBuildNextZoneRound: canNextZone,
+    canBuildZoneExitRound: canInZone && Boolean(mkt),
     canBuildZoneDurationRound: false,
-    canBuildTimeVsGoogleRound: Boolean(
-      room.destination && (instruction?.pins?.length ?? 0) > 0,
-    ),
-    canBuildStopCountRound: last?.speedMps != null,
-    canBuildTurnCountRound: (instruction?.pins?.length ?? 0) > 0,
-    canBuildTurnsBeforeZoneExitRound: Boolean(room.regionLabel),
+    canBuildTimeVsGoogleRound: pinVisible && Boolean(room.destination),
+    canBuildStopCountRound: canInZone && last?.speedMps != null,
+    canBuildTurnCountRound: pinVisible,
+    canBuildTurnsBeforeZoneExitRound: canInZone,
     canBuildEtaDriftRound: Boolean(room.destination),
   };
 
