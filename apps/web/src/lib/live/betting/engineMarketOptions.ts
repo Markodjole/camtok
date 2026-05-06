@@ -25,38 +25,28 @@ export function provisionalOptionsForBetType(type: BetTypeV2): EngineMarketOptio
   switch (type) {
     case "time_vs_google":
       return [
-        { id: "faster_2plus",   label: "2+ min faster than Google", shortLabel: "2+ min faster", displayOrder: 0 },
-        { id: "faster_under2",  label: "Under 2 min faster",        shortLabel: "< 2 min faster", displayOrder: 1 },
-        { id: "same_google",    label: "Same as Google ±1 min",     shortLabel: "Same ±1 min",    displayOrder: 2 },
-        { id: "slower_google",  label: "Slower than Google",        shortLabel: "Slower",          displayOrder: 3 },
+        { id: "faster_google", label: "Faster than Google", shortLabel: "Faster", displayOrder: 0 },
+        { id: "slower_google", label: "Slower than Google", shortLabel: "Slower", displayOrder: 1 },
       ];
     case "stop_count":
       return [
-        { id: "stops_0",     label: "No stops",          shortLabel: "0 stops",  displayOrder: 0 },
-        { id: "stops_1",     label: "1 stop",            shortLabel: "1 stop",   displayOrder: 1 },
-        { id: "stops_2",     label: "2 stops",           shortLabel: "2 stops",  displayOrder: 2 },
-        { id: "stops_3plus", label: "3 or more stops",   shortLabel: "3+ stops", displayOrder: 3 },
+        { id: "stops_low", label: "0-1 stops", shortLabel: "0-1 stops", displayOrder: 0 },
+        { id: "stops_high", label: "2+ stops", shortLabel: "2+ stops", displayOrder: 1 },
       ];
     case "turn_count_to_pin":
       return [
-        { id: "turns_1",    label: "Just 1 turn",      shortLabel: "1 turn",   displayOrder: 0 },
-        { id: "turns_2_3",  label: "2–3 turns",        shortLabel: "2–3",      displayOrder: 1 },
-        { id: "turns_4_5",  label: "4–5 turns",        shortLabel: "4–5",      displayOrder: 2 },
-        { id: "turns_6plus",label: "6 or more turns",  shortLabel: "6+",       displayOrder: 3 },
+        { id: "turns_few", label: "1-2 turns", shortLabel: "1-2 turns", displayOrder: 0 },
+        { id: "turns_many", label: "3+ turns", shortLabel: "3+ turns", displayOrder: 1 },
       ];
     case "turns_before_zone_exit":
       return [
-        { id: "zone_turns_0_1",  label: "0 or 1 turns",     shortLabel: "0–1",  displayOrder: 0 },
-        { id: "zone_turns_2_3",  label: "2–3 turns",        shortLabel: "2–3",  displayOrder: 1 },
-        { id: "zone_turns_4_5",  label: "4–5 turns",        shortLabel: "4–5",  displayOrder: 2 },
-        { id: "zone_turns_6plus",label: "6 or more turns",  shortLabel: "6+",   displayOrder: 3 },
+        { id: "zone_turns_few", label: "0-1 turns", shortLabel: "0-1 turns", displayOrder: 0 },
+        { id: "zone_turns_many", label: "2+ turns", shortLabel: "2+ turns", displayOrder: 1 },
       ];
     case "zone_exit_time":
       return [
-        { id: "exit_under45s", label: "Under 45 seconds",    shortLabel: "< 45s",    displayOrder: 0 },
-        { id: "exit_45_90s",   label: "45–90 seconds",       shortLabel: "45–90s",   displayOrder: 1 },
-        { id: "exit_90_180s",  label: "1.5 to 3 minutes",    shortLabel: "1.5–3 min",displayOrder: 2 },
-        { id: "exit_over3m",   label: "Over 3 minutes",      shortLabel: "3+ min",   displayOrder: 3 },
+        { id: "exit_fast", label: "Under 90 seconds", shortLabel: "< 90s", displayOrder: 0 },
+        { id: "exit_slow", label: "90+ seconds", shortLabel: "90s+", displayOrder: 1 },
       ];
     default:
       return [];

@@ -475,14 +475,21 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const zonesVisualStyleForBet =
     displayBetType === "next_zone" ? "pick_zone" : zoneEngineBetActive ? "muted" : "default";
 
+  const zoneWholeViewBet =
+    displayBetType === "turns_before_zone_exit" || displayBetType === "stop_count";
+
   /**
-   * Desired visible width in meters for the viewer map.
-   * Auto-zoom switches when bet type changes; user can freely zoom any time.
+   * Main zoom guideline (driven by bottom popup active bet):
+   * - next_zone: widest view (zoomed out)
+   * - turns/stops in zone: zoom out enough to see whole current zone
+   * - all other bets: keep default app zoom
    */
   const viewerTargetWidthMeters =
-    displayBetType === "next_turn" ? 125 :
-    displayBetType === "next_zone" ? 600 :
-    250;
+    displayBetType === "next_zone"
+      ? 700
+      : zoneWholeViewBet
+        ? Math.max(600, cityGridSpec?.cellMeters ?? 600)
+        : 250;
 
   /**
    * Viewer follow framing rules:
@@ -533,12 +540,17 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       }
 
       const pickZone = displayBetType === "next_zone";
-      // next_zone: 700 m so neighbouring cells show; other bets: 500 m.
-      const framingM = pickZone ? 700 : 500;
+      const zoneWhole = displayBetType === "turns_before_zone_exit" || displayBetType === "stop_count";
+      // Keep framing consistent with viewerTargetWidthMeters.
+      const framingM = pickZone
+        ? 700
+        : zoneWhole
+          ? Math.max(600, cityGridSpec.cellMeters)
+          : 500;
 
       return {
         bounds: squareWgs84BoundsFromCenter(centerLat, centerLng, framingM),
-        minZoom: pickZone ? 15.5 : 16.5,
+        minZoom: pickZone ? 15.5 : zoneWhole ? 16.0 : 16.5,
       };
     }
 
@@ -747,6 +759,10 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           ? currentMarket.options
           : provisionalOptionsForBetType(displayBetType as BetTypeV2))
       : (currentMarket?.options ?? []);
+  const sheetMarketOptionsLimited = sheetMarketOptions
+    .slice()
+    .sort((a, b) => a.displayOrder - b.displayOrder)
+    .slice(0, 2);
 
   // Betting is closed when: no market open, time/distance locked, OR the open
   // market is a different type than the engine bet being shown.
@@ -809,10 +825,17 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         currentMarket?.marketType === displayBetType && currentMarket.options.length
           ? currentMarket.options
           : provisionalOptionsForBetType(displayBetType as BetTypeV2);
-      setSelectedMapOptionId(source[0]?.id ?? null);
+      const limited = source
+        .slice()
+        .sort((a, b) => a.displayOrder - b.displayOrder)
+        .slice(0, 2);
+      setSelectedMapOptionId(limited[0]?.id ?? null);
       return;
     }
-    const first = currentMarket?.options?.[0]?.id ?? null;
+    const first = (currentMarket?.options ?? [])
+      .slice()
+      .sort((a, b) => a.displayOrder - b.displayOrder)
+      .slice(0, 2)[0]?.id ?? null;
     setSelectedMapOptionId(first);
   }, [
     currentMarket?.id,
@@ -1332,9 +1355,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           selectionDetail={
             directionalPickLabel
               ? `Pick · ${directionalPickLabel}`
-              : "Tap an option below, then Place bet"
+              : null
           }
-          marketOptions={sheetMarketOptions}
+          marketOptions={sheetMarketOptionsLimited}
           selectedOptionId={selectedMapOptionId}
           onSelectOption={setSelectedMapOptionId}
           bettingClosed={sheetBettingClosed}
