@@ -674,8 +674,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     showBetBottomSheet &&
     currentMarket != null &&
     displayBetType !== "next_turn" &&
-    (currentMarket.marketType !== "city_grid" ||
-      displayBetType === "next_turn") &&
+    currentMarket.marketType !== "city_grid" &&
     !isViewerZoneEngineType(displayBetType);
 
   const mapBetSheetOpen =
