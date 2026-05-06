@@ -15,12 +15,33 @@ export async function GET(
     data: { user },
   } = await supabase.auth.getUser();
 
-  const { data: events } = await service
-    .from("live_room_events")
-    .select("id, event_type, market_id, payload, occurred_at")
-    .eq("room_id", roomId)
-    .order("occurred_at", { ascending: false })
-    .limit(40);
+  const [eventsRes, openBetsRes] = await Promise.all([
+    service
+      .from("live_room_events")
+      .select("id, event_type, market_id, payload, occurred_at")
+      .eq("room_id", roomId)
+      .order("occurred_at", { ascending: false })
+      .limit(40),
+    user
+      ? service
+          .from("live_bets")
+          .select("market_id")
+          .eq("room_id", roomId)
+          .eq("user_id", user.id)
+          .in("status", ["active", "locked"])
+      : Promise.resolve({ data: null as null }),
+  ]);
+
+  const { data: events } = eventsRes;
+
+  const myOpenBetMarketIds =
+    user && openBetsRes.data && openBetsRes.data.length > 0
+      ? [
+          ...new Set(
+            (openBetsRes.data as { market_id: string }[]).map((r) => r.market_id),
+          ),
+        ]
+      : [];
 
   type EnrichedSettlement = {
     market_id: string;
@@ -129,5 +150,6 @@ export async function GET(
   return NextResponse.json({
     events: events ?? [],
     mySettlements,
+    myOpenBetMarketIds,
   });
 }

@@ -18,7 +18,7 @@ import dynamic from "next/dynamic";
 import type { LiveFeedRow, RoutePoint } from "@/actions/live-feed";
 import { LIVE_BET_LOCK_DISTANCE_M } from "@/lib/live/liveBetLockDistance";
 import { liveBetRelaxClient } from "@/lib/live/liveBetRelax";
-import { metersBetween, latLngBoundsFromPoints, unionWgs84Bounds } from "@/lib/live/routing/geometry";
+import { metersBetween, latLngBoundsFromPoints } from "@/lib/live/routing/geometry";
 import { LiveVideoPlayer } from "./LiveVideoPlayer";
 import { DirectionalBetPad } from "./DirectionalBetPad";
 import { LiveDecisionStatusRibbon } from "./LiveDecisionStatusRibbon";
@@ -39,6 +39,7 @@ import {
   IconCrosshair,
 } from "./OwnerLiveControlPanel";
 import { useViewerChromeStore } from "@/stores/viewer-chrome-store";
+import type { BetTypeV2 } from "@bettok/live";
 
 const LiveMap = dynamic(() => import("./LiveMap").then((m) => m.LiveMap), {
   ssr: false,
@@ -62,6 +63,17 @@ type MapCheckpoint = {
   lng: number;
   isActive: boolean;
 };
+
+function isViewerZoneEngineType(t: BetTypeV2 | null | undefined): boolean {
+  if (!t) return false;
+  return (
+    t === "next_zone" ||
+    t === "zone_exit_time" ||
+    t === "zone_duration" ||
+    t === "turns_before_zone_exit" ||
+    t === "stop_count"
+  );
+}
 
 export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const pathname = usePathname();
@@ -102,6 +114,13 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [destinationEtaSec, setDestinationEtaSec] = useState<number | null>(null);
   const [destinationDistanceM, setDestinationDistanceM] = useState<number | null>(null);
   const [nowTick, setNowTick] = useState(() => Date.now());
+  const [myOpenBetMarketIds, setMyOpenBetMarketIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+
+  useEffect(() => {
+    setMyOpenBetMarketIds(new Set());
+  }, [room.roomId]);
   const [lastBetMarketId, setLastBetMarketId] = useState<string | null>(null);
   const [lastBetOptionLabel, setLastBetOptionLabel] = useState<string | null>(null);
   const pipLongPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -129,6 +148,24 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const skillFeedbackTimerRef = { current: null as ReturnType<typeof setTimeout> | null };
   const { betPill, flash } = useBetPill();
   const { data: activeBettingRound } = useActiveBetRound(room.roomId, 2500);
+  const [viewerEnginePillType, setViewerEnginePillType] = useState<BetTypeV2 | null>(
+    null,
+  );
+
+  useEffect(() => {
+    const eligible = activeBettingRound?.eligibleRoundPlans ?? [];
+    const types = new Set(eligible.map((p) => p.type));
+    setViewerEnginePillType((prev) =>
+      prev != null && !types.has(prev) ? null : prev,
+    );
+  }, [activeBettingRound]);
+
+  useEffect(() => {
+    setViewerEnginePillType(null);
+  }, [room.currentMarket?.id]);
+
+  const effectiveEngineType: BetTypeV2 | null =
+    viewerEnginePillType ?? activeBettingRound?.roundPlan?.type ?? null;
 
   useEffect(() => {
     setJoyPortalReady(true);
@@ -139,6 +176,13 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     if (skillFeedbackTimerRef.current) clearTimeout(skillFeedbackTimerRef.current);
     skillFeedbackTimerRef.current = setTimeout(() => setSkillFeedback(null), 7000);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const onViewerRoomActivity = useCallback(
+    (summary: { myOpenBetMarketIds: string[] }) => {
+      setMyOpenBetMarketIds(new Set(summary.myOpenBetMarketIds));
+    },
+    [],
+  );
 
   useEffect(() => {
     const id = setInterval(async () => {
@@ -199,6 +243,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
   async function placeBet(optionId: string) {
     if (!room.currentMarket) return;
+    const market = room.currentMarket;
     setError(null);
     setMapSheetError(null);
     setPlacingOptionId(optionId);
@@ -207,7 +252,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          marketId: room.currentMarket.id,
+          marketId: market.id,
           optionId,
           stakeAmount: lastStakeAmount,
         }),
@@ -215,18 +260,19 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       if (res.ok) {
         flash(lastStakeAmount);
         let pickedLabel: string | null = null;
-        if (room.currentMarket.marketType === "city_grid") {
-          const spec = room.currentMarket.cityGridSpec;
+        if (market.marketType === "city_grid") {
+          const spec = market.cityGridSpec;
           const p = parseGridOptionId(optionId);
           pickedLabel = p && spec ? cellLabel(p.row, p.col) : optionId;
         } else {
           pickedLabel =
-            room.currentMarket.options.find((o) => o.id === optionId)?.shortLabel ??
-            room.currentMarket.options.find((o) => o.id === optionId)?.label ??
+            market.options.find((o) => o.id === optionId)?.shortLabel ??
+            market.options.find((o) => o.id === optionId)?.label ??
             null;
         }
-        setLastBetMarketId(room.currentMarket.id);
+        setLastBetMarketId(market.id);
         setLastBetOptionLabel(pickedLabel);
+        setMyOpenBetMarketIds((prev) => new Set(prev).add(market.id));
         return { ok: true as const };
       } else {
         const j = (await res.json().catch(() => ({}))) as { error?: string };
@@ -316,7 +362,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     currentMarket?.marketType === "city_grid" && zones.length > 0;
 
   const zoneEngineBetActive = (() => {
-    const t = activeBettingRound?.roundPlan?.type;
+    const t = effectiveEngineType;
     if (!t || !zoneMarketActive) {
       return false;
     }
@@ -344,15 +390,13 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     minZoom: number | null;
   } => {
     const dest = room.destination;
-    const pathEnv =
-      destinationRoute &&
-      destinationRoute.length > 1 &&
-      dest &&
-      routeLast
+    // Tight zoom framing only — full polyline is still drawn on the map. Using the entire
+    // Directions path as bounds zoomed the camera far out; use driver + pin only off-grid.
+    const driverDestEnv =
+      dest && routeLast
         ? latLngBoundsFromPoints([
-            ...destinationRoute,
-            { lat: dest.lat, lng: dest.lng },
             { lat: routeLast.lat, lng: routeLast.lng },
+            { lat: dest.lat, lng: dest.lng },
           ])
         : null;
 
@@ -364,7 +408,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       cityGridSpec &&
       routeLast
     ) {
-      const t = activeBettingRound?.roundPlan?.type;
+      const t = effectiveEngineType;
       const cell = cellIdForPosition(
         cityGridSpec,
         routeLast.lat,
@@ -380,40 +424,38 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             t === "stop_count";
           if (inZone) {
             bounds = latLngBoundsForGridCell(cityGridSpec, p.row, p.col);
-            minZoom = 17;
+            minZoom = 17.35;
           } else if (t === "next_zone") {
             bounds = latLngBoundsForGridNeighborhood3x3(
               cityGridSpec,
               p.row,
               p.col,
             );
-            minZoom = 15.75;
+            minZoom = 16.35;
           } else {
             bounds = latLngBoundsForGridCell(cityGridSpec, p.row, p.col);
-            minZoom = 16.25;
+            minZoom = 16.85;
           }
         }
       }
     }
 
-    if (pathEnv && bounds) {
-      return {
-        bounds: unionWgs84Bounds(bounds, pathEnv),
-        minZoom: null,
-      };
-    }
-    if (pathEnv && !bounds) {
-      return { bounds: pathEnv, minZoom: null };
+    // City grid: never widen bounds with the route — keep cell / 3×3 framing only.
+    if (bounds) {
+      return { bounds, minZoom };
     }
 
-    return { bounds, minZoom };
+    if (driverDestEnv) {
+      return { bounds: driverDestEnv, minZoom: 16.5 };
+    }
+
+    return { bounds: null, minZoom: null };
   }, [
-    activeBettingRound?.roundPlan?.type,
+    effectiveEngineType,
     cityGridSpec,
     currentMarket?.marketType,
     routeLast?.lat,
     routeLast?.lng,
-    destinationRoute,
     room.destination?.lat,
     room.destination?.lng,
   ]);
@@ -562,6 +604,10 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           null)
       : null);
 
+  const viewerHasBetOnCurrentMarket = Boolean(
+    currentMarket && myOpenBetMarketIds.has(currentMarket.id),
+  );
+
   const [betPanelDismissed, setBetPanelDismissed] = useState(false);
   useEffect(() => {
     setBetPanelDismissed(false);
@@ -571,13 +617,27 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     mapExpanded &&
     showLiveBets &&
     currentMarket != null &&
-    !betPanelDismissed;
+    !betPanelDismissed &&
+    !viewerHasBetOnCurrentMarket;
 
-  const mapBetSheetOpen = showBetBottomSheet;
+  const showViewerGridBetSheet =
+    showBetBottomSheet &&
+    currentMarket?.marketType === "city_grid" &&
+    isViewerZoneEngineType(effectiveEngineType);
+
+  const showViewerDirectionalBetSheet =
+    showBetBottomSheet &&
+    currentMarket != null &&
+    (currentMarket.marketType !== "city_grid" ||
+      effectiveEngineType === "next_turn") &&
+    !isViewerZoneEngineType(effectiveEngineType);
+
+  const mapBetSheetOpen =
+    showViewerGridBetSheet || showViewerDirectionalBetSheet;
 
   const viewerCurrentBetHeadline =
-    activeBettingRound?.roundPlan != null
-      ? engineBetHeadline(activeBettingRound.roundPlan.type)
+    effectiveEngineType != null
+      ? engineBetHeadline(effectiveEngineType)
       : null;
 
   const sheetBetHeadline = viewerCurrentBetHeadline ?? "Live bet";
@@ -774,14 +834,17 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     joyPortalReady &&
     showLiveBets &&
     currentMarket != null &&
-    currentMarket.marketType !== "city_grid" &&
-    (!mapBetSheetOpen || activeBettingRound?.roundPlan?.type === "next_turn");
+    (currentMarket.marketType !== "city_grid" ||
+      effectiveEngineType === "next_turn") &&
+    (!mapBetSheetOpen || effectiveEngineType === "next_turn");
 
   const joystickLocked =
     isLocked ||
     !currentMarket ||
-    currentMarket.marketType === "city_grid" ||
-    !!placingOptionId;
+    (currentMarket.marketType === "city_grid" &&
+      effectiveEngineType !== "next_turn") ||
+    !!placingOptionId ||
+    viewerHasBetOnCurrentMarket;
 
   const onPipPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     if (pipLongPressTimerRef.current) clearTimeout(pipLongPressTimerRef.current);
@@ -811,12 +874,18 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         }
         currentBetHeadline={viewerCurrentBetHeadline}
         nowTick={nowTick}
+        eligibleRoundPlans={activeBettingRound?.eligibleRoundPlans ?? []}
+        highlightedEngineType={effectiveEngineType}
+        onSelectEngineType={(t) => {
+          setViewerEnginePillType((prev) => (prev === t ? null : t));
+        }}
       />
       <BottomNav />
       <LiveEventToasts
         roomId={room.roomId}
         role="viewer"
         onSettlement={handleSettlement}
+        onRoomActivity={onViewerRoomActivity}
       />
       <BetPlacedPill text={betPill} />
 
@@ -1056,7 +1125,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       {/* ── Bottom gradient scrim ────────────────────────── */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-44 bg-gradient-to-t from-black/70 to-transparent" />
 
-      {showBetBottomSheet && currentMarket?.marketType === "city_grid" ? (
+      {showViewerGridBetSheet ? (
         <MapSelectionBottomSheet
           betHeadline={currentMarket.title ?? sheetBetHeadline}
           selectionDetail={
@@ -1089,9 +1158,14 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           gridMode
         />
       ) : null}
-      {showBetBottomSheet && currentMarket?.marketType !== "city_grid" ? (
+      {showViewerDirectionalBetSheet ? (
         <MapSelectionBottomSheet
-          betHeadline={sheetBetHeadline}
+          betHeadline={
+            currentMarket.title ??
+            (effectiveEngineType != null
+              ? engineBetHeadline(effectiveEngineType)
+              : sheetBetHeadline)
+          }
           selectionDetail={
             directionalPickLabel
               ? `Pick · ${directionalPickLabel}`
@@ -1125,7 +1199,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       {betPanelDismissed &&
       mapExpanded &&
       showLiveBets &&
-      currentMarket != null ? (
+      currentMarket != null &&
+      !viewerHasBetOnCurrentMarket ? (
         <button
           type="button"
           onClick={() => setBetPanelDismissed(false)}

@@ -1,8 +1,11 @@
 "use client";
 
 /**
- * Viewer status: compact engine bet label + plain-text route status (no heavy pills).
+ * Viewer status: route countdown + engine headline + optional bet-type chips when several rounds are eligible.
  */
+
+import type { BetTypeV2, RoundPlanV2 } from "@bettok/live";
+import { betTypeV2Label } from "@/lib/live/betting/betTypeV2Label";
 
 type Phase = "none" | "pending" | "active";
 
@@ -15,6 +18,9 @@ interface LiveDecisionStatusRibbonProps {
   betOptionLabel?: string | null;
   currentBetHeadline?: string | null;
   nowTick: number;
+  eligibleRoundPlans?: RoundPlanV2[];
+  highlightedEngineType?: BetTypeV2 | null;
+  onSelectEngineType?: (type: BetTypeV2) => void;
 }
 
 function haversineMeters(
@@ -41,6 +47,9 @@ export function LiveDecisionStatusRibbon({
   betOptionLabel,
   currentBetHeadline,
   nowTick,
+  eligibleRoundPlans = [],
+  highlightedEngineType = null,
+  onSelectEngineType,
 }: LiveDecisionStatusRibbonProps) {
   const distanceM =
     turnPoint && driverPos ? haversineMeters(driverPos, turnPoint) : null;
@@ -75,6 +84,15 @@ export function LiveDecisionStatusRibbon({
         ? "#fbbf24"
         : "rgba(148,163,184,0.95)";
 
+  const dedupedPlans = (() => {
+    const seen = new Set<BetTypeV2>();
+    return eligibleRoundPlans.filter((p) => {
+      if (seen.has(p.type)) return false;
+      seen.add(p.type);
+      return true;
+    });
+  })();
+
   return (
     <div className="pointer-events-none absolute left-1/2 top-[6.75rem] z-[60] w-full max-w-[min(94vw,20rem)] -translate-x-1/2 px-2">
       <div className="flex flex-col items-center gap-1.5">
@@ -97,6 +115,28 @@ export function LiveDecisionStatusRibbon({
         {currentBetHeadline ? (
           <div className="max-w-full truncate rounded-full border border-white/10 bg-black/40 px-2.5 py-1 text-center text-[10px] font-semibold leading-tight text-white/90 shadow-sm backdrop-blur-sm [text-shadow:0_1px_2px_rgba(0,0,0,0.65)]">
             {currentBetHeadline}
+          </div>
+        ) : null}
+
+        {dedupedPlans.length > 1 && onSelectEngineType ? (
+          <div className="pointer-events-auto flex max-w-full gap-1 overflow-x-auto py-0.5 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+            {dedupedPlans.map((p) => {
+              const active = highlightedEngineType === p.type;
+              return (
+                <button
+                  key={p.type}
+                  type="button"
+                  onClick={() => onSelectEngineType(p.type)}
+                  className={`shrink-0 rounded-full border px-2 py-0.5 text-[9px] font-semibold transition-colors ${
+                    active
+                      ? "border-violet-400/60 bg-violet-600/35 text-white"
+                      : "border-white/15 bg-black/35 text-white/75 hover:bg-black/50"
+                  }`}
+                >
+                  {betTypeV2Label(p.type)}
+                </button>
+              );
+            })}
           </div>
         ) : null}
 

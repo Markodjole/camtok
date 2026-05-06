@@ -280,7 +280,17 @@ export async function placeLiveBet(input: PlaceLiveBetInput) {
     })
     .select("*")
     .single();
-  if (betError || !bet) return { error: betError?.message ?? "Bet failed" };
+  if (betError || !bet) {
+    const raw = betError?.message ?? "Bet failed";
+    if (
+      betError?.code === "23505" ||
+      raw.includes("idx_live_bets_one_per_user_per_market") ||
+      raw.toLowerCase().includes("duplicate key")
+    ) {
+      return { error: "You already placed a bet on this market." };
+    }
+    return { error: raw };
+  }
 
   await service
     .from("wallets")

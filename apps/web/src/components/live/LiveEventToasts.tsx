@@ -33,10 +33,13 @@ export function LiveEventToasts({
   roomId,
   role,
   onSettlement,
+  onRoomActivity,
 }: {
   roomId: string;
   role: "viewer" | "streamer";
   onSettlement?: (data: SkillFeedbackData) => void;
+  /** Called with every successful activity poll (markets where this user already has an open live bet). */
+  onRoomActivity?: (summary: { myOpenBetMarketIds: string[] }) => void;
 }) {
   const [toasts, setToasts] = useState<TItem[]>([]);
   const seenEvent = useRef<Set<string>>(new Set());
@@ -63,7 +66,12 @@ export function LiveEventToasts({
             payload: { stakeAmount?: number; optionId?: string };
           }>;
           mySettlements: EnrichedSettlement[];
+          myOpenBetMarketIds?: string[];
         };
+
+        onRoomActivity?.({
+          myOpenBetMarketIds: j.myOpenBetMarketIds ?? [],
+        });
 
         if (firstBoot.current) {
           for (const e of j.events ?? []) seenEvent.current.add(e.id);
@@ -109,7 +117,7 @@ export function LiveEventToasts({
     void run();
     const id = setInterval(run, 3000);
     return () => clearInterval(id);
-  }, [roomId, role, onSettlement]);
+  }, [roomId, role, onSettlement, onRoomActivity]);
 
   if (!toasts.length) return null;
   return (

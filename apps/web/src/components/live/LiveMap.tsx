@@ -1,8 +1,16 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { RoutePoint } from "@/actions/live-feed";
 import { metersBetween } from "@/lib/live/routing/geometry";
+
+function escapeDestinationLabel(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
 
 export interface LiveMapProps {
   routePoints: RoutePoint[];
@@ -170,6 +178,9 @@ const VIEWER_MAP_ROTATION_TAU_SEC = 2;
 
 /** Zoom target approaches this fraction of the remaining delta per animation frame (~60fps). */
 const VIEWER_ZOOM_BLEND_PER_FRAME = 0.035;
+
+/** With `viewerFollowLatLngBounds`, never go wider than this (higher = closer). */
+const VIEWER_FOLLOW_BOUNDS_ZOOM_FLOOR = 16.35;
 
 /** Slower `setView` / zoom ramp — **city grid bounds framing only** (see `smoothGridFramingRef`). */
 const MAP_SET_VIEW_DURATION_SEC = 1.35;
@@ -351,8 +362,8 @@ export function LiveMap({
       const spanM = Math.max(heightM, widthM);
       // Tighter padding for typical grid chunks so we don’t jump to a satellite-style zoom-out.
       const padPx =
-        spanM < 900 ? 22 : spanM < 1800 ? 28 : heightM < 700 ? 36 : 20;
-      const maxZ = spanM < 1200 ? 19.25 : spanM < 2200 ? 18.75 : 18.25;
+        spanM < 900 ? 16 : spanM < 1800 ? 22 : heightM < 700 ? 28 : 16;
+      const maxZ = spanM < 1200 ? 19.5 : spanM < 2200 ? 19.1 : 18.85;
       m.invalidateSize(false);
       const padPt = L.point(padPx, padPx);
       let zFit = m.getBoundsZoom(bounds, false, padPt);
@@ -365,6 +376,7 @@ export function LiveMap({
       if (floor != null && Number.isFinite(floor)) {
         zFit = Math.max(floor, zFit);
       }
+      zFit = Math.max(VIEWER_FOLLOW_BOUNDS_ZOOM_FLOOR, zFit);
       viewerBoundsZoomRef.current = zFit;
     })();
     return () => {
@@ -614,30 +626,28 @@ export function LiveMap({
         Number.isFinite(destination.lat) &&
         Number.isFinite(destination.lng)
       ) {
-        const html =
-          `<div style="display:flex;flex-direction:column;align-items:center;transform:translateY(-2px)">
+        const labelRaw = destination.label?.trim() ?? "";
+        const labelHtml = labelRaw
+          ? `<div style="box-sizing:border-box;max-width:min(260px,70vw);margin-bottom:4px;padding:2px 8px;border-radius:9999px;background:rgba(239,68,68,0.92);border:1px solid rgba(255,255,255,0.6);color:#fff;font-size:11px;font-weight:600;letter-spacing:0.01em;box-shadow:0 4px 14px rgba(0,0,0,0.45);line-height:1.3;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeDestinationLabel(labelRaw)}</div>`
+          : "";
+        const pinHtml = `<div style="display:flex;flex-direction:column;align-items:center;transform:translateY(-2px)">
             <div style="width:18px;height:18px;border-radius:50%;background:#ef4444;border:2px solid white;box-shadow:0 0 8px rgba(0,0,0,0.85)"></div>
             <div style="width:2px;height:10px;background:#ef4444;box-shadow:0 0 4px rgba(0,0,0,0.6)"></div>
           </div>`;
+        const html = `<div style="display:flex;flex-direction:column;align-items:center;transform:rotate(calc(-1 * var(--camtok-map-rotation, 0deg)));transform-origin:50% 100%">${labelHtml}${pinHtml}</div>`;
+        const w = 280;
+        const h = (labelRaw ? 30 : 0) + 30;
         const icon = L.divIcon({
           html,
           className: "camtok-destination-pin",
-          iconSize: [22, 32],
-          iconAnchor: [11, 30],
+          iconSize: [w, h],
+          iconAnchor: [w / 2, h],
         });
         const marker = L.marker([destination.lat, destination.lng], {
           icon,
           interactive: false,
           zIndexOffset: 1000,
         });
-        if (destination.label) {
-          marker.bindTooltip(destination.label, {
-            permanent: true,
-            direction: "top",
-            offset: [0, -28],
-            className: "camtok-destination-tip",
-          });
-        }
         marker.addTo(group);
       }
     })();
@@ -747,7 +757,7 @@ export function LiveMap({
             driverPins.length > 0 &&
             Number.isFinite(driverPins[0]?.lat)));
       const navZoomFloor = viewerTurnPinActive
-        ? Math.max(profile.zoom, 17.35)
+        ? Math.max(profile.zoom, 17.65)
         : profile.zoom;
       viewerTurnNavZoomRef.current = viewerTurnPinActive ? navZoomFloor : null;
       const baseZoom = viewerFollowLatLngBounds
@@ -1194,20 +1204,21 @@ export function LiveMap({
       <div className="absolute inset-0 overflow-hidden">
         <div
           style={
-            rotateWithHeading && followMode
-              ? {
-                  position: "absolute",
-                  inset: "-24%",
-                  transform: `rotate(${rotationDeg}deg)`,
-                  transformOrigin: "50% 50%",
-                  transition: streamer
-                    ? "transform 1100ms cubic-bezier(0.22,0.61,0.36,1)"
-                    : "none",
-                }
-              : {
-                  position: "absolute",
-                  inset: 0,
-                }
+            {
+              position: "absolute",
+              "--camtok-map-rotation":
+                rotateWithHeading && followMode ? `${rotationDeg}deg` : "0deg",
+              ...(rotateWithHeading && followMode
+                ? {
+                    inset: "-24%",
+                    transform: `rotate(${rotationDeg}deg)`,
+                    transformOrigin: "50% 50%",
+                    transition: streamer
+                      ? "transform 1100ms cubic-bezier(0.22,0.61,0.36,1), --camtok-map-rotation 1100ms cubic-bezier(0.22,0.61,0.36,1)"
+                      : "none",
+                  }
+                : { inset: 0 }),
+            } as CSSProperties & { "--camtok-map-rotation"?: string }
           }
         >
           <div
