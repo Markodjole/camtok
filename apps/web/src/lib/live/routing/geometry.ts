@@ -239,3 +239,45 @@ export function trimPolylineAhead(
   const rest = polyline.slice(proj.segmentIndex + 1);
   return [proj.projection, ...rest];
 }
+
+/** Leaflet bounds: `[[southLat, westLng], [northLat, eastLng]]`. */
+export type Wgs84LatLngBounds = [[number, number], [number, number]];
+
+export function latLngBoundsFromPoints(pts: LatLng[]): Wgs84LatLngBounds | null {
+  let s = Infinity;
+  let w = Infinity;
+  let n = -Infinity;
+  let e = -Infinity;
+  for (const p of pts) {
+    if (!Number.isFinite(p.lat) || !Number.isFinite(p.lng)) continue;
+    s = Math.min(s, p.lat);
+    n = Math.max(n, p.lat);
+    w = Math.min(w, p.lng);
+    e = Math.max(e, p.lng);
+  }
+  if (!Number.isFinite(s)) return null;
+  if (s === n) {
+    const pad = 1e-5;
+    s -= pad;
+    n += pad;
+  }
+  if (w === e) {
+    const pad = 1e-5;
+    w -= pad;
+    e += pad;
+  }
+  return [
+    [s, w],
+    [n, e],
+  ];
+}
+
+export function unionWgs84Bounds(
+  a: Wgs84LatLngBounds,
+  b: Wgs84LatLngBounds,
+): Wgs84LatLngBounds {
+  return [
+    [Math.min(a[0][0], b[0][0]), Math.min(a[0][1], b[0][1])],
+    [Math.max(a[1][0], b[1][0]), Math.max(a[1][1], b[1][1])],
+  ];
+}

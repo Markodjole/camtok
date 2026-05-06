@@ -11,13 +11,14 @@ import {
   latLngBoundsForGridCell,
   latLngBoundsForGridNeighborhood3x3,
   parseGridOptionId,
+  type Wgs84LatLngBoundsTuple,
 } from "@/lib/live/grid/cityGrid500";
 import { drivingRouteStyleBadges } from "@/lib/live/routing/drivingRouteStyle";
 import dynamic from "next/dynamic";
 import type { LiveFeedRow, RoutePoint } from "@/actions/live-feed";
 import { LIVE_BET_LOCK_DISTANCE_M } from "@/lib/live/liveBetLockDistance";
 import { liveBetRelaxClient } from "@/lib/live/liveBetRelax";
-import { metersBetween } from "@/lib/live/routing/geometry";
+import { metersBetween, latLngBoundsFromPoints, unionWgs84Bounds } from "@/lib/live/routing/geometry";
 import { LiveVideoPlayer } from "./LiveVideoPlayer";
 import { DirectionalBetPad } from "./DirectionalBetPad";
 import { LiveDecisionStatusRibbon } from "./LiveDecisionStatusRibbon";
@@ -305,7 +306,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       slug: c.id,
       name: c.label,
       kind: "district" as const,
-      color: `hsl(${(c.col * 37 + c.row * 17) % 360} 52% 42%)`,
+      color: `hsl(${(c.col * 37 + c.row * 17) % 360} 38% 52%)`,
       isActive: true,
       polygon: c.polygon,
     }));
@@ -337,38 +338,84 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const routeLast =
     routePoints.length > 0 ? routePoints[routePoints.length - 1]! : null;
 
-  const viewerFollowLatLngBoundsForBet = useMemo(() => {
+  /** Map framing for viewer follow zoom: grid cells + Google destination path envelope when set. */
+  const viewerGridMapFraming = useMemo((): {
+    bounds: Wgs84LatLngBoundsTuple | null;
+    minZoom: number | null;
+  } => {
+    const dest = room.destination;
+    const pathEnv =
+      destinationRoute &&
+      destinationRoute.length > 1 &&
+      dest &&
+      routeLast
+        ? latLngBoundsFromPoints([
+            ...destinationRoute,
+            { lat: dest.lat, lng: dest.lng },
+            { lat: routeLast.lat, lng: routeLast.lng },
+          ])
+        : null;
+
+    let bounds: Wgs84LatLngBoundsTuple | null = null;
+    let minZoom: number | null = null;
+
     if (
-      currentMarket?.marketType !== "city_grid" ||
-      !cityGridSpec ||
-      !routeLast
+      currentMarket?.marketType === "city_grid" &&
+      cityGridSpec &&
+      routeLast
     ) {
-      return null;
+      const t = activeBettingRound?.roundPlan?.type;
+      const cell = cellIdForPosition(
+        cityGridSpec,
+        routeLast.lat,
+        routeLast.lng,
+      );
+      if (cell) {
+        const p = parseGridOptionId(cell);
+        if (p) {
+          const inZone =
+            t === "zone_exit_time" ||
+            t === "zone_duration" ||
+            t === "turns_before_zone_exit" ||
+            t === "stop_count";
+          if (inZone) {
+            bounds = latLngBoundsForGridCell(cityGridSpec, p.row, p.col);
+            minZoom = 17;
+          } else if (t === "next_zone") {
+            bounds = latLngBoundsForGridNeighborhood3x3(
+              cityGridSpec,
+              p.row,
+              p.col,
+            );
+            minZoom = 15.75;
+          } else {
+            bounds = latLngBoundsForGridCell(cityGridSpec, p.row, p.col);
+            minZoom = 16.25;
+          }
+        }
+      }
     }
-    const t = activeBettingRound?.roundPlan?.type;
-    const cell = cellIdForPosition(
-      cityGridSpec,
-      routeLast.lat,
-      routeLast.lng,
-    );
-    if (!cell) return null;
-    const p = parseGridOptionId(cell);
-    if (!p) return null;
-    const inZone =
-      t === "zone_exit_time" ||
-      t === "zone_duration" ||
-      t === "turns_before_zone_exit" ||
-      t === "stop_count";
-    if (inZone) {
-      return latLngBoundsForGridCell(cityGridSpec, p.row, p.col);
+
+    if (pathEnv && bounds) {
+      return {
+        bounds: unionWgs84Bounds(bounds, pathEnv),
+        minZoom: null,
+      };
     }
-    return latLngBoundsForGridNeighborhood3x3(cityGridSpec, p.row, p.col);
+    if (pathEnv && !bounds) {
+      return { bounds: pathEnv, minZoom: null };
+    }
+
+    return { bounds, minZoom };
   }, [
     activeBettingRound?.roundPlan?.type,
     cityGridSpec,
     currentMarket?.marketType,
     routeLast?.lat,
     routeLast?.lng,
+    destinationRoute,
+    room.destination?.lat,
+    room.destination?.lng,
   ]);
 
   const passedMarketTurn =
@@ -819,7 +866,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             destinationRoute={destinationRoute}
             destinationRouteLabel="Google suggested route"
             driverRouteBadges={driverRouteBadges}
-            viewerFollowLatLngBounds={viewerFollowLatLngBoundsForBet}
+            viewerFollowLatLngBounds={viewerGridMapFraming.bounds}
+            viewerFollowBoundsMinZoom={viewerGridMapFraming.minZoom}
             onZoneSelect={(id) => {
               setSelectedZoneId(id);
               if (id) setSelectedCheckpointId(null);
@@ -975,7 +1023,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               destinationRoute={destinationRoute}
               destinationRouteLabel="Google suggested route"
               driverRouteBadges={driverRouteBadges}
-              viewerFollowLatLngBounds={viewerFollowLatLngBoundsForBet}
+              viewerFollowLatLngBounds={viewerGridMapFraming.bounds}
+              viewerFollowBoundsMinZoom={viewerGridMapFraming.minZoom}
             />
             {routePoints.length === 0 && (
               <div className="absolute inset-0 flex items-center justify-center bg-black/30 text-[9px] text-white/70">

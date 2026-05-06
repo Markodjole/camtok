@@ -222,13 +222,50 @@ export async function placeLiveBet(input: PlaceLiveBetInput) {
 
   const { data: walletRow } = await service
     .from("wallets")
-    .select("balance_demo")
+    .select("balance_demo, balance")
     .eq("user_id", user.id)
     .maybeSingle();
-  const balance = (walletRow as { balance_demo: number } | null)?.balance_demo ?? 0;
-  if (balance < parsed.data.stakeAmount) {
-    return { error: "Insufficient balance" };
+
+  if (!walletRow) {
+    return {
+      error:
+        "No wallet on file — open the Wallet page once while signed in, then try again.",
+    };
   }
+
+  const row = walletRow as { balance_demo: unknown; balance: unknown };
+  const demoRaw = row.balance_demo;
+  const mainRaw = row.balance;
+  const toNum = (v: unknown) =>
+    v != null && v !== "" && Number.isFinite(Number(v)) ? Number(v) : 0;
+
+  const stake = parsed.data.stakeAmount;
+  let balanceDemo = toNum(demoRaw);
+  const balanceMain = toNum(mainRaw);
+
+  // Live bets only debit balance_demo. If demo is stale/zero but main covers the
+  // stake, sync once so funded users aren’t blocked after top-ups that only touched balance.
+  if (balanceDemo < stake && balanceMain >= stake) {
+    const { error: syncErr } = await service
+      .from("wallets")
+      .update({ balance_demo: balanceMain })
+      .eq("user_id", user.id);
+    if (syncErr) {
+      console.error("[placeLiveBet] balance_demo sync failed", syncErr, {
+        userId: user.id,
+      });
+    } else {
+      balanceDemo = balanceMain;
+    }
+  }
+
+  if (balanceDemo < stake) {
+    return {
+      error: `Insufficient balance: $${balanceDemo.toFixed(2)} available for live (demo wallet), $${stake.toFixed(2)} needed.`,
+    };
+  }
+
+  const newDemo = balanceDemo - stake;
 
   const { error: betError, data: bet } = await service
     .from("live_bets")
@@ -247,7 +284,7 @@ export async function placeLiveBet(input: PlaceLiveBetInput) {
 
   await service
     .from("wallets")
-    .update({ balance_demo: balance - parsed.data.stakeAmount })
+    .update({ balance_demo: newDemo })
     .eq("user_id", user.id);
 
   await service.from("live_room_events").insert({

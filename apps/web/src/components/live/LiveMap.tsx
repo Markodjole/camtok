@@ -108,6 +108,11 @@ export interface LiveMapProps {
    * `viewerFollowZoom` for framing (zoom is taken from `fitBounds`).
    */
   viewerFollowLatLngBounds?: [[number, number], [number, number]] | null;
+  /**
+   * With `viewerFollowLatLngBounds`, lower bound for zoom (larger = closer).
+   * Stops city-grid fitBounds from zooming far out; may clip bounds edges.
+   */
+  viewerFollowBoundsMinZoom?: number | null;
   /** Muted polygons for engine-highlighted zone overlays. */
   zonesVisualStyle?: "default" | "muted";
 }
@@ -218,6 +223,7 @@ export function LiveMap({
   driverRouteBadges = null,
   viewerFollowZoom = null,
   viewerFollowLatLngBounds = null,
+  viewerFollowBoundsMinZoom = null,
   zonesVisualStyle = "default",
 }: LiveMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -259,6 +265,8 @@ export function LiveMap({
   const viewerFollowZoomRef = useRef<number | null>(null);
   /** Zoom implied by last `fitBounds` when `viewerFollowLatLngBounds` is used. */
   const viewerBoundsZoomRef = useRef<number | null>(null);
+  /** Viewer: when not using grid bounds, keep zoom at least this high if a turn pin is shown. */
+  const viewerTurnNavZoomRef = useRef<number | null>(null);
   /** Grid city bounds framing uses eased zoom; turn/directional bets keep legacy snap zoom. */
   const smoothGridFramingRef = useRef(false);
   const smoothHeadingRef = useRef<number>(0);
@@ -332,9 +340,19 @@ export function LiveMap({
         viewerBoundsZoomRef.current = null;
         return;
       }
-      const heightM = (raw[1][0] - raw[0][0]) * 111_320;
-      const padPx = heightM < 700 ? 40 : 22;
-      const maxZ = heightM < 700 ? 19 : 18.25;
+      const latSpan = raw[1][0] - raw[0][0];
+      const lngSpan = raw[1][1] - raw[0][1];
+      const midLat = (raw[0][0] + raw[1][0]) / 2;
+      const heightM = latSpan * 111_320;
+      const widthM =
+        lngSpan *
+        111_320 *
+        Math.max(0.12, Math.cos((midLat * Math.PI) / 180));
+      const spanM = Math.max(heightM, widthM);
+      // Tighter padding for typical grid chunks so we don’t jump to a satellite-style zoom-out.
+      const padPx =
+        spanM < 900 ? 22 : spanM < 1800 ? 28 : heightM < 700 ? 36 : 20;
+      const maxZ = spanM < 1200 ? 19.25 : spanM < 2200 ? 18.75 : 18.25;
       m.invalidateSize(false);
       const padPt = L.point(padPx, padPx);
       let zFit = m.getBoundsZoom(bounds, false, padPt);
@@ -343,12 +361,22 @@ export function LiveMap({
         return;
       }
       zFit = Math.min(maxZ, zFit);
+      const floor = viewerFollowBoundsMinZoom;
+      if (floor != null && Number.isFinite(floor)) {
+        zFit = Math.max(floor, zFit);
+      }
       viewerBoundsZoomRef.current = zFit;
     })();
     return () => {
       cancelled = true;
     };
-  }, [viewerFollowLatLngBounds, followMode, streamer, mapReady]);
+  }, [
+    viewerFollowLatLngBounds,
+    viewerFollowBoundsMinZoom,
+    followMode,
+    streamer,
+    mapReady,
+  ]);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -457,27 +485,32 @@ export function LiveMap({
               return;
             }
             const muted = zonesVisualStyle === "muted";
+            // Light strokes + very low fill so roads read; zone hue only hints inside cells.
             const poly = L.polygon(latlngs, {
               color: muted
                 ? selected
-                  ? "rgba(255,255,255,0.75)"
-                  : "rgba(148,163,184,0.5)"
+                  ? "rgba(255,255,255,0.62)"
+                  : "rgba(203,213,225,0.42)"
                 : selected
-                  ? "#ffffff"
-                  : color,
-              weight: muted ? (selected ? 2 : 1) : selected ? 5 : 4,
-              fillColor: muted ? "rgba(148,163,184,0.55)" : color,
+                  ? "rgba(255,255,255,0.78)"
+                  : "rgba(248,250,252,0.38)",
+              weight: muted ? (selected ? 1.75 : 1.1) : selected ? 2.25 : 1.5,
+              fillColor: muted ? "rgba(148,163,184,0.5)" : color,
               fillOpacity: muted
                 ? selected
-                  ? 0.12
+                  ? 0.06
                   : isActive
-                    ? 0.07
-                    : 0.04
-                : isActive
-                  ? (selected ? 0.55 : 0.4)
-                  : 0.15,
-              opacity: muted ? 0.9 : 1,
-              dashArray: selected ? undefined : muted ? "5 4" : "6 4",
+                    ? 0.035
+                    : 0.02
+                : selected
+                  ? isActive
+                    ? 0.1
+                    : 0.05
+                  : isActive
+                    ? 0.055
+                    : 0.028,
+              opacity: 1,
+              dashArray: selected ? undefined : muted ? "6 5" : "7 5",
             });
             if (interactive && onZoneSelect) {
               poly.on("click", () => onZoneSelect(selected ? null : zone.id));
@@ -565,14 +598,15 @@ export function LiveMap({
         const pts = destinationRoute.map(
           (p) => [p.lat, p.lng] as [number, number],
         );
-        L.polyline(pts, {
+        const line = L.polyline(pts, {
           color: "#ef4444",
-          weight: 4,
-          opacity: 0.3,
-          dashArray: "8 10",
+          weight: 5,
+          opacity: 0.85,
+          dashArray: "10 8",
           lineCap: "round",
           lineJoin: "round",
         }).addTo(group);
+        line.bringToFront?.();
       }
 
       if (
@@ -704,9 +738,21 @@ export function LiveMap({
       const pos: [number, number] = [last.lat, last.lng];
       const latlngs: [number, number][] = routePoints.map((p) => [p.lat, p.lng]);
       const isFirstFollowFrame = !hasAppliedInitialZoomRef.current;
+      const viewerTurnPinActive =
+        !streamer &&
+        viewerFollowLatLngBounds == null &&
+        (viewerFollowZoom == null || !Number.isFinite(viewerFollowZoom)) &&
+        (turnTarget != null ||
+          (driverPins != null &&
+            driverPins.length > 0 &&
+            Number.isFinite(driverPins[0]?.lat)));
+      const navZoomFloor = viewerTurnPinActive
+        ? Math.max(profile.zoom, 17.35)
+        : profile.zoom;
+      viewerTurnNavZoomRef.current = viewerTurnPinActive ? navZoomFloor : null;
       const baseZoom = viewerFollowLatLngBounds
         ? viewerBoundsZoomRef.current ?? profile.zoom
-        : viewerFollowZoom ?? profile.zoom;
+        : viewerFollowZoom ?? navZoomFloor;
       const targetZoom = interactive
         ? hasAppliedInitialZoomRef.current
           ? m.getZoom()
@@ -817,6 +863,8 @@ export function LiveMap({
     profile.lineWeight,
     rotateWithHeading,
     followMode,
+    turnTarget,
+    driverPins,
   ]);
 
   // Viewer: each poll refreshes target + gently blends measured °/s (poll is guidance, not a snap target).
@@ -1113,7 +1161,9 @@ export function LiveMap({
       dd.setLatLng([nLat, nLng]);
       if (arRef.current) arRef.current.setLatLng([nLat, nLng]);
       const targetZ =
-        viewerBoundsZoomRef.current ?? viewerFollowZoomRef.current ?? null;
+        viewerBoundsZoomRef.current ??
+        viewerFollowZoomRef.current ??
+        viewerTurnNavZoomRef.current;
       const curZ = mm.getZoom();
       let z = curZ;
       if (followMode && targetZ != null && Number.isFinite(targetZ)) {
