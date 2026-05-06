@@ -1153,7 +1153,7 @@ export function LiveMap({
       if (followMode) {
         const sz = m.getSize();
         const isMapRotating = rotateWithHeadingRef.current && followModeRef.current;
-        const viewportH = isMapRotating ? sz.y / 1.8 : sz.y;
+        const viewportH = isMapRotating ? sz.y / 2.0 : sz.y;
         const S = viewportH * 0.10;
         const rotRad = isMapRotating ? (rotationDegRef.current * Math.PI) / 180 : 0;
         const driverPt = m.latLngToLayerPoint(livePos);
@@ -1337,8 +1337,8 @@ export function LiveMap({
       const sz = mm.getSize();
       // Container is expanded 40% on each side when rotating; recover viewport dimensions.
       const isMapRotating = rotateWithHeadingRef.current && followModeRef.current;
-      const viewportH = isMapRotating ? sz.y / 1.8 : sz.y;
-      const viewportW = isMapRotating ? sz.x / 1.8 : sz.x;
+      const viewportH = isMapRotating ? sz.y / 2.0 : sz.y;
+      const viewportW = isMapRotating ? sz.x / 2.6 : sz.x;
       const S = viewportH * 0.10;                                   // 10% below centre = 60% from top
       const rotRad = isMapRotating ? (smoothHeadingRef.current * Math.PI) / 180 : 0;
       const driverPt = mm.latLngToLayerPoint([nLat, nLng]);
@@ -1397,7 +1397,7 @@ export function LiveMap({
                 rotateWithHeading && followMode ? `${rotationDeg}deg` : "0deg",
               ...(rotateWithHeading && followMode
                 ? {
-                    inset: "-40%",
+                    inset: "-50% -80%",
                     transform: `rotate(${rotationDeg}deg)`,
                     transformOrigin: "50% 50%",
                     transition: streamer
