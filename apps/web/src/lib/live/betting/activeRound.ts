@@ -3,6 +3,11 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { metersBetween } from "@/lib/live/routing/geometry";
 import { computeDriverRouteInstruction } from "@/lib/live/routing/computeDriverRouteInstruction";
 import { BettingEngineV2, type LiveRoundSelectionSnapshot, type RoundPlanV2 } from "@bettok/live";
+import {
+  cellIdForPosition,
+  gridCellCenter,
+  parseGridOptionId,
+} from "@/lib/live/grid/cityGrid500";
 
 export type LiveBetRowPublic = {
   id: string;
@@ -62,14 +67,42 @@ export async function getActiveBettingRoundPayload(
   const hasPins = (instruction?.pins?.length ?? 0) > 0;
   const inZone = Boolean(room.regionLabel);
 
-  // • next_turn  : 250 m → 50 m from decision pin (gate in selectBestRound)
-  // • next_zone  : in a zone AND NOT about to turn (suppress within 250 m of a turn)
-  // • turns_before_zone_exit / stop_count / zone_exit_time : driver inside a known zone
-  // • time_vs_google / turn_count : destination + routing pins available
+  // next_turn: 200 m → 150 m window (gate enforced in canBuildNextTurnRound)
+  // next_zone: city_grid only — driver in zone AND within 150 m of cell center
+  // turns_before_zone_exit / zone_exit_time: fires immediately on zone entry
+  // time_vs_google ("time to next pin"): only when routing has a visible pin
+  // stop_count: broad fallback whenever speed data is present
+
+  // Suppress next_zone when a turn bet is about to fire (within 200 m).
   const nearTurn =
     distanceToTurnM != null &&
     Number.isFinite(distanceToTurnM) &&
-    distanceToTurnM <= 250;
+    distanceToTurnM <= 200;
+
+  // Compute distance to current grid cell center (city_grid markets only).
+  let distToZoneCenterM: number | null = null;
+  if (last && mkt?.marketType === "city_grid" && mkt.cityGridSpec) {
+    const spec = mkt.cityGridSpec;
+    const cellId = cellIdForPosition(spec, last.lat, last.lng);
+    if (cellId) {
+      const p = parseGridOptionId(cellId);
+      if (p) {
+        const center = gridCellCenter(spec, p.row, p.col);
+        distToZoneCenterM = metersBetween(
+          { lat: last.lat, lng: last.lng },
+          center,
+        );
+      }
+    }
+  }
+
+  // next_zone: city_grid, in a zone, near the cell center (<150 m), not near a turn
+  const canNextZone =
+    inZone &&
+    !nearTurn &&
+    mkt?.marketType === "city_grid" &&
+    distToZoneCenterM != null &&
+    distToZoneCenterM < 150;
 
   const snapshot: LiveRoundSelectionSnapshot = {
     distanceToTurnMeters: distanceToTurnM,
@@ -77,13 +110,12 @@ export async function getActiveBettingRoundPayload(
     nextPinId:
       instruction?.pins[0] != null ? String(instruction.pins[0]!.id) : null,
     isInOrNearZone: inZone,
-    // next_zone: in a zone, not close to a turn (middle-of-zone feel)
-    canBuildNextZoneRound: inZone && !nearTurn,
+    canBuildNextZoneRound: canNextZone,
     canBuildZoneExitRound: inZone && Boolean(mkt),
     canBuildZoneDurationRound: false,
-    // time_vs_google: whenever we have a destination (fallback bet when nothing else fires)
-    canBuildTimeVsGoogleRound: Boolean(room.destination),
-    // stop_count: always available when speed data present (fallback + zone sense)
+    // "time to next pin" — shown whenever routing has a visible pin ahead
+    canBuildTimeVsGoogleRound: hasPins,
+    // stop_count: broad fallback whenever speed data is present
     canBuildStopCountRound: last?.speedMps != null,
     canBuildTurnCountRound: hasPins,
     canBuildTurnsBeforeZoneExitRound: inZone,

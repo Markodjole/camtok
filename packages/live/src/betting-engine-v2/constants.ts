@@ -6,8 +6,8 @@
 import type { BetTypeV2 } from "./types";
 
 /** Offer next-turn(shared) when distance to decision is within this band (m). */
-export const TURN_BET_OFFER_MAX_M = 250;
-export const TURN_BET_OFFER_MIN_M = 50;
+export const TURN_BET_OFFER_MAX_M = 200;
+export const TURN_BET_OFFER_MIN_M = 150;
 
 /**
  * In-zone bets (`turns_before_zone_exit`, `stop_count`) fire after entering a zone.

@@ -520,8 +520,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       }
 
       const pickZone = displayBetType === "next_zone";
-      // next_zone: ~1000 m width so several neighbouring cells show; other bets: ~500 m.
-      const framingM = pickZone ? 1000 : 500;
+      // next_zone: 700 m so neighbouring cells show; other bets: 500 m.
+      const framingM = pickZone ? 700 : 500;
 
       return {
         bounds: squareWgs84BoundsFromCenter(centerLat, centerLng, framingM),
