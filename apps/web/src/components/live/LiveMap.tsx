@@ -488,6 +488,11 @@ export function LiveMap({
       destLayerRef.current = L.layerGroup().addTo(m);
       railLayerRef.current = L.layerGroup().addTo(m);
       turnLayerRef.current = L.layerGroup().addTo(m);
+      // Vehicle pane sits above all polylines, markers, and turn pins (z-index 640 >
+      // marker pane 600 > overlay/SVG pane 400). Only tooltips (650) and popups (700) beat it.
+      m.createPane("vehicle");
+      const vPane = m.getPane("vehicle");
+      if (vPane) vPane.style.zIndex = "640";
       layerRef.current = t;
       mapRef.current = m;
       setMapReady((n) => n + 1);
@@ -889,10 +894,9 @@ export function LiveMap({
           color: "rgba(255,255,255,0.85)",
           weight: 1,
           fillOpacity: 0.92,
+          pane: "vehicle",
         }).addTo(m);
       }
-      // Ensure vehicle dot is always above polylines in SVG stacking order.
-      dotRef.current.bringToFront?.();
       if (showCourseArrow && last.heading != null) {
         if (arRef.current) {
           // Do not hard-set marker lat/lng here; RAF loop animates it smoothly.
@@ -902,6 +906,7 @@ export function LiveMap({
             icon: headingDivIcon(L, last.heading, streamer),
             interactive: false,
             zIndexOffset: 500,
+            pane: "vehicle",
           }).addTo(m);
         }
       } else if (arRef.current) {
