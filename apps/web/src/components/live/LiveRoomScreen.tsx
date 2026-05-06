@@ -8,8 +8,7 @@ import {
   cellIdForPosition,
   cellLabel,
   enumerateGridCells,
-  latLngBoundsForGridCell,
-  latLngBoundsForGridNeighborhood3x3,
+  gridCellCenter,
   parseGridOptionId,
   type Wgs84LatLngBoundsTuple,
 } from "@/lib/live/grid/cityGrid500";
@@ -18,7 +17,7 @@ import dynamic from "next/dynamic";
 import type { LiveFeedRow, RoutePoint } from "@/actions/live-feed";
 import { LIVE_BET_LOCK_DISTANCE_M } from "@/lib/live/liveBetLockDistance";
 import { liveBetRelaxClient } from "@/lib/live/liveBetRelax";
-import { metersBetween, latLngBoundsFromPoints } from "@/lib/live/routing/geometry";
+import { metersBetween, squareWgs84BoundsFromCenter } from "@/lib/live/routing/geometry";
 import { LiveVideoPlayer } from "./LiveVideoPlayer";
 import { DirectionalBetPad } from "./DirectionalBetPad";
 import { LiveDecisionStatusRibbon } from "./LiveDecisionStatusRibbon";
@@ -384,80 +383,75 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const routeLast =
     routePoints.length > 0 ? routePoints[routePoints.length - 1]! : null;
 
-  /** Map framing for viewer follow zoom: grid cells + Google destination path envelope when set. */
+  /** Map framing for viewer follow zoom: fixed ~1.5 km square (never driver→dest city bbox). */
+  const VIEWER_MAP_FRAMING_METERS = 1500;
+
   const viewerGridMapFraming = useMemo((): {
     bounds: Wgs84LatLngBoundsTuple | null;
     minZoom: number | null;
   } => {
-    const dest = room.destination;
-    // Tight zoom framing only — full polyline is still drawn on the map. Using the entire
-    // Directions path as bounds zoomed the camera far out; use driver + pin only off-grid.
-    const driverDestEnv =
-      dest && routeLast
-        ? latLngBoundsFromPoints([
-            { lat: routeLast.lat, lng: routeLast.lng },
-            { lat: dest.lat, lng: dest.lng },
-          ])
-        : null;
+    if (!routeLast) return { bounds: null, minZoom: null };
 
-    let bounds: Wgs84LatLngBoundsTuple | null = null;
-    let minZoom: number | null = null;
+    if (currentMarket?.marketType === "city_grid" && cityGridSpec) {
+      let centerLat = routeLast.lat;
+      let centerLng = routeLast.lng;
 
-    if (
-      currentMarket?.marketType === "city_grid" &&
-      cityGridSpec &&
-      routeLast
-    ) {
-      const t = effectiveEngineType;
-      const cell = cellIdForPosition(
-        cityGridSpec,
-        routeLast.lat,
-        routeLast.lng,
-      );
-      if (cell) {
-        const p = parseGridOptionId(cell);
-        if (p) {
-          const inZone =
-            t === "zone_exit_time" ||
-            t === "zone_duration" ||
-            t === "turns_before_zone_exit" ||
-            t === "stop_count";
-          if (inZone) {
-            bounds = latLngBoundsForGridCell(cityGridSpec, p.row, p.col);
-            minZoom = 17.35;
-          } else if (t === "next_zone") {
-            bounds = latLngBoundsForGridNeighborhood3x3(
-              cityGridSpec,
-              p.row,
-              p.col,
-            );
-            minZoom = 16.35;
-          } else {
-            bounds = latLngBoundsForGridCell(cityGridSpec, p.row, p.col);
-            minZoom = 16.85;
+      const sel = selectedZoneId ? parseGridOptionId(selectedZoneId) : null;
+      if (
+        sel != null &&
+        sel.row >= 0 &&
+        sel.row < cityGridSpec.nRows &&
+        sel.col >= 0 &&
+        sel.col < cityGridSpec.nCols
+      ) {
+        const c = gridCellCenter(cityGridSpec, sel.row, sel.col);
+        centerLat = c.lat;
+        centerLng = c.lng;
+      } else {
+        const cell = cellIdForPosition(
+          cityGridSpec,
+          routeLast.lat,
+          routeLast.lng,
+        );
+        if (cell) {
+          const p = parseGridOptionId(cell);
+          if (p) {
+            const c = gridCellCenter(cityGridSpec, p.row, p.col);
+            centerLat = c.lat;
+            centerLng = c.lng;
           }
         }
       }
+
+      return {
+        bounds: squareWgs84BoundsFromCenter(
+          centerLat,
+          centerLng,
+          VIEWER_MAP_FRAMING_METERS,
+        ),
+        minZoom: 18.2,
+      };
     }
 
-    // City grid: never widen bounds with the route — keep cell / 3×3 framing only.
-    if (bounds) {
-      return { bounds, minZoom };
-    }
-
-    if (driverDestEnv) {
-      return { bounds: driverDestEnv, minZoom: 16.5 };
+    if (room.destination) {
+      return {
+        bounds: squareWgs84BoundsFromCenter(
+          routeLast.lat,
+          routeLast.lng,
+          VIEWER_MAP_FRAMING_METERS,
+        ),
+        minZoom: 18,
+      };
     }
 
     return { bounds: null, minZoom: null };
   }, [
-    effectiveEngineType,
-    cityGridSpec,
     currentMarket?.marketType,
+    cityGridSpec,
     routeLast?.lat,
     routeLast?.lng,
-    room.destination?.lat,
-    room.destination?.lng,
+    selectedZoneId,
+    room.destination,
   ]);
 
   const passedMarketTurn =

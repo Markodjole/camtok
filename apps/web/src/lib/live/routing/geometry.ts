@@ -48,6 +48,24 @@ export function projectPoint(
 }
 
 /**
+ * Axis-aligned square in WGS84 (Leaflet order): `[[southLat, westLng], [northLat, eastLng]]`.
+ * Side length is approximately `sizeMeters` (equirectangular at `centerLat`).
+ */
+export function squareWgs84BoundsFromCenter(
+  centerLat: number,
+  centerLng: number,
+  sizeMeters: number,
+): [[number, number], [number, number]] {
+  const half = sizeMeters / 2;
+  const dLat = half / EARTH_M_PER_LAT_DEG;
+  const dLng = half / (EARTH_M_PER_LAT_DEG * cosLat(centerLat));
+  return [
+    [centerLat - dLat, centerLng - dLng],
+    [centerLat + dLat, centerLng + dLng],
+  ];
+}
+
+/**
  * Walk along a polyline and return the point at the given distance (meters).
  * If the polyline is shorter than `meters`, returns the last point (caller
  * may treat this as low confidence).

@@ -1,6 +1,12 @@
 "use client";
 
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import type { RoutePoint } from "@/actions/live-feed";
 import { metersBetween } from "@/lib/live/routing/geometry";
 
@@ -177,10 +183,22 @@ function normalizeAngleDeg(deg: number): number {
 const VIEWER_MAP_ROTATION_TAU_SEC = 2;
 
 /** Zoom target approaches this fraction of the remaining delta per animation frame (~60fps). */
-const VIEWER_ZOOM_BLEND_PER_FRAME = 0.035;
+const VIEWER_ZOOM_BLEND_PER_FRAME = 0.16;
 
 /** With `viewerFollowLatLngBounds`, never go wider than this (higher = closer). */
-const VIEWER_FOLLOW_BOUNDS_ZOOM_FLOOR = 16.35;
+const VIEWER_FOLLOW_BOUNDS_ZOOM_FLOOR = 18.65;
+
+/**
+ * After `getBoundsZoom`, nudge **in** (viewer only) — fitBounds alone kept the
+ * camera too loose for navigation-style follow.
+ */
+const VIEWER_FIT_BOUNDS_ZOOM_BIAS = 0.75;
+
+/**
+ * Added to `mapProfile().zoom` for viewers only (streamer unchanged).
+ * Users consistently want the spectator map tighter than the driver baseline.
+ */
+const VIEWER_FOLLOW_ZOOM_EXTRA = 1.35;
 
 /** Slower `setView` / zoom ramp — **city grid bounds framing only** (see `smoothGridFramingRef`). */
 const MAP_SET_VIEW_DURATION_SEC = 1.35;
@@ -300,6 +318,23 @@ export function LiveMap({
   const smoothMotion = true;
   const col = streamer ? C.streamer : C.viewer;
   const profile = mapProfile(transportMode, streamer ? "streamer" : "viewer");
+  const viewerFollowProfileZoom = streamer
+    ? profile.zoom
+    : profile.zoom + VIEWER_FOLLOW_ZOOM_EXTRA;
+
+  useLayoutEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    if (!rotateWithHeading || !followMode) {
+      el.style.setProperty("--camtok-map-rotation", "0deg");
+      return;
+    }
+    el.style.setProperty("--camtok-map-rotation", `${rotationDeg}deg`);
+  }, [rotationDeg, rotateWithHeading, followMode]);
+
+  useEffect(() => {
+    if (!followMode) hasAppliedInitialZoomRef.current = false;
+  }, [followMode]);
 
   useEffect(() => {
     const m = mapRef.current;
@@ -360,10 +395,11 @@ export function LiveMap({
         111_320 *
         Math.max(0.12, Math.cos((midLat * Math.PI) / 180));
       const spanM = Math.max(heightM, widthM);
-      // Tighter padding for typical grid chunks so we don’t jump to a satellite-style zoom-out.
+      // Tight padding: large fitBounds padding was the main reason viewer follow stayed too wide.
       const padPx =
-        spanM < 900 ? 16 : spanM < 1800 ? 22 : heightM < 700 ? 28 : 16;
-      const maxZ = spanM < 1200 ? 19.5 : spanM < 2200 ? 19.1 : 18.85;
+        spanM < 900 ? 4 : spanM < 1800 ? 8 : heightM < 700 ? 12 : 6;
+      // OSM tiles cap at ~19 — keep target aligned so we actually reach max detail.
+      const maxZ = 19;
       m.invalidateSize(false);
       const padPt = L.point(padPx, padPx);
       let zFit = m.getBoundsZoom(bounds, false, padPt);
@@ -371,6 +407,8 @@ export function LiveMap({
         viewerBoundsZoomRef.current = null;
         return;
       }
+      zFit = Math.min(maxZ, zFit);
+      zFit += VIEWER_FIT_BOUNDS_ZOOM_BIAS;
       zFit = Math.min(maxZ, zFit);
       const floor = viewerFollowBoundsMinZoom;
       if (floor != null && Number.isFinite(floor)) {
@@ -757,11 +795,11 @@ export function LiveMap({
             driverPins.length > 0 &&
             Number.isFinite(driverPins[0]?.lat)));
       const navZoomFloor = viewerTurnPinActive
-        ? Math.max(profile.zoom, 17.65)
-        : profile.zoom;
+        ? Math.max(viewerFollowProfileZoom, 19)
+        : viewerFollowProfileZoom;
       viewerTurnNavZoomRef.current = viewerTurnPinActive ? navZoomFloor : null;
       const baseZoom = viewerFollowLatLngBounds
-        ? viewerBoundsZoomRef.current ?? profile.zoom
+        ? viewerBoundsZoomRef.current ?? viewerFollowProfileZoom
         : viewerFollowZoom ?? navZoomFloor;
       const targetZoom = interactive
         ? hasAppliedInitialZoomRef.current
@@ -867,7 +905,7 @@ export function LiveMap({
     col.fill,
     col.r,
     mapReady,
-    profile.zoom,
+    viewerFollowProfileZoom,
     viewerFollowZoom,
     viewerFollowLatLngBounds,
     profile.lineWeight,

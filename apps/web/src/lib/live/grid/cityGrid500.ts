@@ -133,6 +133,19 @@ export function latLngBoundsForGridCell(
   ];
 }
 
+/** Center of a grid cell (WGS84). */
+export function gridCellCenter(
+  spec: CityGridSpecCompact,
+  row: number,
+  col: number,
+): { lat: number; lng: number } {
+  const swLat = spec.swLat + row * spec.dLat;
+  const swLng = spec.swLng + col * spec.dLng;
+  const neLat = spec.swLat + (row + 1) * spec.dLat;
+  const neLng = spec.swLng + (col + 1) * spec.dLng;
+  return { lat: (swLat + neLat) / 2, lng: (swLng + neLng) / 2 };
+}
+
 /** Up to 3×3 around `(row,col)`, clipped to the grid — pick next zone / nearby cells. */
 export function latLngBoundsForGridNeighborhood3x3(
   spec: CityGridSpecCompact,
