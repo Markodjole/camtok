@@ -686,7 +686,7 @@ export function LiveMap({
           lineCap: "round",
           lineJoin: "round",
         }).addTo(group);
-        line.bringToFront?.();
+        line.bringToBack?.();
       }
 
       if (
@@ -882,6 +882,8 @@ export function LiveMap({
           fillOpacity: 0.92,
         }).addTo(m);
       }
+      // Ensure vehicle dot is always above polylines in SVG stacking order.
+      dotRef.current.bringToFront?.();
       if (showCourseArrow && last.heading != null) {
         if (arRef.current) {
           // Do not hard-set marker lat/lng here; RAF loop animates it smoothly.
@@ -1113,13 +1115,14 @@ export function LiveMap({
       dot.setLatLng(livePos);
       if (arRef.current) arRef.current.setLatLng(livePos);
       if (followMode) {
-        // Offset center upward so vehicle appears ~60% down the screen instead of 50%.
         const sz = m.getSize();
-        const offsetPx = sz.y * 0.12;
+        const isMapRotating = rotateWithHeadingRef.current && followModeRef.current;
+        const viewportH = isMapRotating ? sz.y / 1.48 : sz.y;
+        const S = viewportH * 0.10;
+        const rotRad = isMapRotating ? (rotationDegRef.current * Math.PI) / 180 : 0;
         const driverPt = m.latLngToLayerPoint(livePos);
-        const centerPt = { x: driverPt.x, y: driverPt.y - offsetPx };
-        const centerLatLng = m.layerPointToLatLng(centerPt as import("leaflet").Point);
-        m.setView(centerLatLng, m.getZoom(), { animate: false });
+        const cPt = { x: driverPt.x - S * Math.sin(rotRad), y: driverPt.y - S * Math.cos(rotRad) };
+        m.setView(m.layerPointToLatLng(cPt as import("leaflet").Point), m.getZoom(), { animate: false });
       }
 
       if (t < totalMs) {
@@ -1305,12 +1308,20 @@ export function LiveMap({
           z = curZ + dz * VIEWER_ZOOM_BLEND_PER_FRAME;
         }
       }
-      // Offset center so vehicle sits ~60% down the screen (not centered).
+      // Place vehicle at 60% from top (10% below centre) regardless of map rotation.
+      // When the container is CSS-rotated by rotDeg, a screen offset of (0, +S)
+      // corresponds to a layer offset of (S·sin(rotDeg), S·cos(rotDeg)).
+      // We move the map centre by the negative of that offset so the driver ends up
+      // at (screen_cx, screen_cy + S) — horizontally centred, vertically offset.
       const sz = mm.getSize();
-      const offsetPx = sz.y * 0.12;
+      // Container is expanded 24% on each side when rotating; recover viewport height.
+      const isMapRotating = rotateWithHeadingRef.current && followModeRef.current;
+      const viewportH = isMapRotating ? sz.y / 1.48 : sz.y;
+      const S = viewportH * 0.10;                                   // 10% below centre = 60% from top
+      const rotRad = isMapRotating ? (smoothHeadingRef.current * Math.PI) / 180 : 0;
       const driverPt = mm.latLngToLayerPoint([nLat, nLng]);
-      const centerPt = { x: driverPt.x, y: driverPt.y - offsetPx };
-      const centerLatLng = mm.layerPointToLatLng(centerPt as import("leaflet").Point);
+      const cPt = { x: driverPt.x - S * Math.sin(rotRad), y: driverPt.y - S * Math.cos(rotRad) };
+      const centerLatLng = mm.layerPointToLatLng(cPt as import("leaflet").Point);
       mm.setView(centerLatLng, z, { animate: false });
 
       viewerSmoothRafRef.current = requestAnimationFrame(loop);
