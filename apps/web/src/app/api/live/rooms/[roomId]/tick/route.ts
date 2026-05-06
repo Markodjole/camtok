@@ -2,11 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { openSystemMarketForRoom } from "@/actions/live-markets";
 import { openCityGridMarketForRoom } from "@/actions/live-city-grid-market";
-import { openEngineMarketForRoom } from "@/actions/live-engine-market";
+import {
+  openEngineMarketForRoom,
+  shouldSettleEngineMarket,
+} from "@/actions/live-engine-market";
 import { lockMarket, revealAndSettleMarket } from "@/actions/live-settlement";
 import { LIVE_BET_LOCK_DISTANCE_M } from "@/lib/live/liveBetLockDistance";
 import { liveBetRelaxServer } from "@/lib/live/liveBetRelax";
 import { metersBetween } from "@/lib/live/routing/geometry";
+import { isEngineMarketType } from "@/lib/live/betting/engineMarketOptions";
 
 /**
  * Stateless tick worker for a single room. Designed to be called every few
@@ -68,16 +72,18 @@ export async function POST(
     const { data: market } = await service
       .from("live_betting_markets")
       .select(
-        "id, status, locks_at, reveal_at, turn_point_lat, turn_point_lng, live_session_id",
+        "id, status, locks_at, reveal_at, turn_point_lat, turn_point_lng, live_session_id, market_type",
       )
       .eq("id", marketId)
       .maybeSingle();
     if (!market) return NextResponse.json({ action: "no_market" });
 
     const now = Date.now();
-    const locksAt = new Date((market as { locks_at: string }).locks_at).getTime();
+    const locksAtStr = (market as { locks_at: string }).locks_at;
+    const locksAt = new Date(locksAtStr).getTime();
     const revealAt = new Date((market as { reveal_at: string }).reveal_at).getTime();
     const status = (market as { status: string }).status;
+    const marketType = (market as { market_type: string | null }).market_type ?? "";
 
     if (status === "open") {
       // Distance-based lock: vehicle within `LIVE_BET_LOCK_DISTANCE_M` of the
@@ -125,9 +131,26 @@ export async function POST(
         });
       }
     }
-    if (status === "locked" && now >= revealAt) {
-      const r = await revealAndSettleMarket(marketId);
-      return NextResponse.json({ action: "reveal", ...r });
+    if (status === "locked") {
+      if (isEngineMarketType(marketType)) {
+        // Event-driven settlement: check natural condition for this bet type.
+        const settle = await shouldSettleEngineMarket(service, {
+          marketId,
+          marketType,
+          locksAt: locksAtStr,
+          liveSessionId: (market as { live_session_id: string | null }).live_session_id,
+          roomId,
+        });
+        if (settle) {
+          const r = await revealAndSettleMarket(marketId);
+          return NextResponse.json({ action: "engine_event_reveal", marketType, ...r });
+        }
+        return NextResponse.json({ action: "engine_waiting", marketType, phase });
+      }
+      if (now >= revealAt) {
+        const r = await revealAndSettleMarket(marketId);
+        return NextResponse.json({ action: "reveal", ...r });
+      }
     }
   }
 
