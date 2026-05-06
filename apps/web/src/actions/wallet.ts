@@ -1,6 +1,7 @@
 "use server";
 
 import { createServerClient, createServiceClient } from "@/lib/supabase/server";
+import { walletStartingBalance } from "@/lib/live/walletStartingBalance";
 
 /** Create profile and wallet for the current user if missing (e.g. user created before trigger existed). */
 export async function ensureProfileAndWallet(): Promise<
@@ -47,17 +48,23 @@ export async function ensureProfileAndWallet(): Promise<
     .maybeSingle();
 
   if (!existingWallet) {
+    const start = walletStartingBalance();
     const { data: newWallet, error: walletErr } = await serviceClient
       .from("wallets")
-      .insert({ user_id: user.id, balance: 1000, total_deposited: 1000 })
+      .insert({
+        user_id: user.id,
+        balance: start,
+        balance_demo: start,
+        total_deposited: start,
+      })
       .select()
       .single();
     if (walletErr) return { error: "Failed to create wallet: " + walletErr.message };
     await serviceClient.from("wallet_transactions").insert({
       wallet_id: newWallet.id,
       type: "deposit_demo",
-      amount: 1000,
-      balance_after: 1000,
+      amount: start,
+      balance_after: start,
       description: "Welcome bonus",
     });
   }
