@@ -39,6 +39,10 @@ import {
 } from "./OwnerLiveControlPanel";
 import { useViewerChromeStore } from "@/stores/viewer-chrome-store";
 import type { BetTypeV2 } from "@bettok/live";
+import {
+  isEngineMarketType,
+  provisionalOptionsForBetType,
+} from "@/lib/live/betting/engineMarketOptions";
 
 const LiveMap = dynamic(() => import("./LiveMap").then((m) => m.LiveMap), {
   ssr: false,
@@ -708,7 +712,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [betPanelDismissed, setBetPanelDismissed] = useState(false);
   useEffect(() => {
     setBetPanelDismissed(false);
-  }, [currentMarket?.id, mapExpanded]);
+  }, [currentMarket?.id, mapExpanded, displayBetType]);
 
   const showBetBottomSheet =
     mapExpanded &&
@@ -724,13 +728,33 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     currentMarket?.marketType === "city_grid" &&
     displayBetType === "next_zone";
 
-  // Info/action sheet for every other bet type (including stop_count, time_vs_google,
-  // turns_before_zone_exit, zone_exit_time) on ANY market type.
+  // Directional/option sheet: show whenever a non-turn, non-zone pill is active,
+  // even if there is no matching market open yet (button will be disabled).
   const showViewerDirectionalBetSheet =
-    showBetBottomSheet &&
-    currentMarket != null &&
+    mapExpanded &&
+    showLiveBets &&
+    !betPanelDismissed &&
+    !viewerHasBetOnCurrentMarket &&
+    displayBetType != null &&
     displayBetType !== "next_turn" &&
     displayBetType !== "next_zone";
+
+  // For engine bet types use the provisional option list (always meaningful labels).
+  // For other types fall back to what the open market provides.
+  const sheetMarketOptions: Array<{ id: string; label: string; shortLabel?: string; displayOrder: number }> =
+    displayBetType && isEngineMarketType(displayBetType)
+      ? (currentMarket?.marketType === displayBetType && currentMarket.options.length
+          ? currentMarket.options
+          : provisionalOptionsForBetType(displayBetType as BetTypeV2))
+      : (currentMarket?.options ?? []);
+
+  // Betting is closed when: no market open, time/distance locked, OR the open
+  // market is a different type than the engine bet being shown.
+  const sheetBettingClosed =
+    !currentMarket ||
+    isLocked ||
+    (isEngineMarketType(displayBetType ?? "") &&
+      currentMarket.marketType !== (displayBetType ?? ""));
 
   const mapBetSheetOpen =
     showViewerGridBetSheet || showViewerDirectionalBetSheet;
@@ -778,6 +802,16 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       setSelectedMapOptionId(selectedZoneId);
       return;
     }
+    if (displayBetType && isEngineMarketType(displayBetType)) {
+      // Prefer the actual market options when they match this bet type; fall
+      // back to provisional options so there is always a default selection.
+      const source =
+        currentMarket?.marketType === displayBetType && currentMarket.options.length
+          ? currentMarket.options
+          : provisionalOptionsForBetType(displayBetType as BetTypeV2);
+      setSelectedMapOptionId(source[0]?.id ?? null);
+      return;
+    }
     const first = currentMarket?.options?.[0]?.id ?? null;
     setSelectedMapOptionId(first);
   }, [
@@ -785,6 +819,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     currentMarket?.marketType,
     selectedZoneId,
     selectedCheckpointId,
+    displayBetType,
   ]);
 
   useEffect(() => {
@@ -1291,18 +1326,23 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         <MapSelectionBottomSheet
           betHeadline={
             viewerCurrentBetHeadline ??
-            currentMarket.title ??
+            currentMarket?.title ??
             sheetBetHeadline
           }
           selectionDetail={
             directionalPickLabel
               ? `Pick · ${directionalPickLabel}`
-              : "Use the pad or the list to choose"
+              : "Tap an option below, then Place bet"
           }
-          marketOptions={currentMarket?.options ?? []}
+          marketOptions={sheetMarketOptions}
           selectedOptionId={selectedMapOptionId}
           onSelectOption={setSelectedMapOptionId}
-          bettingClosed={isLocked || !currentMarket}
+          bettingClosed={sheetBettingClosed}
+          bettingPending={
+            !currentMarket ||
+            (isEngineMarketType(displayBetType ?? "") &&
+              currentMarket.marketType !== (displayBetType ?? ""))
+          }
           isPlacing={!!placingOptionId}
           error={mapSheetError}
           countdown={currentMarket ? <MarketTimer locksAt={currentMarket.locksAt} /> : null}
@@ -1313,7 +1353,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             setBetPanelDismissed(true);
           }}
           onPlaceBet={async () => {
-            if (!selectedMapOptionId) return;
+            if (!selectedMapOptionId || sheetBettingClosed) return;
             const result = await placeBet(selectedMapOptionId);
             if (result?.ok) {
               setSelectedZoneId(null);
@@ -1410,6 +1450,7 @@ function MapSelectionBottomSheet({
   selectedOptionId,
   onSelectOption,
   bettingClosed,
+  bettingPending = false,
   isPlacing,
   error,
   countdown,
@@ -1423,6 +1464,7 @@ function MapSelectionBottomSheet({
   selectedOptionId: string | null;
   onSelectOption: (id: string) => void;
   bettingClosed: boolean;
+  bettingPending?: boolean;
   isPlacing: boolean;
   error: string | null;
   countdown: ReactNode;
@@ -1488,15 +1530,17 @@ function MapSelectionBottomSheet({
           onClick={() => void onPlaceBet()}
           className="mt-2 w-full rounded-lg bg-red-500/90 px-2 py-1.5 text-[11px] font-semibold text-white disabled:bg-white/15 disabled:text-white/45"
         >
-          {bettingClosed
-            ? "Betting closed"
-            : isPlacing
-              ? "Placing…"
-              : !selectedOptionId
-                ? gridMode
-                  ? "Choose a cell on the map"
-                  : "Select option"
-                : "Place bet"}
+          {bettingPending
+            ? "Opening soon…"
+            : bettingClosed
+              ? "Betting closed"
+              : isPlacing
+                ? "Placing…"
+                : !selectedOptionId
+                  ? gridMode
+                    ? "Choose a cell on the map"
+                    : "Select option"
+                  : "Place bet"}
         </button>
       </div>
     </div>

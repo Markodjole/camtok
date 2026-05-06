@@ -118,26 +118,21 @@ export function LiveDecisionStatusRibbon({
           </div>
         ) : null}
 
-        {dedupedPlans.length > 1 && onSelectEngineType ? (
-          <div className="pointer-events-auto flex max-w-full gap-1 overflow-x-auto py-0.5 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
-            {dedupedPlans.map((p) => {
-              const active = highlightedEngineType === p.type;
-              return (
-                <button
-                  key={p.type}
-                  type="button"
-                  onClick={() => onSelectEngineType(p.type)}
-                  className={`shrink-0 rounded-full border px-2 py-0.5 text-[9px] font-semibold transition-colors ${
-                    active
-                      ? "border-violet-400/60 bg-violet-600/35 text-white"
-                      : "border-white/15 bg-black/35 text-white/75 hover:bg-black/50"
-                  }`}
-                >
-                  {betTypeV2Label(p.type)}
-                </button>
-              );
-            })}
-          </div>
+        {highlightedEngineType && onSelectEngineType ? (
+          <button
+            type="button"
+            onClick={() => {
+              const idx = dedupedPlans.findIndex((p) => p.type === highlightedEngineType);
+              if (dedupedPlans.length > 1) {
+                const next = dedupedPlans[(idx + 1) % dedupedPlans.length];
+                if (next) onSelectEngineType(next.type);
+              }
+            }}
+            className="pointer-events-auto rounded-full border border-violet-400/60 bg-violet-600/35 px-2.5 py-0.5 text-[9px] font-semibold text-white"
+          >
+            {betTypeV2Label(highlightedEngineType)}
+            {dedupedPlans.length > 1 ? " ›" : ""}
+          </button>
         ) : null}
 
         {betOptionLabel ? (
