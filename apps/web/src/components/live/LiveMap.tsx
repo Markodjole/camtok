@@ -311,8 +311,6 @@ export function LiveMap({
   const viewerTargetWidthRef = useRef<number>(250);
   /** Set by user zoom events; cleared when viewerTargetWidthMeters prop changes. */
   const userZoomOverrideRef = useRef<number | null>(null);
-  /** True while OUR setView call is executing (so zoomend handler ignores it). */
-  const weAreSettingZoomRef = useRef(false);
   const smoothHeadingRef = useRef<number>(0);
   /** CSS wrapper rotation target (degrees); `-vehicleHeading`. Viewer RAF eases toward this. */
   const viewerMapRotationTargetRef = useRef<number>(0);
@@ -1362,19 +1360,29 @@ export function LiveMap({
         z = Math.abs(dz) < 0.01 ? targetZ : curZ + dz * VIEWER_ZOOM_BLEND_PER_FRAME;
       }
 
-      weAreSettingZoomRef.current = true;
       mm.setView(centerLatLng, z, { animate: false });
-      weAreSettingZoomRef.current = false;
 
       viewerSmoothRafRef.current = requestAnimationFrame(loop);
     };
 
-    // Detect user-initiated zoom events so we can stop fighting them.
-    const onZoomEnd = () => {
-      if (!weAreSettingZoomRef.current) {
-        userZoomOverrideRef.current = m.getZoom();
-      }
+    // Detect user-initiated zoom by watching for touch/wheel BEFORE the zoom
+    // happens, then recording the resulting zoom in zoomend.
+    // Using touch+wheel rather than a flag around setView avoids the race where
+    // zoomend fires asynchronously after our setView has already reset the flag,
+    // which would permanently lock auto-zoom to the current level.
+    let userIsInteracting = false;
+    let interactTimeout: ReturnType<typeof setTimeout> | null = null;
+    const markInteracting = () => {
+      userIsInteracting = true;
+      if (interactTimeout) clearTimeout(interactTimeout);
+      interactTimeout = setTimeout(() => { userIsInteracting = false; }, 600);
     };
+    const onZoomEnd = () => {
+      if (userIsInteracting) userZoomOverrideRef.current = m.getZoom();
+    };
+    const container = m.getContainer();
+    container.addEventListener("touchstart", markInteracting, { passive: true });
+    container.addEventListener("wheel", markInteracting, { passive: true });
     m.on("zoomend", onZoomEnd);
 
     viewerLoopLastTsRef.current = performance.now();
@@ -1382,6 +1390,9 @@ export function LiveMap({
 
     return () => {
       cancelViewerLoop();
+      if (interactTimeout) clearTimeout(interactTimeout);
+      container.removeEventListener("touchstart", markInteracting);
+      container.removeEventListener("wheel", markInteracting);
       m.off("zoomend", onZoomEnd);
     };
   }, [followMode, streamer, routePoints.length, driverPins, viewerFollowZoom, viewerFollowLatLngBounds]);
