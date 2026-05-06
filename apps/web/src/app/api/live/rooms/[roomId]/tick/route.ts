@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { openSystemMarketForRoom } from "@/actions/live-markets";
 import { openCityGridMarketForRoom } from "@/actions/live-city-grid-market";
+import { openEngineMarketForRoom } from "@/actions/live-engine-market";
 import { lockMarket, revealAndSettleMarket } from "@/actions/live-settlement";
 import { LIVE_BET_LOCK_DISTANCE_M } from "@/lib/live/liveBetLockDistance";
 import { liveBetRelaxServer } from "@/lib/live/liveBetRelax";
@@ -46,10 +47,20 @@ export async function POST(
       });
     }
     const r = await openSystemMarketForRoom(roomId);
+    if ("marketId" in r && r.marketId) {
+      return NextResponse.json({
+        action: "try_open_market",
+        cityGridSkippedReason: "error" in grid ? grid.error : null,
+        ...r,
+      });
+    }
+    // Neither city-grid nor turn market opened — try a provisional engine bet.
+    const eng = await openEngineMarketForRoom(roomId);
     return NextResponse.json({
-      action: "try_open_market",
+      action: "try_open_engine_market",
       cityGridSkippedReason: "error" in grid ? grid.error : null,
-      ...r,
+      systemSkippedReason: "error" in r ? r.error : null,
+      ...eng,
     });
   }
 

@@ -3,13 +3,13 @@ import type { BetTypeV2 } from "@bettok/live";
 /** Short product labels for engine pills and sheet titles (not internal ids). */
 const LABELS: Record<BetTypeV2, string> = {
   next_turn: "Next turn",
-  next_zone: "Next area",
-  zone_exit_time: "Zone exit",
+  next_zone: "Pick next zone",
+  zone_exit_time: "Time to leave zone",
   zone_duration: "Zone hangtime",
-  time_vs_google: "Beat time",
-  stop_count: "Count stops",
-  turns_before_zone_exit: "Turns to boundary",
-  turn_count_to_pin: "Turns ahead",
+  time_vs_google: "Beat Google",
+  stop_count: "How many stops?",
+  turns_before_zone_exit: "Turns before exit",
+  turn_count_to_pin: "Turns to next pin",
   eta_drift: "ETA drift",
 };
 

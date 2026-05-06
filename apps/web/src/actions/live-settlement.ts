@@ -12,6 +12,7 @@ import {
   cellIdForPosition,
   type CityGridSpecCompact,
 } from "@/lib/live/grid/cityGrid500";
+import { isEngineMarketType } from "@/lib/live/betting/engineMarketOptions";
 
 type LockEvidence = {
   currentNodeId: string;
@@ -313,6 +314,19 @@ export async function revealAndSettleMarket(marketId: string) {
       discarded: false,
     };
   });
+
+  // Provisional engine bet: randomly pick a winner from the option set.
+  // Real outcome logic will be added once telemetry/settlement data is wired.
+  if (isEngineMarketType(marketType)) {
+    const opts = (market as { option_set: LiveMarketOption[] }).option_set;
+    if (!opts.length) {
+      await refundMarket(marketId, "engine_no_options");
+      return { status: "voided", reason: "engine_no_options" };
+    }
+    const winIdx = Math.floor(Math.random() * opts.length);
+    const winId = opts[winIdx]!.id;
+    return await settleMarketWithWinner(marketId, winId, "engine_provisional");
+  }
 
   if (marketType === "city_grid" && gridSpec) {
     const usable = committed.filter(
