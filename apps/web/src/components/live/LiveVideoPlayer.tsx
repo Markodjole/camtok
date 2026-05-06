@@ -1,8 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { Volume2, VolumeX } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Volume2, VolumeX, RefreshCw } from "lucide-react";
 import { startViewerP2p } from "./liveP2pBroadcast";
+
+const CONNECT_TIMEOUT_MS = 20_000;
+const IS_DEV = process.env.NODE_ENV === "development";
 
 /**
  * Broadcaster: pass `localStream` from getUserMedia.
@@ -20,7 +23,16 @@ export function LiveVideoPlayer({
   const ref = useRef<HTMLVideoElement | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [signalError, setSignalError] = useState<string | null>(null);
+  const [timedOut, setTimedOut] = useState(false);
   const [soundOn, setSoundOn] = useState(false);
+  const [retryKey, setRetryKey] = useState(0);
+
+  const retry = useCallback(() => {
+    setRemoteStream(null);
+    setSignalError(null);
+    setTimedOut(false);
+    setRetryKey((k) => k + 1);
+  }, []);
 
   useEffect(() => {
     const el = ref.current;
@@ -38,6 +50,7 @@ export function LiveVideoPlayer({
     if (localStream || !liveSessionId) {
       setRemoteStream(null);
       setSignalError(null);
+      setTimedOut(false);
       setSoundOn(false);
       return;
     }
@@ -45,23 +58,31 @@ export function LiveVideoPlayer({
     let cancelled = false;
     const cleanupRef = { fn: undefined as (() => void) | undefined };
 
-    // Defer the actual subscription by a tick. If React torn down the effect
-    // within this tick (Strict Mode double-mount or rapid re-render), we never
-    // create the Supabase channel at all — avoiding zombie-subscription issues
-    // where the server-side topic membership breaks after the first unsubscribe.
+    // Show "timed out" if we haven't got a stream after CONNECT_TIMEOUT_MS.
+    const timeoutHandle = setTimeout(() => {
+      if (!cancelled) setTimedOut(true);
+    }, CONNECT_TIMEOUT_MS);
+
+    // Defer the actual subscription by a tick to avoid Strict Mode zombie channels.
     const startDelay = setTimeout(() => {
       if (cancelled) return;
       startViewerP2p(
         liveSessionId,
-        (stream) => { if (!cancelled) { setRemoteStream(stream); setSignalError(null); } },
+        (stream) => {
+          if (!cancelled) {
+            clearTimeout(timeoutHandle);
+            setRemoteStream(stream);
+            setSignalError(null);
+            setTimedOut(false);
+          }
+        },
         (msg) => { if (!cancelled) setSignalError(msg); },
+        IS_DEV ? (line) => console.log("[WebRTC viewer]", line) : undefined,
       ).then((cleanup) => {
-        if (cancelled) {
-          cleanup();
-        } else {
-          cleanupRef.fn = cleanup;
-        }
+        if (cancelled) cleanup();
+        else cleanupRef.fn = cleanup;
       }).catch((e) => {
+        clearTimeout(timeoutHandle);
         if (!cancelled) setSignalError(e instanceof Error ? e.message : "Could not connect");
       });
     }, 50);
@@ -69,11 +90,14 @@ export function LiveVideoPlayer({
     return () => {
       cancelled = true;
       clearTimeout(startDelay);
+      clearTimeout(timeoutHandle);
       cleanupRef.fn?.();
       cleanupRef.fn = undefined;
       setRemoteStream(null);
     };
-  }, [liveSessionId, localStream]);
+  // retryKey forces a full reconnect when the user taps retry.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveSessionId, localStream, retryKey]);
 
   useEffect(() => {
     const el = ref.current;
@@ -84,7 +108,8 @@ export function LiveVideoPlayer({
     void el.play().catch(() => undefined);
   }, [remoteStream, localStream, soundOn]);
 
-  const viewerConnecting = !localStream && liveSessionId && !remoteStream && !signalError;
+  const viewerConnecting = !localStream && liveSessionId && !remoteStream && !signalError && !timedOut;
+  const showError = (signalError || timedOut) && !remoteStream;
 
   return (
     <div className={`relative overflow-hidden bg-black ${className ?? "aspect-[9/16] w-full"}`}>
@@ -92,6 +117,21 @@ export function LiveVideoPlayer({
       {viewerConnecting ? (
         <div className="absolute inset-0 flex items-center justify-center bg-black/60 text-xs text-muted-foreground">
           Connecting to live stream…
+        </div>
+      ) : null}
+      {showError ? (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/80 p-4 text-center">
+          <p className="text-xs text-red-300">
+            {timedOut && !signalError ? "Could not connect to stream." : signalError}
+          </p>
+          <button
+            type="button"
+            onClick={retry}
+            className="flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1.5 text-xs text-white/80 active:bg-white/20"
+          >
+            <RefreshCw className="h-3 w-3" />
+            Retry
+          </button>
         </div>
       ) : null}
       {!localStream && liveSessionId && remoteStream ? (
@@ -108,11 +148,6 @@ export function LiveVideoPlayer({
             <VolumeX className="h-4 w-4" />
           )}
         </button>
-      ) : null}
-      {signalError ? (
-        <div className="absolute inset-0 flex items-center justify-center bg-black/80 p-4 text-center text-xs text-red-300">
-          {signalError}
-        </div>
       ) : null}
       {!localStream && !liveSessionId ? (
         <div className="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">
