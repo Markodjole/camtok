@@ -472,6 +472,15 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     displayBetType === "next_zone" ? "pick_zone" : zoneEngineBetActive ? "muted" : "default";
 
   /**
+   * Desired visible width in meters for the viewer map.
+   * Auto-zoom switches when bet type changes; user can freely zoom any time.
+   */
+  const viewerTargetWidthMeters =
+    displayBetType === "next_turn" ? 125 :
+    displayBetType === "next_zone" ? 600 :
+    250;
+
+  /**
    * Viewer follow framing rules:
    *  - `next_turn`  → no fixed bounds; LiveMap uses normal profile zoom (navigation feel).
    *  - `next_zone`  → 1000 m visible width square around current/selected cell center.
@@ -1053,6 +1062,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             driverRouteBadges={driverRouteBadges}
             viewerFollowLatLngBounds={viewerGridMapFraming.bounds}
             viewerFollowBoundsMinZoom={viewerGridMapFraming.minZoom}
+            viewerTargetWidthMeters={viewerTargetWidthMeters}
             onZoneSelect={(id) => {
               setSelectedZoneId(id);
               if (id) setSelectedCheckpointId(null);
@@ -1212,6 +1222,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               driverRouteBadges={driverRouteBadges}
               viewerFollowLatLngBounds={viewerGridMapFraming.bounds}
               viewerFollowBoundsMinZoom={viewerGridMapFraming.minZoom}
+              viewerTargetWidthMeters={viewerTargetWidthMeters}
             />
             {routePoints.length === 0 && (
               <div className="absolute inset-0 flex items-center justify-center bg-black/30 text-[9px] text-white/70">

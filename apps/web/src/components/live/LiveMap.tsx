@@ -127,6 +127,14 @@ export interface LiveMapProps {
    * Stops city-grid fitBounds from zooming far out; may clip bounds edges.
    */
   viewerFollowBoundsMinZoom?: number | null;
+  /**
+   * Viewer + followMode: desired VISIBLE width in meters. Replaces the bounds/zoom
+   * system for ongoing zoom control. Cleared user overrides when it changes (bet change).
+   * - 125 m  → next_turn (tight turn view)
+   * - 250 m  → default / all other bets
+   * - 600 m  → next_zone (show surrounding cells)
+   */
+  viewerTargetWidthMeters?: number | null;
   /** Muted polygons for engine-highlighted zone overlays. */
   zonesVisualStyle?: "default" | "muted" | "pick_zone";
 }
@@ -253,6 +261,7 @@ export function LiveMap({
   viewerFollowZoom = null,
   viewerFollowLatLngBounds = null,
   viewerFollowBoundsMinZoom = null,
+  viewerTargetWidthMeters = null,
   zonesVisualStyle = "default" as "default" | "muted" | "pick_zone",
 }: LiveMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -298,6 +307,12 @@ export function LiveMap({
   const viewerTurnNavZoomRef = useRef<number | null>(null);
   /** Grid city bounds framing uses eased zoom; turn/directional bets keep legacy snap zoom. */
   const smoothGridFramingRef = useRef(false);
+  /** Width-based zoom: desired visible width in metres (updated each render). */
+  const viewerTargetWidthRef = useRef<number>(250);
+  /** Set by user zoom events; cleared when viewerTargetWidthMeters prop changes. */
+  const userZoomOverrideRef = useRef<number | null>(null);
+  /** True while OUR setView call is executing (so zoomend handler ignores it). */
+  const weAreSettingZoomRef = useRef(false);
   const smoothHeadingRef = useRef<number>(0);
   /** CSS wrapper rotation target (degrees); `-vehicleHeading`. Viewer RAF eases toward this. */
   const viewerMapRotationTargetRef = useRef<number>(0);
@@ -307,6 +322,13 @@ export function LiveMap({
   const [rotationDeg, setRotationDeg] = useState(0);
   const rotationDegRef = useRef(0);
   rotationDegRef.current = rotationDeg;
+  // Keep width ref in sync every render.
+  viewerTargetWidthRef.current = viewerTargetWidthMeters ?? 250;
+  // When the target width changes (bet type changed) → clear any user zoom override
+  // so auto-zoom kicks in for the new bet's zoom level.
+  useEffect(() => {
+    userZoomOverrideRef.current = null;
+  }, [viewerTargetWidthMeters]);
   useEffect(() => {
     onUserInteractRef.current = onUserInteract;
   }, [onUserInteract]);
@@ -1307,44 +1329,61 @@ export function LiveMap({
 
       dd.setLatLng([nLat, nLng]);
       if (arRef.current) arRef.current.setLatLng([nLat, nLng]);
-      const targetZ =
-        viewerBoundsZoomRef.current ??
-        viewerFollowZoomRef.current ??
-        viewerTurnNavZoomRef.current;
-      const curZ = mm.getZoom();
-      let z = curZ;
-      if (followMode && targetZ != null && Number.isFinite(targetZ)) {
-        // Always blend smoothly regardless of smoothGridFramingRef.
-        const dz = targetZ - curZ;
-        if (Math.abs(dz) < 0.01) {
-          z = targetZ;
-        } else {
-          z = curZ + dz * VIEWER_ZOOM_BLEND_PER_FRAME;
-        }
-      }
       // Place vehicle at 60% from top (10% below centre) regardless of map rotation.
       // When the container is CSS-rotated by rotDeg, a screen offset of (0, +S)
       // corresponds to a layer offset of (S·sin(rotDeg), S·cos(rotDeg)).
       // We move the map centre by the negative of that offset so the driver ends up
       // at (screen_cx, screen_cy + S) — horizontally centred, vertically offset.
       const sz = mm.getSize();
-      // Container is expanded 24% on each side when rotating; recover viewport height.
+      // Container is expanded 40% on each side when rotating; recover viewport dimensions.
       const isMapRotating = rotateWithHeadingRef.current && followModeRef.current;
       const viewportH = isMapRotating ? sz.y / 1.8 : sz.y;
+      const viewportW = isMapRotating ? sz.x / 1.8 : sz.x;
       const S = viewportH * 0.10;                                   // 10% below centre = 60% from top
       const rotRad = isMapRotating ? (smoothHeadingRef.current * Math.PI) / 180 : 0;
       const driverPt = mm.latLngToLayerPoint([nLat, nLng]);
       const cPt = { x: driverPt.x - S * Math.sin(rotRad), y: driverPt.y - S * Math.cos(rotRad) };
       const centerLatLng = mm.layerPointToLatLng(cPt as import("leaflet").Point);
+
+      // Compute target zoom from desired visible width (meters → Leaflet zoom level).
+      // Formula: z = log2(vpW_px * 40075017 * cos(lat) / (256 * targetWidthM))
+      const cosLat = Math.max(0.01, Math.cos((nLat * Math.PI) / 180));
+      const widthBasedZ = Math.log2(
+        (viewportW * 40075017) / (256 * cosLat * viewerTargetWidthRef.current),
+      );
+      const clampedWidthZ = Math.max(13, Math.min(20, widthBasedZ));
+
+      // If user has manually zoomed, respect their choice; only pan.
+      const targetZ = userZoomOverrideRef.current ?? clampedWidthZ;
+      const curZ = mm.getZoom();
+      let z = curZ;
+      if (followMode) {
+        const dz = targetZ - curZ;
+        z = Math.abs(dz) < 0.01 ? targetZ : curZ + dz * VIEWER_ZOOM_BLEND_PER_FRAME;
+      }
+
+      weAreSettingZoomRef.current = true;
       mm.setView(centerLatLng, z, { animate: false });
+      weAreSettingZoomRef.current = false;
 
       viewerSmoothRafRef.current = requestAnimationFrame(loop);
     };
 
+    // Detect user-initiated zoom events so we can stop fighting them.
+    const onZoomEnd = () => {
+      if (!weAreSettingZoomRef.current) {
+        userZoomOverrideRef.current = m.getZoom();
+      }
+    };
+    m.on("zoomend", onZoomEnd);
+
     viewerLoopLastTsRef.current = performance.now();
     viewerSmoothRafRef.current = requestAnimationFrame(loop);
 
-    return cancelViewerLoop;
+    return () => {
+      cancelViewerLoop();
+      m.off("zoomend", onZoomEnd);
+    };
   }, [followMode, streamer, routePoints.length, driverPins, viewerFollowZoom, viewerFollowLatLngBounds]);
 
   return (
