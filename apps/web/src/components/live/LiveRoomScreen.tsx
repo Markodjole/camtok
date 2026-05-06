@@ -163,10 +163,46 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     setViewerEnginePillType(null);
   }, [room.currentMarket?.id]);
 
+  // ── Bet rotation ────────────────────────────────────────────────────────────
+  // next_turn always preempts (it's time-sensitive). For everything else, cycle
+  // through the eligible plans every 20 s so viewers see all bet types over time.
+  const nextTurnEligible =
+    activeBettingRound?.eligibleRoundPlans?.some((p) => p.type === "next_turn") ?? false;
+
+  const nonTurnPlans = useMemo(
+    () => (activeBettingRound?.eligibleRoundPlans ?? []).filter((p) => p.type !== "next_turn"),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeBettingRound?.eligibleRoundPlans?.map((p) => p.type).join(",")],
+  );
+
+  const [rotationIdx, setRotationIdx] = useState(0);
+  const prevNonTurnKeyRef = useRef("");
+
+  // Reset index when the eligible set changes so we start fresh.
+  useEffect(() => {
+    const key = nonTurnPlans.map((p) => p.type).join(",");
+    if (key !== prevNonTurnKeyRef.current) {
+      prevNonTurnKeyRef.current = key;
+      setRotationIdx(0);
+    }
+  }, [nonTurnPlans]);
+
+  // Advance rotation every 20 s (only when next_turn is not active).
+  useEffect(() => {
+    if (nonTurnPlans.length <= 1 || nextTurnEligible) return;
+    const id = setInterval(() => {
+      setRotationIdx((prev) => (prev + 1) % nonTurnPlans.length);
+    }, 20_000);
+    return () => clearInterval(id);
+  }, [nonTurnPlans.length, nextTurnEligible]);
+
+  const rotatedPlanType =
+    nonTurnPlans[Math.min(rotationIdx, Math.max(0, nonTurnPlans.length - 1))]?.type ?? null;
+
   const effectiveEngineType: BetTypeV2 | null =
     viewerEnginePillType ??
-    activeBettingRound?.roundPlan?.type ??
-    activeBettingRound?.eligibleRoundPlans?.[0]?.type ??
+    (nextTurnEligible ? ("next_turn" as BetTypeV2) : null) ??
+    rotatedPlanType ??
     null;
 
   /**
@@ -493,7 +529,15 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       };
     }
 
-    // Non–city_grid markets: no bounds override.
+    // Non–city_grid markets: apply a fixed frame based on the active bet type.
+    // next_turn is excluded above (returns early); everything else gets 500 m.
+    if (displayBetType != null) {
+      return {
+        bounds: squareWgs84BoundsFromCenter(routeLast.lat, routeLast.lng, 500),
+        minZoom: 15.5,
+      };
+    }
+
     return { bounds: null, minZoom: null };
   }, [
     currentMarket?.marketType,

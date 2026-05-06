@@ -81,10 +81,10 @@ export async function getActiveBettingRoundPayload(
     canBuildNextZoneRound: inZone && !nearTurn,
     canBuildZoneExitRound: inZone && Boolean(mkt),
     canBuildZoneDurationRound: false,
-    // time_vs_google: whenever we have a destination and routing can see a pin
-    canBuildTimeVsGoogleRound: Boolean(room.destination) && hasPins,
-    // stop_count / turns_before_zone_exit: in zone
-    canBuildStopCountRound: inZone && last?.speedMps != null,
+    // time_vs_google: whenever we have a destination (fallback bet when nothing else fires)
+    canBuildTimeVsGoogleRound: Boolean(room.destination),
+    // stop_count: always available when speed data present (fallback + zone sense)
+    canBuildStopCountRound: last?.speedMps != null,
     canBuildTurnCountRound: hasPins,
     canBuildTurnsBeforeZoneExitRound: inZone,
     canBuildEtaDriftRound: Boolean(room.destination),
