@@ -383,8 +383,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const routeLast =
     routePoints.length > 0 ? routePoints[routePoints.length - 1]! : null;
 
-  /** Map framing for viewer follow zoom: fixed ~1.5 km square (never driver→dest city bbox). */
-  const VIEWER_MAP_FRAMING_METERS = 1500;
+  /** Viewer map: `next_zone` (pick a cell) uses 1.5 km framing; all other grid engines use ~one cell only. */
+  const VIEWER_PICK_ZONE_FRAMING_METERS = 1500;
 
   const viewerGridMapFraming = useMemo((): {
     bounds: Wgs84LatLngBoundsTuple | null;
@@ -423,13 +423,17 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         }
       }
 
+      const pickNextZone = effectiveEngineType === "next_zone";
+      const cellM = Math.max(420, cityGridSpec.cellMeters ?? 500);
+      const tightM = cellM * 1.08;
+
       return {
         bounds: squareWgs84BoundsFromCenter(
           centerLat,
           centerLng,
-          VIEWER_MAP_FRAMING_METERS,
+          pickNextZone ? VIEWER_PICK_ZONE_FRAMING_METERS : tightM,
         ),
-        minZoom: 18.2,
+        minZoom: pickNextZone ? 18.2 : 18.85,
       };
     }
 
@@ -438,9 +442,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         bounds: squareWgs84BoundsFromCenter(
           routeLast.lat,
           routeLast.lng,
-          VIEWER_MAP_FRAMING_METERS,
+          680,
         ),
-        minZoom: 18,
+        minZoom: 18.75,
       };
     }
 
@@ -448,6 +452,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   }, [
     currentMarket?.marketType,
     cityGridSpec,
+    effectiveEngineType,
     routeLast?.lat,
     routeLast?.lng,
     selectedZoneId,
@@ -629,9 +634,14 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const mapBetSheetOpen =
     showViewerGridBetSheet || showViewerDirectionalBetSheet;
 
+  const displayBetTypeForHeadline: BetTypeV2 | null =
+    effectiveEngineType ??
+    activeBettingRound?.eligibleRoundPlans?.[0]?.type ??
+    null;
+
   const viewerCurrentBetHeadline =
-    effectiveEngineType != null
-      ? engineBetHeadline(effectiveEngineType)
+    displayBetTypeForHeadline != null
+      ? engineBetHeadline(displayBetTypeForHeadline)
       : null;
 
   const sheetBetHeadline = viewerCurrentBetHeadline ?? "Live bet";
@@ -913,7 +923,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             followMode={mapFollow}
             onUserInteract={() => setMapFollow(false)}
             tileOpacity={1}
-            mapCaption={currentMarket?.title}
+            mapCaption={
+              viewerCurrentBetHeadline ?? currentMarket?.title ?? undefined
+            }
             zones={zones}
             checkpoints={checkpoints}
             selectedZoneId={selectedZoneId}
@@ -1070,7 +1082,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               transportMode={room.transportMode}
               rotateWithHeading={true}
               tileOpacity={0.65}
-              mapCaption={currentMarket?.title}
+              mapCaption={
+              viewerCurrentBetHeadline ?? currentMarket?.title ?? undefined
+            }
               zones={zones}
               checkpoints={checkpoints}
               selectedZoneId={selectedZoneId}
@@ -1121,7 +1135,11 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
       {showViewerGridBetSheet ? (
         <MapSelectionBottomSheet
-          betHeadline={currentMarket.title ?? sheetBetHeadline}
+          betHeadline={
+            viewerCurrentBetHeadline ??
+            currentMarket.title ??
+            sheetBetHeadline
+          }
           selectionDetail={
             selectedZone
               ? `Selected · ${selectedZone.name}`
@@ -1155,10 +1173,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       {showViewerDirectionalBetSheet ? (
         <MapSelectionBottomSheet
           betHeadline={
+            viewerCurrentBetHeadline ??
             currentMarket.title ??
-            (effectiveEngineType != null
-              ? engineBetHeadline(effectiveEngineType)
-              : sheetBetHeadline)
+            sheetBetHeadline
           }
           selectionDetail={
             directionalPickLabel

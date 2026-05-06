@@ -305,6 +305,8 @@ export function LiveMap({
   const viewerTurnPinRef = useRef<{ lat: number; lng: number } | null>(null);
   const [mapReady, setMapReady] = useState(0);
   const [rotationDeg, setRotationDeg] = useState(0);
+  const rotationDegRef = useRef(0);
+  rotationDegRef.current = rotationDeg;
   useEffect(() => {
     onUserInteractRef.current = onUserInteract;
   }, [onUserInteract]);
@@ -321,6 +323,17 @@ export function LiveMap({
   const viewerFollowProfileZoom = streamer
     ? profile.zoom
     : profile.zoom + VIEWER_FOLLOW_ZOOM_EXTRA;
+
+  useLayoutEffect(() => {
+    const root = containerRef.current;
+    if (!root) return;
+    const deg =
+      rotateWithHeading && followMode ? -rotationDeg : 0;
+    root.querySelectorAll<HTMLElement>(".camtok-dest-screen-flat").forEach((node) => {
+      node.style.transform = `rotate(${deg}deg)`;
+      node.style.transformOrigin = "50% 100%";
+    });
+  }, [rotationDeg, rotateWithHeading, followMode, mapReady, destination]);
 
   useLayoutEffect(() => {
     const el = containerRef.current;
@@ -672,7 +685,7 @@ export function LiveMap({
             <div style="width:18px;height:18px;border-radius:50%;background:#ef4444;border:2px solid white;box-shadow:0 0 8px rgba(0,0,0,0.85)"></div>
             <div style="width:2px;height:10px;background:#ef4444;box-shadow:0 0 4px rgba(0,0,0,0.6)"></div>
           </div>`;
-        const html = `<div style="display:flex;flex-direction:column;align-items:center;transform:rotate(calc(-1 * var(--camtok-map-rotation, 0deg)));transform-origin:50% 100%">${labelHtml}${pinHtml}</div>`;
+        const html = `<div class="camtok-dest-screen-flat" style="display:flex;flex-direction:column;align-items:center;transform:rotate(0deg);transform-origin:50% 100%">${labelHtml}${pinHtml}</div>`;
         const w = 280;
         const h = (labelRaw ? 30 : 0) + 30;
         const icon = L.divIcon({
@@ -687,6 +700,20 @@ export function LiveMap({
           zIndexOffset: 1000,
         });
         marker.addTo(group);
+        queueMicrotask(() => {
+          const root = containerRef.current;
+          if (!root) return;
+          const deg =
+            rotateWithHeadingRef.current && followModeRef.current
+              ? -rotationDegRef.current
+              : 0;
+          root
+            .querySelectorAll<HTMLElement>(".camtok-dest-screen-flat")
+            .forEach((node) => {
+              node.style.transform = `rotate(${deg}deg)`;
+              node.style.transformOrigin = "50% 100%";
+            });
+        });
       }
     })();
     return () => {
