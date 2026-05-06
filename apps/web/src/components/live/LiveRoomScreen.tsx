@@ -946,6 +946,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     joyPortalReady &&
     showLiveBets &&
     currentMarket != null &&
+    !viewerHasBetOnCurrentMarket &&
+    !isLocked &&
     (currentMarket.marketType !== "city_grid" ||
       effectiveEngineType === "next_turn") &&
     (!mapBetSheetOpen || effectiveEngineType === "next_turn");
