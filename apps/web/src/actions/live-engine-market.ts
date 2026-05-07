@@ -3,6 +3,7 @@
 import { unstable_noStore } from "next/cache";
 import { createServiceClient } from "@/lib/supabase/server";
 import { getActiveBettingRoundPayload } from "@/lib/live/betting/activeRound";
+import type { BetTypeV2 } from "@bettok/live";
 import {
   ENGINE_BET_TYPES,
   provisionalOptionsForBetType,
@@ -32,17 +33,6 @@ export async function openEngineMarketForRoom(roomId: string) {
   const payload = await getActiveBettingRoundPayload(roomId, null);
   if ("error" in payload) return { error: payload.error };
 
-  const { roundPlan } = payload;
-  if (!roundPlan) return { error: "No eligible round plan" };
-
-  const betType = roundPlan.type;
-  if (!ENGINE_BET_TYPES.has(betType)) {
-    return { error: `${betType} is not an engine market type` };
-  }
-
-  const options = provisionalOptionsForBetType(betType as Parameters<typeof provisionalOptionsForBetType>[0]);
-  if (!options.length) return { error: "No provisional options for this bet type" };
-
   const service = await createServiceClient();
 
   const { data: room } = await service
@@ -57,6 +47,61 @@ export async function openEngineMarketForRoom(roomId: string) {
 
   const sessionId = (room as { live_session_id: string }).live_session_id;
   const capturedZone = (room as { region_label: string | null }).region_label ?? null;
+
+  const eligibleEngineTypes = (payload.eligibleRoundPlans ?? [])
+    .map((p) => p.type)
+    .filter((t): t is BetTypeV2 => ENGINE_BET_TYPES.has(t));
+  if (!eligibleEngineTypes.length) {
+    return { error: "No eligible engine bet type" };
+  }
+
+  const { data: recentMarkets } = await service
+    .from("live_betting_markets")
+    .select("market_type, subtitle, opens_at")
+    .eq("room_id", roomId)
+    .order("opens_at", { ascending: false })
+    .limit(12);
+
+  const wasShownInCurrentZone = (marketType: string): boolean => {
+    if (!capturedZone) return false;
+    for (const m of recentMarkets ?? []) {
+      const row = m as { market_type: string; subtitle: string | null };
+      if (row.market_type !== marketType) continue;
+      try {
+        const meta = JSON.parse(row.subtitle ?? "{}") as { capturedZone?: string | null };
+        if ((meta.capturedZone ?? null) === capturedZone) return true;
+      } catch {
+        /* ignore */
+      }
+    }
+    return false;
+  };
+
+  const lastType =
+    (recentMarkets?.[0] as { market_type?: string } | undefined)?.market_type ?? null;
+
+  const pickEligible = (types: BetTypeV2[]) =>
+    types.find((t) => eligibleEngineTypes.includes(t)) ?? null;
+  const pickEligibleUnseenInZone = (types: BetTypeV2[]) =>
+    types.find((t) => eligibleEngineTypes.includes(t) && !wasShownInCurrentZone(t)) ?? null;
+
+  // Moment + variety:
+  // - On zone context, prefer unseen zone bets first.
+  // - Otherwise prefer time_vs_google when available.
+  // - Avoid immediate repeat of the previous market type.
+  let betType =
+    pickEligibleUnseenInZone(["next_zone"]) ??
+    pickEligibleUnseenInZone(["turns_before_zone_exit", "stop_count"]) ??
+    pickEligible(["time_vs_google", "turn_count_to_pin", "zone_exit_time", "stop_count"]) ??
+    eligibleEngineTypes[0];
+  if (betType === lastType) {
+    betType = eligibleEngineTypes.find((t) => t !== lastType) ?? betType;
+  }
+
+  const options = provisionalOptionsForBetType(
+    betType as Parameters<typeof provisionalOptionsForBetType>[0],
+  );
+  if (!options.length) return { error: "No provisional options for this bet type" };
 
   // 12-second minimum spacing between markets.
   const { data: prevMkt } = await service

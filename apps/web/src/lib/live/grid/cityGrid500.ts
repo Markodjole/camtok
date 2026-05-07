@@ -115,6 +115,33 @@ export function cellIdForPosition(
   return cellId(row, col);
 }
 
+/**
+ * Distance in meters from the given point to the nearest edge of its current cell.
+ * Returns `null` when point is outside the grid.
+ */
+export function distanceToCurrentCellEdgeMeters(
+  spec: CityGridSpecCompact,
+  lat: number,
+  lng: number,
+): number | null {
+  const col = Math.floor((lng - spec.swLng) / spec.dLng);
+  const row = Math.floor((lat - spec.swLat) / spec.dLat);
+  if (col < 0 || col >= spec.nCols || row < 0 || row >= spec.nRows) return null;
+
+  const southLat = spec.swLat + row * spec.dLat;
+  const northLat = southLat + spec.dLat;
+  const westLng = spec.swLng + col * spec.dLng;
+  const eastLng = westLng + spec.dLng;
+
+  const cos = Math.max(0.12, Math.cos((lat * Math.PI) / 180));
+  const toSouthM = Math.abs(lat - southLat) * 111_320;
+  const toNorthM = Math.abs(northLat - lat) * 111_320;
+  const toWestM = Math.abs(lng - westLng) * 111_320 * cos;
+  const toEastM = Math.abs(eastLng - lng) * 111_320 * cos;
+
+  return Math.min(toSouthM, toNorthM, toWestM, toEastM);
+}
+
 /** SW then NE corners in Leaflet order: `[[southLat, westLng], [northLat, eastLng]]`. */
 export type Wgs84LatLngBoundsTuple = [[number, number], [number, number]];
 

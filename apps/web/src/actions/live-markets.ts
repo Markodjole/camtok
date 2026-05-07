@@ -14,7 +14,11 @@ import {
   type TransportMode,
   type LiveMarketOption,
 } from "@bettok/live";
-import { isValidGridOptionForSpec, type CityGridSpecCompact } from "@/lib/live/grid/cityGrid500";
+import {
+  distanceToCurrentCellEdgeMeters,
+  isValidGridOptionForSpec,
+  type CityGridSpecCompact,
+} from "@/lib/live/grid/cityGrid500";
 import { LIVE_BET_LOCK_DISTANCE_M } from "@/lib/live/liveBetLockDistance";
 import { liveBetRelaxServer } from "@/lib/live/liveBetRelax";
 import { buildServerClickSnapshot } from "@/lib/live/betting/clickSnapshot";
@@ -110,17 +114,16 @@ export async function placeLiveBet(input: PlaceLiveBetInput) {
   if ((market as { status: string }).status !== "open") {
     return { error: "Market not open" };
   }
+  const roomIdForRoom = (market as { room_id: string }).room_id;
   const locksAt = new Date((market as { locks_at: string }).locks_at).getTime();
   if (!liveBetRelaxServer() && Date.now() >= locksAt) {
     return { error: "Market has locked" };
   }
 
-  // Distance gate: bets close when the vehicle is within
-  // `BET_LOCK_DISTANCE_M` of the turn point so the driver has a clear
-  // runway. We approximate with straight-line distance from the latest
-  // GPS snapshot. If we cannot read a position we fall through and
-  // accept the bet — the time-based lock and tick-route distance lock
-  // act as additional safety nets.
+  // Distance gate with per-bet thresholds:
+  // - next_turn (turn-point markets): lock at <= 100 m before turn/pin
+  // - time_vs_google: lock at <= 220 m to next pin
+  // - next_zone (city_grid): lock when <= 100 m from current cell edge
   const turnLat = (market as { turn_point_lat: number | null }).turn_point_lat;
   const turnLng = (market as { turn_point_lng: number | null }).turn_point_lng;
   const sessionId = (market as { live_session_id: string | null }).live_session_id;
@@ -159,7 +162,7 @@ export async function placeLiveBet(input: PlaceLiveBetInput) {
       { lat, lng },
       { lat: turnLat, lng: turnLng },
     );
-    if (dist <= BET_LOCK_DISTANCE_M) {
+    if (dist <= 100) {
       return { error: "Too close to turn — betting closed" };
     }
   }
@@ -167,6 +170,31 @@ export async function placeLiveBet(input: PlaceLiveBetInput) {
   const marketType = (market as { market_type?: string }).market_type ?? "";
   const gridSpec = (market as { city_grid_spec: CityGridSpecCompact | null })
     .city_grid_spec;
+  if (!liveBetRelaxServer() && latestGpsRow) {
+    const gps = latestGpsRow as {
+      normalized_lat: number | null;
+      normalized_lng: number | null;
+      raw_lat: number;
+      raw_lng: number;
+    };
+    const lat = gps.normalized_lat ?? gps.raw_lat;
+    const lng = gps.normalized_lng ?? gps.raw_lng;
+
+    if (marketType === "time_vs_google") {
+      const drv = await computeDriverRouteInstruction(roomIdForRoom);
+      const pinDist = drv.instruction?.pins?.[0]?.distanceMeters ?? null;
+      if (pinDist != null && pinDist <= 220) {
+        return { error: "Too close to next pin — betting closed" };
+      }
+    }
+
+    if (marketType === "city_grid" && gridSpec) {
+      const edgeM = distanceToCurrentCellEdgeMeters(gridSpec, lat, lng);
+      if (edgeM != null && edgeM <= 100) {
+        return { error: "Too close to zone edge — betting closed" };
+      }
+    }
+  }
   if (marketType === "city_grid") {
     if (!gridSpec || !isValidGridOptionForSpec(gridSpec, parsed.data.optionId)) {
       return { error: "Invalid grid square" };
@@ -182,7 +210,6 @@ export async function placeLiveBet(input: PlaceLiveBetInput) {
     return { error: "Stake too high (max 50 for now)" };
   }
 
-  const roomIdForRoom = (market as { room_id: string }).room_id;
   let nextPinId: string | null = null;
   try {
     const drv = await computeDriverRouteInstruction(roomIdForRoom);

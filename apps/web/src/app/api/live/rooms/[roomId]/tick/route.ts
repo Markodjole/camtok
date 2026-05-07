@@ -11,6 +11,11 @@ import { LIVE_BET_LOCK_DISTANCE_M } from "@/lib/live/liveBetLockDistance";
 import { liveBetRelaxServer } from "@/lib/live/liveBetRelax";
 import { metersBetween } from "@/lib/live/routing/geometry";
 import { isEngineMarketType } from "@/lib/live/betting/engineMarketOptions";
+import { computeDriverRouteInstruction } from "@/lib/live/routing/computeDriverRouteInstruction";
+import {
+  distanceToCurrentCellEdgeMeters,
+  type CityGridSpecCompact,
+} from "@/lib/live/grid/cityGrid500";
 
 /**
  * Stateless tick worker for a single room. Designed to be called every few
@@ -72,7 +77,7 @@ export async function POST(
     const { data: market } = await service
       .from("live_betting_markets")
       .select(
-        "id, status, locks_at, reveal_at, turn_point_lat, turn_point_lng, live_session_id, market_type",
+        "id, status, locks_at, reveal_at, turn_point_lat, turn_point_lng, live_session_id, market_type, city_grid_spec",
       )
       .eq("id", marketId)
       .maybeSingle();
@@ -86,19 +91,16 @@ export async function POST(
     const marketType = (market as { market_type: string | null }).market_type ?? "";
 
     if (status === "open") {
-      // Distance-based lock: vehicle within `LIVE_BET_LOCK_DISTANCE_M` of the
-      // turn point closes betting. This is the primary trigger; the
-      // time-based `locks_at` is a far-future safety net.
+      // Per-bet lock thresholds:
+      // - next_turn (turn-point markets): <=100 m to turn
+      // - time_vs_google: <=220 m to next pin
+      // - next_zone (city_grid): <=100 m to current-cell edge
       let distanceLocked = false;
+      let distanceReason: "turn_100m" | "pin_220m" | "zone_edge_100m" | null = null;
       const turnLat = (market as { turn_point_lat: number | null }).turn_point_lat;
       const turnLng = (market as { turn_point_lng: number | null }).turn_point_lng;
       const sessionId = (market as { live_session_id: string | null }).live_session_id;
-      if (
-        !liveBetRelaxServer() &&
-        turnLat != null &&
-        turnLng != null &&
-        sessionId
-      ) {
+      if (!liveBetRelaxServer() && sessionId) {
         const { data: latestGps } = await service
           .from("live_route_snapshots")
           .select("normalized_lat,normalized_lng,raw_lat,raw_lng")
@@ -115,18 +117,38 @@ export async function POST(
           };
           const lat = gps.normalized_lat ?? gps.raw_lat;
           const lng = gps.normalized_lng ?? gps.raw_lng;
-          const dist = metersBetween(
-            { lat, lng },
-            { lat: turnLat, lng: turnLng },
-          );
-          distanceLocked = dist <= LIVE_BET_LOCK_DISTANCE_M;
+
+          if (marketType === "time_vs_google") {
+            const drv = await computeDriverRouteInstruction(roomId);
+            const pinDist = drv.instruction?.pins?.[0]?.distanceMeters ?? null;
+            if (pinDist != null && pinDist <= 220) {
+              distanceLocked = true;
+              distanceReason = "pin_220m";
+            }
+          } else if (marketType === "city_grid") {
+            const gridSpec = (market as { city_grid_spec: CityGridSpecCompact | null })
+              .city_grid_spec;
+            if (gridSpec) {
+              const edgeM = distanceToCurrentCellEdgeMeters(gridSpec, lat, lng);
+              if (edgeM != null && edgeM <= 100) {
+                distanceLocked = true;
+                distanceReason = "zone_edge_100m";
+              }
+            }
+          } else if (turnLat != null && turnLng != null) {
+            const dist = metersBetween({ lat, lng }, { lat: turnLat, lng: turnLng });
+            if (dist <= 100) {
+              distanceLocked = true;
+              distanceReason = "turn_100m";
+            }
+          }
         }
       }
       if (distanceLocked || now >= locksAt) {
         const r = await lockMarket(marketId);
         return NextResponse.json({
           action: "lock",
-          reason: distanceLocked ? "distance" : "timeout",
+          reason: distanceLocked ? (distanceReason ?? "distance") : "timeout",
           ...r,
         });
       }

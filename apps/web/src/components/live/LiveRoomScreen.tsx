@@ -7,6 +7,7 @@ import {
   type CityGridSpecCompact,
   cellIdForPosition,
   cellLabel,
+  distanceToCurrentCellEdgeMeters,
   enumerateGridCells,
   gridCellCenter,
   parseGridOptionId,
@@ -154,6 +155,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [viewerEnginePillType, setViewerEnginePillType] = useState<BetTypeV2 | null>(
     null,
   );
+  const lastAutoPickTypeRef = useRef<BetTypeV2 | null>(null);
 
   useEffect(() => {
     const eligible = activeBettingRound?.eligibleRoundPlans ?? [];
@@ -167,47 +169,129 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     setViewerEnginePillType(null);
   }, [room.currentMarket?.id]);
 
-  // ── Bet rotation ────────────────────────────────────────────────────────────
-  // next_turn always preempts (it's time-sensitive). For everything else, cycle
-  // through the eligible plans every 20 s so viewers see all bet types over time.
-  const nextTurnEligible =
-    activeBettingRound?.eligibleRoundPlans?.some((p) => p.type === "next_turn") ?? false;
-
-  const nonTurnPlans = useMemo(
-    () => (activeBettingRound?.eligibleRoundPlans ?? []).filter((p) => p.type !== "next_turn"),
+  // ── Moment-based bet selection (no "next_turn always priority") ────────────
+  const eligibleTypes = useMemo<BetTypeV2[]>(
+    () => {
+      const src = activeBettingRound?.eligibleRoundPlans ?? [];
+      const seen = new Set<BetTypeV2>();
+      const out: BetTypeV2[] = [];
+      for (const p of src) {
+        if (!seen.has(p.type)) {
+          seen.add(p.type);
+          out.push(p.type);
+        }
+      }
+      return out;
+    },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [activeBettingRound?.eligibleRoundPlans?.map((p) => p.type).join(",")],
   );
 
   const [rotationIdx, setRotationIdx] = useState(0);
-  const prevNonTurnKeyRef = useRef("");
-
-  // Reset index when the eligible set changes so we start fresh.
   useEffect(() => {
-    const key = nonTurnPlans.map((p) => p.type).join(",");
-    if (key !== prevNonTurnKeyRef.current) {
-      prevNonTurnKeyRef.current = key;
-      setRotationIdx(0);
-    }
-  }, [nonTurnPlans]);
-
-  // Advance rotation every 20 s (only when next_turn is not active).
-  useEffect(() => {
-    if (nonTurnPlans.length <= 1 || nextTurnEligible) return;
+    if (eligibleTypes.length <= 1) return;
     const id = setInterval(() => {
-      setRotationIdx((prev) => (prev + 1) % nonTurnPlans.length);
-    }, 20_000);
+      setRotationIdx((prev) => (prev + 1) % eligibleTypes.length);
+    }, 8_000);
     return () => clearInterval(id);
-  }, [nonTurnPlans.length, nextTurnEligible]);
+  }, [eligibleTypes.length]);
 
-  const rotatedPlanType =
-    nonTurnPlans[Math.min(rotationIdx, Math.max(0, nonTurnPlans.length - 1))]?.type ?? null;
+  const zoneBetSeenRef = useRef<{
+    zone: string | null;
+    shown: Set<BetTypeV2>;
+  }>({ zone: null, shown: new Set() });
 
-  const effectiveEngineType: BetTypeV2 | null =
-    viewerEnginePillType ??
-    (nextTurnEligible ? ("next_turn" as BetTypeV2) : null) ??
-    rotatedPlanType ??
-    null;
+  const effectiveEngineType: BetTypeV2 | null = useMemo(() => {
+    if (viewerEnginePillType != null) return viewerEnginePillType;
+    if (!eligibleTypes.length) return null;
+
+    const zone = room.regionLabel ?? null;
+    if (zoneBetSeenRef.current.zone !== zone) {
+      zoneBetSeenRef.current = { zone, shown: new Set() };
+    }
+    const seenInZone = zoneBetSeenRef.current.shown;
+
+    const last = routePoints.length > 0 ? routePoints[routePoints.length - 1] : null;
+    const nextPinDist = driverPins?.[0]?.distanceMeters ?? null;
+    const inTurnWindow = nextPinDist != null && nextPinDist <= 200 && nextPinDist >= 150;
+
+    let inZoneCenter = false;
+    const spec =
+      room.currentMarket?.marketType === "city_grid" ? room.currentMarket.cityGridSpec : null;
+    if (zone && last && spec) {
+      const cell = cellIdForPosition(spec, last.lat, last.lng);
+      if (cell) {
+        const p = parseGridOptionId(cell);
+        if (p) {
+          const center = gridCellCenter(spec, p.row, p.col);
+          inZoneCenter = metersBetween({ lat: last.lat, lng: last.lng }, center) <= 150;
+        }
+      }
+    }
+
+    const pick = (...types: BetTypeV2[]): BetTypeV2 | null => {
+      for (const t of types) if (eligibleTypes.includes(t)) return t;
+      return null;
+    };
+    const pickUnseenZone = (...types: BetTypeV2[]): BetTypeV2 | null => {
+      for (const t of types) {
+        if (eligibleTypes.includes(t) && !seenInZone.has(t)) return t;
+      }
+      return null;
+    };
+
+    // 1) Zone center => next zone bet.
+    if (zone && inZoneCenter) {
+      const z = pickUnseenZone("next_zone");
+      if (z) {
+        seenInZone.add(z);
+        return z;
+      }
+    }
+
+    // 2) Zone-context bets, no repeats until zone changes.
+    if (zone) {
+      const zoneBet = pickUnseenZone("turns_before_zone_exit", "stop_count");
+      if (zoneBet) {
+        seenInZone.add(zoneBet);
+        return zoneBet;
+      }
+    }
+
+    // 3) Next pin visible => time_vs_google.
+    if ((driverPins?.length ?? 0) > 0) {
+      const timeBet = pick("time_vs_google");
+      if (timeBet) return timeBet;
+    }
+
+    // 4) next_turn only in strict 200-150 m window.
+    if (inTurnWindow) {
+      const turnBet = pick("next_turn");
+      if (turnBet) return turnBet;
+    }
+
+    // 5) Keep variety; avoid repeating immediately when possible.
+    const rotated = eligibleTypes[rotationIdx % eligibleTypes.length] ?? null;
+    if (!rotated) return null;
+    if (eligibleTypes.length === 1) return rotated;
+    const alt = eligibleTypes[(rotationIdx + 1) % eligibleTypes.length] ?? rotated;
+    return rotated === lastAutoPickTypeRef.current ? alt : rotated;
+  }, [
+    viewerEnginePillType,
+    eligibleTypes,
+    rotationIdx,
+    room.regionLabel,
+    room.currentMarket?.marketType,
+    room.currentMarket?.cityGridSpec,
+    routePoints,
+    driverPins,
+  ]);
+
+  useEffect(() => {
+    if (viewerEnginePillType == null) {
+      lastAutoPickTypeRef.current = effectiveEngineType;
+    }
+  }, [effectiveEngineType, viewerEnginePillType]);
 
   /**
    * Stable display bet — only switches to a new type when:
@@ -597,11 +681,27 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           ? { lat: driverPins[0].lat, lng: driverPins[0].lng }
           : null);
 
-  // Distance gate: only when market defines a turn point (matches server placeLiveBet).
+  // Per-bet lock rules (client-side mirror of server rules):
+  // - next_turn: lock at <= 100m to next pin
+  // - time_vs_google: lock at <= 220m to next pin
+  // - next_zone: lock when within 100m of current cell edge (near another zone)
+  const nextPinDistanceM = driverPins?.[0]?.distanceMeters ?? null;
   const isDistanceLocked =
     !liveBetRelaxClient() &&
-    currentMarket?.marketType !== "city_grid" &&
     (() => {
+      if (!displayBetType) return false;
+      if (displayBetType === "next_turn") {
+        return nextPinDistanceM != null && nextPinDistanceM <= 100;
+      }
+      if (displayBetType === "time_vs_google") {
+        return nextPinDistanceM != null && nextPinDistanceM <= 220;
+      }
+      if (displayBetType === "next_zone") {
+        const last = routePoints[routePoints.length - 1];
+        if (!last || !cityGridSpec) return false;
+        const edgeM = distanceToCurrentCellEdgeMeters(cityGridSpec, last.lat, last.lng);
+        return edgeM != null && edgeM <= 100;
+      }
       if (
         currentMarket?.turnPointLat == null ||
         currentMarket?.turnPointLng == null
@@ -725,6 +825,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   useEffect(() => {
     setBetPanelDismissed(false);
   }, [currentMarket?.id, mapExpanded, displayBetType]);
+  useEffect(() => {
+    if (displayBetType) setMapFollow(true);
+  }, [displayBetType]);
 
   const showBetBottomSheet =
     mapExpanded &&
