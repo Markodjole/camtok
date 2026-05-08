@@ -20,6 +20,13 @@ const ENGINE_OPEN_SEC = 25;
  * Using 2 hours so the time-based path in the tick route never fires accidentally.
  */
 const ENGINE_REVEAL_FAR_FUTURE_MS = 2 * 60 * 60 * 1_000;
+const ENGINE_ROTATION_ORDER: BetTypeV2[] = [
+  "time_vs_google",
+  "stop_count",
+  "turn_count_to_pin",
+  "turns_before_zone_exit",
+  "zone_exit_time",
+];
 
 /**
  * Opens a provisional engine-bet market for the given room.
@@ -51,9 +58,6 @@ export async function openEngineMarketForRoom(roomId: string) {
   const eligibleEngineTypes = (payload.eligibleRoundPlans ?? [])
     .map((p) => p.type)
     .filter((t): t is BetTypeV2 => ENGINE_BET_TYPES.has(t));
-  if (!eligibleEngineTypes.length) {
-    return { error: "No eligible engine bet type" };
-  }
 
   const { data: recentMarkets } = await service
     .from("live_betting_markets")
@@ -80,22 +84,21 @@ export async function openEngineMarketForRoom(roomId: string) {
   const lastType =
     (recentMarkets?.[0] as { market_type?: string } | undefined)?.market_type ?? null;
 
-  const pickEligible = (types: BetTypeV2[]) =>
-    types.find((t) => eligibleEngineTypes.includes(t)) ?? null;
-  const pickEligibleUnseenInZone = (types: BetTypeV2[]) =>
-    types.find((t) => eligibleEngineTypes.includes(t) && !wasShownInCurrentZone(t)) ?? null;
+  // Strong variety first: rotate through engine types so users see everything.
+  const candidates = (eligibleEngineTypes.length
+    ? ENGINE_ROTATION_ORDER.filter((t) => eligibleEngineTypes.includes(t))
+    : ENGINE_ROTATION_ORDER
+  ).filter((t) => ENGINE_BET_TYPES.has(t));
+  if (!candidates.length) return { error: "No engine candidate" };
 
-  // Moment + variety:
-  // - On zone context, prefer unseen zone bets first.
-  // - Otherwise prefer time_vs_google when available.
-  // - Avoid immediate repeat of the previous market type.
-  let betType =
-    pickEligibleUnseenInZone(["next_zone"]) ??
-    pickEligibleUnseenInZone(["turns_before_zone_exit", "stop_count"]) ??
-    pickEligible(["time_vs_google", "turn_count_to_pin", "zone_exit_time", "stop_count"]) ??
-    eligibleEngineTypes[0];
-  if (betType === lastType) {
-    betType = eligibleEngineTypes.find((t) => t !== lastType) ?? betType;
+  const lastIdx = lastType ? candidates.indexOf(lastType as BetTypeV2) : -1;
+  let betType = candidates[(lastIdx + 1 + candidates.length) % candidates.length]!;
+  if (
+    (betType === "turns_before_zone_exit" || betType === "stop_count") &&
+    wasShownInCurrentZone(betType) &&
+    candidates.length > 1
+  ) {
+    betType = candidates.find((t) => t !== betType) ?? betType;
   }
 
   const options = provisionalOptionsForBetType(
@@ -103,7 +106,7 @@ export async function openEngineMarketForRoom(roomId: string) {
   );
   if (!options.length) return { error: "No provisional options for this bet type" };
 
-  // 12-second minimum spacing between markets.
+  // 6-second minimum spacing between markets (looser for demo activity).
   const { data: prevMkt } = await service
     .from("live_betting_markets")
     .select("opens_at, reveal_at")
@@ -118,7 +121,7 @@ export async function openEngineMarketForRoom(roomId: string) {
       : null;
     const prevOpensMs = Date.parse((prevMkt as { opens_at: string }).opens_at);
     const refMs = Number.isFinite(prevRevealMs as number) ? (prevRevealMs as number) : prevOpensMs;
-    if (Number.isFinite(refMs) && nowMs - refMs < 12_000) {
+    if (Number.isFinite(refMs) && nowMs - refMs < 6_000) {
       return { error: "Spacing: previous market too recent" };
     }
   }

@@ -204,6 +204,11 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const effectiveEngineType: BetTypeV2 | null = useMemo(() => {
     if (viewerEnginePillType != null) return viewerEnginePillType;
     if (!eligibleTypes.length) return null;
+    const marketType = room.currentMarket?.marketType as BetTypeV2 | undefined;
+    // Prefer currently open market type so popup is actionable (not locked by mismatch).
+    if (marketType && eligibleTypes.includes(marketType)) {
+      return marketType;
+    }
 
     const zone = room.regionLabel ?? null;
     if (zoneBetSeenRef.current.zone !== zone) {
@@ -280,6 +285,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     viewerEnginePillType,
     eligibleTypes,
     rotationIdx,
+    room.currentMarket?.marketType,
     room.regionLabel,
     room.currentMarket?.marketType,
     room.currentMarket?.cityGridSpec,
@@ -682,25 +688,25 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           : null);
 
   // Per-bet lock rules (client-side mirror of server rules):
-  // - next_turn: lock at <= 100m to next pin
-  // - time_vs_google: lock at <= 220m to next pin
-  // - next_zone: lock when within 100m of current cell edge (near another zone)
+  // - next_turn: lock at <= 70m to next pin (looser, keeps market open longer)
+  // - time_vs_google: lock at <= 160m to next pin
+  // - next_zone: lock when within 60m of current cell edge (near another zone)
   const nextPinDistanceM = driverPins?.[0]?.distanceMeters ?? null;
   const isDistanceLocked =
     !liveBetRelaxClient() &&
     (() => {
       if (!displayBetType) return false;
       if (displayBetType === "next_turn") {
-        return nextPinDistanceM != null && nextPinDistanceM <= 100;
+        return nextPinDistanceM != null && nextPinDistanceM <= 70;
       }
       if (displayBetType === "time_vs_google") {
-        return nextPinDistanceM != null && nextPinDistanceM <= 220;
+        return nextPinDistanceM != null && nextPinDistanceM <= 160;
       }
       if (displayBetType === "next_zone") {
         const last = routePoints[routePoints.length - 1];
         if (!last || !cityGridSpec) return false;
         const edgeM = distanceToCurrentCellEdgeMeters(cityGridSpec, last.lat, last.lng);
-        return edgeM != null && edgeM <= 100;
+        return edgeM != null && edgeM <= 60;
       }
       if (
         currentMarket?.turnPointLat == null ||

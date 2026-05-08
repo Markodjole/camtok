@@ -55,21 +55,23 @@ export async function POST(
         marketId: grid.marketId,
       });
     }
-    const r = await openSystemMarketForRoom(roomId);
-    if ("marketId" in r && r.marketId) {
+    // Prefer engine markets before system turn-markets so viewers see all bet
+    // types in a short driving span.
+    const eng = await openEngineMarketForRoom(roomId);
+    if ("marketId" in eng && eng.marketId) {
       return NextResponse.json({
-        action: "try_open_market",
+        action: "try_open_engine_market",
         cityGridSkippedReason: "error" in grid ? grid.error : null,
-        ...r,
+        ...eng,
       });
     }
-    // Neither city-grid nor turn market opened — try a provisional engine bet.
-    const eng = await openEngineMarketForRoom(roomId);
+    // Fallback to system (turn) market.
+    const r = await openSystemMarketForRoom(roomId);
     return NextResponse.json({
-      action: "try_open_engine_market",
+      action: "try_open_market",
       cityGridSkippedReason: "error" in grid ? grid.error : null,
-      systemSkippedReason: "error" in r ? r.error : null,
-      ...eng,
+      engineSkippedReason: "error" in eng ? eng.error : null,
+      ...r,
     });
   }
 
@@ -92,9 +94,9 @@ export async function POST(
 
     if (status === "open") {
       // Per-bet lock thresholds:
-      // - next_turn (turn-point markets): <=100 m to turn
-      // - time_vs_google: <=220 m to next pin
-      // - next_zone (city_grid): <=100 m to current-cell edge
+      // - next_turn (turn-point markets): <=70 m to turn
+      // - time_vs_google: <=160 m to next pin
+      // - next_zone (city_grid): <=60 m to current-cell edge
       let distanceLocked = false;
       let distanceReason: "turn_100m" | "pin_220m" | "zone_edge_100m" | null = null;
       const turnLat = (market as { turn_point_lat: number | null }).turn_point_lat;
@@ -121,7 +123,7 @@ export async function POST(
           if (marketType === "time_vs_google") {
             const drv = await computeDriverRouteInstruction(roomId);
             const pinDist = drv.instruction?.pins?.[0]?.distanceMeters ?? null;
-            if (pinDist != null && pinDist <= 220) {
+            if (pinDist != null && pinDist <= 160) {
               distanceLocked = true;
               distanceReason = "pin_220m";
             }
@@ -130,14 +132,14 @@ export async function POST(
               .city_grid_spec;
             if (gridSpec) {
               const edgeM = distanceToCurrentCellEdgeMeters(gridSpec, lat, lng);
-              if (edgeM != null && edgeM <= 100) {
+              if (edgeM != null && edgeM <= 60) {
                 distanceLocked = true;
                 distanceReason = "zone_edge_100m";
               }
             }
           } else if (turnLat != null && turnLng != null) {
             const dist = metersBetween({ lat, lng }, { lat: turnLat, lng: turnLng });
-            if (dist <= 100) {
+            if (dist <= 70) {
               distanceLocked = true;
               distanceReason = "turn_100m";
             }

@@ -73,12 +73,6 @@ export async function getActiveBettingRoundPayload(
   // time_vs_google ("time to next pin"): only when routing has a visible pin
   // stop_count: broad fallback whenever speed data is present
 
-  // Suppress next_zone when a turn bet is about to fire (within 200 m).
-  const nearTurn =
-    distanceToTurnM != null &&
-    Number.isFinite(distanceToTurnM) &&
-    distanceToTurnM <= 200;
-
   // Compute distance to current grid cell center (city_grid markets only).
   let distToZoneCenterM: number | null = null;
   if (last && mkt?.marketType === "city_grid" && mkt.cityGridSpec) {
@@ -96,13 +90,12 @@ export async function getActiveBettingRoundPayload(
     }
   }
 
-  // next_zone: city_grid, in a zone, near the cell center (<150 m), not near a turn
+  // Loosened for demo/betting activity:
+  // next_zone is available broadly whenever we are in a grid zone.
   const canNextZone =
     inZone &&
-    !nearTurn &&
     mkt?.marketType === "city_grid" &&
-    distToZoneCenterM != null &&
-    distToZoneCenterM < 150;
+    (distToZoneCenterM == null || distToZoneCenterM < 300);
 
   const snapshot: LiveRoundSelectionSnapshot = {
     distanceToTurnMeters: distanceToTurnM,
@@ -113,11 +106,12 @@ export async function getActiveBettingRoundPayload(
     canBuildNextZoneRound: canNextZone,
     canBuildZoneExitRound: inZone && Boolean(mkt),
     canBuildZoneDurationRound: false,
-    // "time to next pin" — shown whenever routing has a visible pin ahead
-    canBuildTimeVsGoogleRound: hasPins,
-    // stop_count: broad fallback whenever speed data is present
-    canBuildStopCountRound: last?.speedMps != null,
-    canBuildTurnCountRound: hasPins,
+    // "time to next pin" — keep broad so market rotation can use it often.
+    canBuildTimeVsGoogleRound: hasPins || Boolean(room.destination),
+    // stop_count: make broadly available (demo mode).
+    canBuildStopCountRound: true,
+    // turn_count: also keep broad so all bet types appear in minutes.
+    canBuildTurnCountRound: hasPins || true,
     canBuildTurnsBeforeZoneExitRound: inZone,
     canBuildEtaDriftRound: Boolean(room.destination),
   };

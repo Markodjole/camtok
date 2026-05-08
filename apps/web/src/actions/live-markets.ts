@@ -121,9 +121,9 @@ export async function placeLiveBet(input: PlaceLiveBetInput) {
   }
 
   // Distance gate with per-bet thresholds:
-  // - next_turn (turn-point markets): lock at <= 100 m before turn/pin
-  // - time_vs_google: lock at <= 220 m to next pin
-  // - next_zone (city_grid): lock when <= 100 m from current cell edge
+  // - next_turn (turn-point markets): lock at <= 70 m before turn/pin
+  // - time_vs_google: lock at <= 160 m to next pin
+  // - next_zone (city_grid): lock when <= 60 m from current cell edge
   const turnLat = (market as { turn_point_lat: number | null }).turn_point_lat;
   const turnLng = (market as { turn_point_lng: number | null }).turn_point_lng;
   const sessionId = (market as { live_session_id: string | null }).live_session_id;
@@ -162,7 +162,7 @@ export async function placeLiveBet(input: PlaceLiveBetInput) {
       { lat, lng },
       { lat: turnLat, lng: turnLng },
     );
-    if (dist <= 100) {
+    if (dist <= 70) {
       return { error: "Too close to turn — betting closed" };
     }
   }
@@ -183,14 +183,14 @@ export async function placeLiveBet(input: PlaceLiveBetInput) {
     if (marketType === "time_vs_google") {
       const drv = await computeDriverRouteInstruction(roomIdForRoom);
       const pinDist = drv.instruction?.pins?.[0]?.distanceMeters ?? null;
-      if (pinDist != null && pinDist <= 220) {
+      if (pinDist != null && pinDist <= 160) {
         return { error: "Too close to next pin — betting closed" };
       }
     }
 
     if (marketType === "city_grid" && gridSpec) {
       const edgeM = distanceToCurrentCellEdgeMeters(gridSpec, lat, lng);
-      if (edgeM != null && edgeM <= 100) {
+      if (edgeM != null && edgeM <= 60) {
         return { error: "Too close to zone edge — betting closed" };
       }
     }
