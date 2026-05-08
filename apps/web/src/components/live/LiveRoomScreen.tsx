@@ -516,6 +516,11 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     currentMarket?.marketType === "city_grid"
       ? (currentMarket.cityGridSpec as CityGridSpecCompact | null | undefined)
       : null;
+  const currentZoneId = useMemo(() => {
+    if (!cityGridSpec || routePoints.length === 0) return null;
+    const last = routePoints[routePoints.length - 1]!;
+    return cellIdForPosition(cityGridSpec, last.lat, last.lng);
+  }, [cityGridSpec, routePoints]);
 
   const zones: MapZone[] = useMemo(() => {
     if (!cityGridSpec) return [];
@@ -730,6 +735,13 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     !liveBetRelaxClient() &&
     !!currentMarket &&
     (() => {
+      // Keep engine + city-grid bets open until their individual distance/event locks.
+      if (
+        currentMarket.marketType === "city_grid" ||
+        isEngineMarketType(currentMarket.marketType)
+      ) {
+        return false;
+      }
       const t = Date.parse(currentMarket.locksAt);
       if (!Number.isFinite(t)) return false;
       return t <= Date.now();
@@ -1215,6 +1227,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             zones={zones}
             checkpoints={checkpoints}
             selectedZoneId={selectedZoneId}
+            currentZoneId={currentZoneId}
             selectedCheckpointId={selectedCheckpointId}
             showZones={effectiveShowZones}
             zonesVisualStyle={zonesVisualStyleForBet}
@@ -1375,6 +1388,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               zones={zones}
               checkpoints={checkpoints}
               selectedZoneId={selectedZoneId}
+              currentZoneId={currentZoneId}
               selectedCheckpointId={selectedCheckpointId}
               showZones={effectiveShowZones}
               zonesVisualStyle={zonesVisualStyleForBet}
@@ -1606,7 +1620,14 @@ function MapSelectionBottomSheet({
 }) {
   const sorted = [...marketOptions].sort((a, b) => a.displayOrder - b.displayOrder);
   return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-0 z-[200] px-3 pb-[calc(4.75rem+env(safe-area-inset-bottom,0px))]">
+    <div
+      className="pointer-events-none fixed bottom-0 right-0 z-[200] pb-[calc(4.75rem+env(safe-area-inset-bottom,0px))]"
+      style={{
+        // Keep left PiP/square visible; sheet uses remaining screen width.
+        left: "calc(min(34vw, 180px) + 16px)",
+        paddingRight: "12px",
+      }}
+    >
       <div className="pointer-events-auto rounded-xl border border-white/10 bg-black/40 p-2 text-white shadow-lg backdrop-blur-md">
         <div className="mb-1 flex items-start gap-2">
           <div className="min-w-0 flex-1">

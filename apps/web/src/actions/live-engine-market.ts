@@ -13,7 +13,7 @@ import { engineBetHeadline } from "@/lib/live/betting/betTypeV2Label";
 import { metersBetween } from "@/lib/live/routing/geometry";
 
 /** Betting window for provisional engine markets (seconds). */
-const ENGINE_OPEN_SEC = 25;
+const ENGINE_OPEN_SEC = 120;
 /**
  * Far-future placeholder for reveal_at on engine markets.
  * Actual reveal is event-driven (zone exit, turn, pin reached, etc.).

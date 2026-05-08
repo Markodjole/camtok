@@ -116,7 +116,15 @@ export async function placeLiveBet(input: PlaceLiveBetInput) {
   }
   const roomIdForRoom = (market as { room_id: string }).room_id;
   const locksAt = new Date((market as { locks_at: string }).locks_at).getTime();
-  if (!liveBetRelaxServer() && Date.now() >= locksAt) {
+  const marketType = (market as { market_type?: string }).market_type ?? "";
+  const isEngineType =
+    marketType === "time_vs_google" ||
+    marketType === "stop_count" ||
+    marketType === "turn_count_to_pin" ||
+    marketType === "turns_before_zone_exit" ||
+    marketType === "zone_exit_time";
+  const ignoreTimeLock = marketType === "city_grid" || isEngineType;
+  if (!liveBetRelaxServer() && !ignoreTimeLock && Date.now() >= locksAt) {
     return { error: "Market has locked" };
   }
 
@@ -167,7 +175,6 @@ export async function placeLiveBet(input: PlaceLiveBetInput) {
     }
   }
 
-  const marketType = (market as { market_type?: string }).market_type ?? "";
   const gridSpec = (market as { city_grid_spec: CityGridSpecCompact | null })
     .city_grid_spec;
   if (!liveBetRelaxServer() && latestGpsRow) {

@@ -53,6 +53,7 @@ export interface LiveMapProps {
     isActive?: boolean;
   }>;
   selectedZoneId?: string | null;
+  currentZoneId?: string | null;
   selectedCheckpointId?: string | null;
   showZones?: boolean;
   showCheckpoints?: boolean;
@@ -243,6 +244,7 @@ export function LiveMap({
   zones = [],
   checkpoints = [],
   selectedZoneId = null,
+  currentZoneId = null,
   selectedCheckpointId = null,
   showZones = true,
   showCheckpoints = true,
@@ -576,6 +578,7 @@ export function LiveMap({
               return;
             }
             const selected = selectedZoneId === zone.id;
+            const isCurrentZone = currentZoneId === zone.id;
             const isActive = zone.isActive !== false;
             const color = zone.color ?? "#60a5fa";
             const latlngs = zone.polygon
@@ -604,7 +607,8 @@ export function LiveMap({
                 : "rgba(148,163,184,0.75)";
               strokeWeight = selected ? 2.5 : 1.6;
               fillC = selected ? color : color;
-              fillOp = selected ? 0.18 : isActive ? 0.09 : 0.04;
+              // Keep current zone clear; tint only other zones.
+              fillOp = isCurrentZone ? 0 : selected ? 0.18 : isActive ? 0.09 : 0.04;
               dashArr = selected ? undefined : undefined;
             } else if (muted) {
               strokeColor = selected
@@ -647,7 +651,7 @@ export function LiveMap({
     return () => {
       aborted = true;
     };
-  }, [zones, selectedZoneId, showZones, interactive, onZoneSelect, mapReady, audienceRole, zonesVisualStyle]);
+  }, [zones, selectedZoneId, currentZoneId, showZones, interactive, onZoneSelect, mapReady, audienceRole, zonesVisualStyle]);
 
   useEffect(() => {
     const group = checkpointLayerRef.current;

@@ -146,7 +146,9 @@ export async function POST(
           }
         }
       }
-      if (distanceLocked || now >= locksAt) {
+      const timeoutApplies =
+        marketType !== "city_grid" && !isEngineMarketType(marketType);
+      if (distanceLocked || (timeoutApplies && now >= locksAt)) {
         const r = await lockMarket(marketId);
         return NextResponse.json({
           action: "lock",
