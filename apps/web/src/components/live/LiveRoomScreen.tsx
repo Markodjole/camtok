@@ -79,6 +79,18 @@ function isViewerZoneEngineType(t: BetTypeV2 | null | undefined): boolean {
   );
 }
 
+/** At most once per zone visit; `next_turn` + `time_vs_google` are excluded (repeatable). */
+const ZONE_BET_ONCE_ORDER: BetTypeV2[] = [
+  "next_zone",
+  "zone_exit_time",
+  "zone_duration",
+  "stop_count",
+  "turns_before_zone_exit",
+  "turn_count_to_pin",
+  "eta_drift",
+];
+const ZONE_BET_ONCE_SET = new Set<BetTypeV2>(ZONE_BET_ONCE_ORDER);
+
 export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const pathname = usePathname();
   const immersiveLiveRoom = (pathname ?? "").startsWith("/live/rooms/");
@@ -198,36 +210,48 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     return () => clearInterval(id);
   }, [eligibleTypes.length]);
 
-  const zoneBetSeenRef = useRef<{
-    zone: string | null;
-    shown: Set<BetTypeV2>;
-  }>({ zone: null, shown: new Set() });
-  /** Head pin id string — when it changes, offer `time_vs_google` once before zone rotation advances. */
+  const currentMarket = room.currentMarket;
+  const cityGridSpec = useMemo(
+    () =>
+      currentMarket?.marketType === "city_grid"
+        ? (currentMarket.cityGridSpec as CityGridSpecCompact | null | undefined)
+        : null,
+    [currentMarket?.marketType, currentMarket?.cityGridSpec],
+  );
+  const currentZoneId = useMemo(() => {
+    if (!cityGridSpec || routePoints.length === 0) return null;
+    const last = routePoints[routePoints.length - 1]!;
+    return cellIdForPosition(cityGridSpec, last.lat, last.lng);
+  }, [cityGridSpec, routePoints]);
+
+  /**
+   * "Zone" for rotation = named region from streamer session OR current grid cell id.
+   * We do **not** have polygon crossing on the client; server sets `region_label` on heartbeat.
+   */
+  const zoneSessionKey = room.regionLabel ?? currentZoneId ?? null;
+  const clientInZone = Boolean(zoneSessionKey);
+
+  const [zoneConsumedBetTypes, setZoneConsumedBetTypes] = useState<Set<BetTypeV2>>(
+    () => new Set(),
+  );
+  useEffect(() => {
+    setZoneConsumedBetTypes(new Set());
+  }, [zoneSessionKey]);
+
+  /** Head pin id — when it changes, prefer one `time_vs_google` offer (repeatable per pin). */
   const lastPinHeadIdRef = useRef<string | null>(null);
   const pendingNewPinTimeBetRef = useRef(false);
-
-  /** In-zone: each type once per region label; excludes pin-repeat bets (see effectiveEngineType). */
-  const ZONE_BET_ONCE_ORDER: BetTypeV2[] = [
-    "next_zone",
-    "zone_exit_time",
-    "zone_duration",
-    "stop_count",
-    "turns_before_zone_exit",
-    "turn_count_to_pin",
-    "eta_drift",
-  ];
+  const prevZoneSessionKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (prevZoneSessionKeyRef.current === zoneSessionKey) return;
+    prevZoneSessionKeyRef.current = zoneSessionKey;
+    lastPinHeadIdRef.current = null;
+    pendingNewPinTimeBetRef.current = true;
+  }, [zoneSessionKey]);
 
   const effectiveEngineType: BetTypeV2 | null = useMemo(() => {
     if (viewerEnginePillType != null) return viewerEnginePillType;
     if (!eligibleTypes.length) return null;
-
-    const zone = room.regionLabel ?? null;
-    if (zoneBetSeenRef.current.zone !== zone) {
-      zoneBetSeenRef.current = { zone, shown: new Set() };
-      lastPinHeadIdRef.current = null;
-      pendingNewPinTimeBetRef.current = true;
-    }
-    const seenInZone = zoneBetSeenRef.current.shown;
 
     const pinHeadRaw = driverPins?.[0]?.id;
     const pinHeadKey = pinHeadRaw != null ? String(pinHeadRaw) : null;
@@ -244,13 +268,22 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       return null;
     };
 
-    // 1) Next turn — moment window; repeatable every new approach (eligible rounds).
+    // 1) Next turn — moment window; repeatable whenever eligible.
     if (inTurnWindow) {
       const turnBet = pick("next_turn");
       if (turnBet) return turnBet;
     }
 
-    // 2) Beat Google — once after each new head pin (repeatable per pin, not consumed by zone-once).
+    // 2) In zone: one slot per bet type until consumed (after min display time), `next_zone` first.
+    if (clientInZone) {
+      for (const betType of ZONE_BET_ONCE_ORDER) {
+        if (!eligibleTypes.includes(betType)) continue;
+        if (zoneConsumedBetTypes.has(betType)) continue;
+        return betType;
+      }
+    }
+
+    // 3) Beat Google — once per new head pin (can repeat in zone across pins).
     if (pendingNewPinTimeBetRef.current) {
       const timeBet = pick("time_vs_google");
       if (timeBet) {
@@ -259,29 +292,25 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       }
     }
 
-    // 3) In zone: walk priority list once per zone (every bet once except turn + time-to-pin above).
-    if (zone) {
-      for (const betType of ZONE_BET_ONCE_ORDER) {
-        if (!eligibleTypes.includes(betType)) continue;
-        if (seenInZone.has(betType)) continue;
-        seenInZone.add(betType);
-        return betType;
-      }
-    }
-
-    // 4) Fallback — time vs google whenever routing exposes a pin (after zone cycle or outside zone).
+    // 4) Fallback — time vs google when routing has a pin.
     if ((driverPins?.length ?? 0) > 0) {
       const timeBet = pick("time_vs_google");
       if (timeBet) return timeBet;
     }
 
-    // 5) Keep variety; avoid repeating immediately when possible.
     const rotated = eligibleTypes[rotationIdx % eligibleTypes.length] ?? null;
     if (!rotated) return null;
     if (eligibleTypes.length === 1) return rotated;
     const alt = eligibleTypes[(rotationIdx + 1) % eligibleTypes.length] ?? rotated;
     return rotated === lastAutoPickTypeRef.current ? alt : rotated;
-  }, [viewerEnginePillType, eligibleTypes, rotationIdx, room.regionLabel, driverPins]);
+  }, [
+    viewerEnginePillType,
+    eligibleTypes,
+    rotationIdx,
+    clientInZone,
+    zoneConsumedBetTypes,
+    driverPins,
+  ]);
 
   useEffect(() => {
     if (viewerEnginePillType == null) {
@@ -329,6 +358,28 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       return () => clearTimeout(t);
     }
   }, [effectiveEngineType, viewerEnginePillType]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** After a zone-once bet is shown this long, allow the next type in the zone queue. */
+  useEffect(() => {
+    if (!clientInZone || viewerEnginePillType != null) return;
+    const t = stableDisplayBetType;
+    if (!t || !ZONE_BET_ONCE_SET.has(t)) return;
+    if (zoneConsumedBetTypes.has(t)) return;
+    const id = setTimeout(() => {
+      setZoneConsumedBetTypes((prev) => {
+        if (prev.has(t)) return prev;
+        const next = new Set(prev);
+        next.add(t);
+        return next;
+      });
+    }, BET_MIN_DISPLAY_MS);
+    return () => clearTimeout(id);
+  }, [
+    stableDisplayBetType,
+    clientInZone,
+    viewerEnginePillType,
+    zoneConsumedBetTypes,
+  ]);
 
   useEffect(() => {
     setJoyPortalReady(true);
@@ -450,7 +501,6 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     }
   }
 
-  const currentMarket = room.currentMarket;
   const viewerTurnTarget = currentMarket?.turnPointLat != null && currentMarket?.turnPointLng != null
     ? { lat: currentMarket.turnPointLat, lng: currentMarket.turnPointLng, kind: "straight" as const, label: "" }
     : null;
@@ -496,16 +546,6 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     driverPins,
     routePoints,
   ]);
-
-  const cityGridSpec =
-    currentMarket?.marketType === "city_grid"
-      ? (currentMarket.cityGridSpec as CityGridSpecCompact | null | undefined)
-      : null;
-  const currentZoneId = useMemo(() => {
-    if (!cityGridSpec || routePoints.length === 0) return null;
-    const last = routePoints[routePoints.length - 1]!;
-    return cellIdForPosition(cityGridSpec, last.lat, last.lng);
-  }, [cityGridSpec, routePoints]);
 
   const zones: MapZone[] = useMemo(() => {
     if (!cityGridSpec) return [];
@@ -561,12 +601,12 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           : null);
   const displayBetType: BetTypeV2 | null =
     viewerEnginePillType ?? stableDisplayBetType ?? marketAnchoredBetType;
+  /** Map camera tracks intent immediately; ribbon/sheet can stay stable via `displayBetType`. */
+  const mapBetTypeForCamera: BetTypeV2 | null =
+    viewerEnginePillType ?? effectiveEngineType ?? marketAnchoredBetType;
 
   const zonesVisualStyleForBet =
     displayBetType === "next_zone" ? "pick_zone" : zoneEngineBetActive ? "muted" : "default";
-
-  const zoneWholeViewBet =
-    displayBetType === "turns_before_zone_exit" || displayBetType === "stop_count";
 
   /**
    * Three fixed zoom tiers, one per bet category — every bet maps to exactly one.
@@ -579,7 +619,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const ZOOM_TIER_MID_M = 600;
   const ZOOM_TIER_WIDE_M = 1600;
   const viewerTargetWidthMeters = (() => {
-    switch (displayBetType) {
+    switch (mapBetTypeForCamera) {
       case "next_turn":
         return ZOOM_TIER_TIGHT_M;
       case "time_vs_google":
@@ -609,7 +649,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     minZoom: number | null;
   } => {
     // next_turn: standard nav zoom, no bounds override.
-    if (displayBetType === "next_turn" || !routeLast) {
+    if (mapBetTypeForCamera === "next_turn" || !routeLast) {
       return { bounds: null, minZoom: null };
     }
 
@@ -645,8 +685,10 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         }
       }
 
-      const pickZone = displayBetType === "next_zone";
-      const zoneWhole = displayBetType === "turns_before_zone_exit" || displayBetType === "stop_count";
+      const pickZone = mapBetTypeForCamera === "next_zone";
+      const zoneWhole =
+        mapBetTypeForCamera === "turns_before_zone_exit" ||
+        mapBetTypeForCamera === "stop_count";
       // Keep framing consistent with the width target for every active bet type.
       const framingM = Math.max(250, viewerTargetWidthMeters ?? 250);
 
@@ -658,10 +700,11 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
     // Non–city_grid markets: still frame by active bet type so the map matches the ribbon /
     // bottom sheet (engine `stop_count` etc. has no `cityGridSpec` but uses the same labels).
-    if (displayBetType != null && routeLast) {
-      const pickZone = displayBetType === "next_zone";
+    if (mapBetTypeForCamera != null && routeLast) {
+      const pickZone = mapBetTypeForCamera === "next_zone";
       const zoneWhole =
-        displayBetType === "turns_before_zone_exit" || displayBetType === "stop_count";
+        mapBetTypeForCamera === "turns_before_zone_exit" ||
+        mapBetTypeForCamera === "stop_count";
       const framingM = Math.max(250, viewerTargetWidthMeters ?? 250);
       return {
         bounds: squareWgs84BoundsFromCenter(routeLast.lat, routeLast.lng, framingM),
@@ -673,7 +716,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   }, [
     currentMarket?.marketType,
     cityGridSpec,
-    displayBetType,
+    mapBetTypeForCamera,
     routeLast?.lat,
     routeLast?.lng,
     selectedZoneId,
@@ -1276,7 +1319,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             viewerFollowLatLngBounds={viewerGridMapFraming.bounds}
             viewerFollowBoundsMinZoom={viewerGridMapFraming.minZoom}
             viewerTargetWidthMeters={viewerTargetWidthMeters}
-            viewerZoomRuleKey={`${displayBetType ?? "none"}:${currentMarket?.id ?? "nomarket"}`}
+            viewerZoomRuleKey={`${mapBetTypeForCamera ?? "none"}:${currentMarket?.id ?? "nomarket"}`}
             onZoneSelect={(id) => {
               setSelectedZoneId(id);
               if (id) setSelectedCheckpointId(null);
@@ -1438,7 +1481,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               viewerFollowLatLngBounds={viewerGridMapFraming.bounds}
               viewerFollowBoundsMinZoom={viewerGridMapFraming.minZoom}
               viewerTargetWidthMeters={viewerTargetWidthMeters}
-              viewerZoomRuleKey={`${displayBetType ?? "none"}:${currentMarket?.id ?? "nomarket"}`}
+              viewerZoomRuleKey={`${mapBetTypeForCamera ?? "none"}:${currentMarket?.id ?? "nomarket"}`}
             />
             {routePoints.length === 0 && (
               <div className="absolute inset-0 flex items-center justify-center bg-black/30 text-[9px] text-white/70">

@@ -44,6 +44,9 @@ export function listEligibleRounds(
   if (snapshot.canBuildTurnCountRound && isMvpEnabledFor("turn_count_to_pin", mvpOnly)) {
     out.push({ type: "turn_count_to_pin", priority: 55, kind: "personal_snapshot" });
   }
+  if (snapshot.canBuildEtaDriftRound && isMvpEnabledFor("eta_drift", mvpOnly)) {
+    out.push({ type: "eta_drift", priority: 40, kind: "personal_snapshot" });
+  }
 
   return out;
 }

@@ -65,7 +65,13 @@ export async function getActiveBettingRoundPayload(
 
   const firstPinBranches = planning?.meaningfulBranchesPerPin[0];
   const hasPins = (instruction?.pins?.length ?? 0) > 0;
-  const inZone = Boolean(room.regionLabel);
+
+  let inGridCell = false;
+  if (last && mkt?.marketType === "city_grid" && mkt.cityGridSpec) {
+    const spec = mkt.cityGridSpec;
+    inGridCell = Boolean(cellIdForPosition(spec, last.lat, last.lng));
+  }
+  const inZone = Boolean(room.regionLabel) || inGridCell;
 
   // next_turn: 200 m → 150 m window (gate enforced in canBuildNextTurnRound)
   // next_zone: city_grid only — driver in zone AND within 150 m of cell center
@@ -106,7 +112,7 @@ export async function getActiveBettingRoundPayload(
     isInOrNearZone: inZone,
     canBuildNextZoneRound: canNextZone,
     canBuildZoneExitRound: inZone && Boolean(mkt),
-    canBuildZoneDurationRound: false,
+    canBuildZoneDurationRound: inZone && Boolean(mkt),
     // "time to next pin" — keep broad so market rotation can use it often.
     canBuildTimeVsGoogleRound: hasPins || Boolean(room.destination),
     // stop_count: make broadly available (demo mode).
