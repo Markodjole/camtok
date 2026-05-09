@@ -90,12 +90,13 @@ export async function getActiveBettingRoundPayload(
     }
   }
 
-  // Loosened for demo/betting activity:
-  // next_zone is available broadly whenever we are in a grid zone.
+  // Offer pick-zone whenever we have a named region. With an open city_grid market,
+  // still allow anywhere in/near the cell (distance null or within ~600 m of cell center).
   const canNextZone =
     inZone &&
-    mkt?.marketType === "city_grid" &&
-    (distToZoneCenterM == null || distToZoneCenterM < 300);
+    (mkt?.marketType !== "city_grid" ||
+      distToZoneCenterM == null ||
+      distToZoneCenterM < 600);
 
   const snapshot: LiveRoundSelectionSnapshot = {
     distanceToTurnMeters: distanceToTurnM,

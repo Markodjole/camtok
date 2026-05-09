@@ -202,81 +202,77 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     zone: string | null;
     shown: Set<BetTypeV2>;
   }>({ zone: null, shown: new Set() });
+  /** Head pin id string — when it changes, offer `time_vs_google` once before zone rotation advances. */
+  const lastPinHeadIdRef = useRef<string | null>(null);
+  const pendingNewPinTimeBetRef = useRef(false);
+
+  /** In-zone: each type once per region label; excludes pin-repeat bets (see effectiveEngineType). */
+  const ZONE_BET_ONCE_ORDER: BetTypeV2[] = [
+    "next_zone",
+    "zone_exit_time",
+    "zone_duration",
+    "stop_count",
+    "turns_before_zone_exit",
+    "turn_count_to_pin",
+    "eta_drift",
+  ];
 
   const effectiveEngineType: BetTypeV2 | null = useMemo(() => {
     if (viewerEnginePillType != null) return viewerEnginePillType;
     if (!eligibleTypes.length) return null;
-    const marketType = room.currentMarket?.marketType as BetTypeV2 | undefined;
-    // Always anchor to the currently open engine market so the popup stays actionable.
-    // Eligibility can lag while snapshots update; a strict eligibleTypes check causes
-    // mismatches that render the sheet/button as "locked" even during open markets.
-    if (marketType && isEngineMarketType(marketType)) {
-      return marketType;
-    }
 
     const zone = room.regionLabel ?? null;
     if (zoneBetSeenRef.current.zone !== zone) {
       zoneBetSeenRef.current = { zone, shown: new Set() };
+      lastPinHeadIdRef.current = null;
+      pendingNewPinTimeBetRef.current = true;
     }
     const seenInZone = zoneBetSeenRef.current.shown;
 
-    const last = routePoints.length > 0 ? routePoints[routePoints.length - 1] : null;
+    const pinHeadRaw = driverPins?.[0]?.id;
+    const pinHeadKey = pinHeadRaw != null ? String(pinHeadRaw) : null;
+    if (pinHeadKey !== lastPinHeadIdRef.current) {
+      lastPinHeadIdRef.current = pinHeadKey;
+      pendingNewPinTimeBetRef.current = true;
+    }
+
     const nextPinDist = driverPins?.[0]?.distanceMeters ?? null;
     const inTurnWindow = nextPinDist != null && nextPinDist <= 200 && nextPinDist >= 150;
-
-    let inZoneCenter = false;
-    const spec =
-      room.currentMarket?.marketType === "city_grid" ? room.currentMarket.cityGridSpec : null;
-    if (zone && last && spec) {
-      const cell = cellIdForPosition(spec, last.lat, last.lng);
-      if (cell) {
-        const p = parseGridOptionId(cell);
-        if (p) {
-          const center = gridCellCenter(spec, p.row, p.col);
-          inZoneCenter = metersBetween({ lat: last.lat, lng: last.lng }, center) <= 150;
-        }
-      }
-    }
 
     const pick = (...types: BetTypeV2[]): BetTypeV2 | null => {
       for (const t of types) if (eligibleTypes.includes(t)) return t;
       return null;
     };
-    const pickUnseenZone = (...types: BetTypeV2[]): BetTypeV2 | null => {
-      for (const t of types) {
-        if (eligibleTypes.includes(t) && !seenInZone.has(t)) return t;
-      }
-      return null;
-    };
 
-    // 1) Zone center => next zone bet.
-    if (zone && inZoneCenter) {
-      const z = pickUnseenZone("next_zone");
-      if (z) {
-        seenInZone.add(z);
-        return z;
-      }
-    }
-
-    // 2) Zone-context bets, no repeats until zone changes.
-    if (zone) {
-      const zoneBet = pickUnseenZone("turns_before_zone_exit", "stop_count");
-      if (zoneBet) {
-        seenInZone.add(zoneBet);
-        return zoneBet;
-      }
-    }
-
-    // 3) Next pin visible => time_vs_google.
-    if ((driverPins?.length ?? 0) > 0) {
-      const timeBet = pick("time_vs_google");
-      if (timeBet) return timeBet;
-    }
-
-    // 4) next_turn only in strict 200-150 m window.
+    // 1) Next turn — moment window; repeatable every new approach (eligible rounds).
     if (inTurnWindow) {
       const turnBet = pick("next_turn");
       if (turnBet) return turnBet;
+    }
+
+    // 2) Beat Google — once after each new head pin (repeatable per pin, not consumed by zone-once).
+    if (pendingNewPinTimeBetRef.current) {
+      const timeBet = pick("time_vs_google");
+      if (timeBet) {
+        pendingNewPinTimeBetRef.current = false;
+        return timeBet;
+      }
+    }
+
+    // 3) In zone: walk priority list once per zone (every bet once except turn + time-to-pin above).
+    if (zone) {
+      for (const betType of ZONE_BET_ONCE_ORDER) {
+        if (!eligibleTypes.includes(betType)) continue;
+        if (seenInZone.has(betType)) continue;
+        seenInZone.add(betType);
+        return betType;
+      }
+    }
+
+    // 4) Fallback — time vs google whenever routing exposes a pin (after zone cycle or outside zone).
+    if ((driverPins?.length ?? 0) > 0) {
+      const timeBet = pick("time_vs_google");
+      if (timeBet) return timeBet;
     }
 
     // 5) Keep variety; avoid repeating immediately when possible.
@@ -285,17 +281,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     if (eligibleTypes.length === 1) return rotated;
     const alt = eligibleTypes[(rotationIdx + 1) % eligibleTypes.length] ?? rotated;
     return rotated === lastAutoPickTypeRef.current ? alt : rotated;
-  }, [
-    viewerEnginePillType,
-    eligibleTypes,
-    rotationIdx,
-    room.currentMarket?.marketType,
-    room.regionLabel,
-    room.currentMarket?.marketType,
-    room.currentMarket?.cityGridSpec,
-    routePoints,
-    driverPins,
-  ]);
+  }, [viewerEnginePillType, eligibleTypes, rotationIdx, room.regionLabel, driverPins]);
 
   useEffect(() => {
     if (viewerEnginePillType == null) {
