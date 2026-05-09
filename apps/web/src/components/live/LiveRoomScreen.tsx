@@ -150,6 +150,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     lng: number;
   } | null>(null);
   const passedViewerPinIdsRef = useRef<Set<string>>(new Set());
+  const passedMarketTurnIdsRef = useRef<Set<string>>(new Set());
   const skillFeedbackTimerRef = { current: null as ReturnType<typeof setTimeout> | null };
   const { betPill, flash } = useBetPill();
   const { data: activeBettingRound } = useActiveBetRound(room.roomId, 2500);
@@ -471,22 +472,13 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   useEffect(() => {
     setStickyViewerPin(null);
     passedViewerPinIdsRef.current = new Set();
+    passedMarketTurnIdsRef.current = new Set();
   }, [room.roomId]);
 
   useEffect(() => {
     const last = routePoints[routePoints.length - 1];
     const apiHead = driverPins?.[0];
     const PASSED_CLEAR_LINE_M = 12;
-    const marketTurn =
-      currentMarket?.turnPointLat != null &&
-      currentMarket?.turnPointLng != null &&
-      currentMarket.id
-        ? {
-            id: `market:${currentMarket.id}`,
-            lat: currentMarket.turnPointLat,
-            lng: currentMarket.turnPointLng,
-          }
-        : null;
 
     setStickyViewerPin((sticky) => {
       let next = sticky;
@@ -499,7 +491,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       const candidate =
         apiHead?.id != null
           ? { id: apiHead.id, lat: apiHead.lat, lng: apiHead.lng }
-          : marketTurn;
+          : null;
       const candidateId = candidate ? String(candidate.id) : null;
       const candidateWasPassed =
         candidateId != null && passedViewerPinIdsRef.current.has(candidateId);
@@ -517,9 +509,6 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   }, [
     driverPins,
     routePoints,
-    currentMarket?.id,
-    currentMarket?.turnPointLat,
-    currentMarket?.turnPointLng,
   ]);
 
   const cityGridSpec =
@@ -601,9 +590,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
    */
   const viewerTargetWidthMeters =
     displayBetType === "next_zone"
-      ? 1000
+      ? 1600
       : zoneWholeViewBet
-        ? Math.max(600, cityGridSpec?.cellMeters ?? 600)
+        ? Math.max(800, cityGridSpec?.cellMeters ?? 800)
         : 250;
 
   /**
@@ -689,12 +678,23 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     viewerTargetWidthMeters,
   ]);
 
-  const passedMarketTurn =
+  const marketTurnPassKey =
+    currentMarket != null && currentMarket.marketType !== "city_grid"
+      ? currentMarket.id
+      : null;
+  const passedMarketTurnByDistance =
     !!viewerTurnTarget &&
     !!routeLast &&
     currentMarket != null &&
     currentMarket.marketType !== "city_grid" &&
     metersBetween(routeLast, viewerTurnTarget) < PASSED_HIDE_PIN_LINE_M;
+  useEffect(() => {
+    if (marketTurnPassKey && passedMarketTurnByDistance) {
+      passedMarketTurnIdsRef.current.add(marketTurnPassKey);
+    }
+  }, [marketTurnPassKey, passedMarketTurnByDistance]);
+  const passedMarketTurn =
+    !!marketTurnPassKey && passedMarketTurnIdsRef.current.has(marketTurnPassKey);
 
   /** Hide blue pin once we're essentially at the maneuver (matches server pass semantics). */
   const viewerTurnTargetForMap =

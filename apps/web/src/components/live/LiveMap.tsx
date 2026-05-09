@@ -1351,12 +1351,14 @@ export function LiveMap({
       const centerLatLng = mm.layerPointToLatLng(cPt as import("leaflet").Point);
 
       // Compute target zoom from desired visible width (meters → Leaflet zoom level).
-      // Formula: z = log2(vpW_px * 40075017 * cos(lat) / (256 * targetWidthM))
+      // Web Mercator: m/px = 156543.03 * cos(lat) / 2^z.
+      // Solve for z given target m/px = targetWidthM / viewportW:
+      //   z = log2(viewportW * 40075017 * cos(lat) / (256 * targetWidthM))
       const cosLat = Math.max(0.01, Math.cos((nLat * Math.PI) / 180));
       const widthBasedZ = Math.log2(
-        (viewportW * 40075017) / (256 * cosLat * viewerTargetWidthRef.current),
+        (viewportW * 40075017 * cosLat) / (256 * viewerTargetWidthRef.current),
       );
-      const clampedWidthZ = Math.max(13, Math.min(20, widthBasedZ));
+      const clampedWidthZ = Math.max(12, Math.min(20, widthBasedZ));
 
       // If user has manually zoomed, respect their choice; only pan.
       const targetZ = userZoomOverrideRef.current ?? clampedWidthZ;
