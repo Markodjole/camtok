@@ -563,8 +563,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
    * Single source of truth for "what bet is the viewer looking at right now".
    * Priority:
    *  1) Explicit pill pick by the viewer.
-   *  2) Currently open market type (engine markets + city_grid=>next_zone).
-   *  3) Stable auto-rotation fallback (≥5 s hold) when no market anchor exists.
+   *  2) Stable auto-rotation across eligible bet types (time + position based).
+   *  3) Currently open market type as fallback so popup is always actionable.
    */
   const marketAnchoredBetType: BetTypeV2 | null =
     currentMarket?.marketType === "city_grid"
@@ -574,7 +574,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           ? (currentMarket.marketType as BetTypeV2)
           : null);
   const displayBetType: BetTypeV2 | null =
-    viewerEnginePillType ?? marketAnchoredBetType ?? stableDisplayBetType;
+    viewerEnginePillType ?? stableDisplayBetType ?? marketAnchoredBetType;
 
   const zonesVisualStyleForBet =
     displayBetType === "next_zone" ? "pick_zone" : zoneEngineBetActive ? "muted" : "default";
@@ -583,17 +583,33 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     displayBetType === "turns_before_zone_exit" || displayBetType === "stop_count";
 
   /**
-   * Main zoom guideline (driven by bottom popup active bet):
-   * - next_zone: widest view (zoomed out)
-   * - turns/stops in zone: zoom out enough to see whole current zone
-   * - all other bets: keep default app zoom
+   * Three fixed zoom tiers, one per bet category — every bet maps to exactly one.
+   *  - TIGHT (250 m): next_turn (navigation feel).
+   *  - MID   (600 m): pin / route bets (time_vs_google, turn_count_to_pin, eta_drift).
+   *  - WIDE  (1600 m): zone-level bets (next_zone, stop_count, turns_before_zone_exit,
+   *                                       zone_exit_time, zone_duration).
    */
-  const viewerTargetWidthMeters =
-    displayBetType === "next_zone"
-      ? 1600
-      : zoneWholeViewBet
-        ? Math.max(800, cityGridSpec?.cellMeters ?? 800)
-        : 250;
+  const ZOOM_TIER_TIGHT_M = 250;
+  const ZOOM_TIER_MID_M = 600;
+  const ZOOM_TIER_WIDE_M = 1600;
+  const viewerTargetWidthMeters = (() => {
+    switch (displayBetType) {
+      case "next_turn":
+        return ZOOM_TIER_TIGHT_M;
+      case "time_vs_google":
+      case "turn_count_to_pin":
+      case "eta_drift":
+        return ZOOM_TIER_MID_M;
+      case "next_zone":
+      case "stop_count":
+      case "turns_before_zone_exit":
+      case "zone_exit_time":
+      case "zone_duration":
+        return ZOOM_TIER_WIDE_M;
+      default:
+        return ZOOM_TIER_MID_M;
+    }
+  })();
 
   /**
    * Viewer follow framing rules:
