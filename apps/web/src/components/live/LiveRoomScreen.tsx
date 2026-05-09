@@ -149,6 +149,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     lat: number;
     lng: number;
   } | null>(null);
+  const passedViewerPinIdsRef = useRef<Set<string>>(new Set());
   const skillFeedbackTimerRef = { current: null as ReturnType<typeof setTimeout> | null };
   const { betPill, flash } = useBetPill();
   const { data: activeBettingRound } = useActiveBetRound(room.roomId, 2500);
@@ -205,8 +206,10 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     if (viewerEnginePillType != null) return viewerEnginePillType;
     if (!eligibleTypes.length) return null;
     const marketType = room.currentMarket?.marketType as BetTypeV2 | undefined;
-    // Prefer currently open market type so popup is actionable (not locked by mismatch).
-    if (marketType && eligibleTypes.includes(marketType)) {
+    // Always anchor to the currently open engine market so the popup stays actionable.
+    // Eligibility can lag while snapshots update; a strict eligibleTypes check causes
+    // mismatches that render the sheet/button as "locked" even during open markets.
+    if (marketType && isEngineMarketType(marketType)) {
       return marketType;
     }
 
@@ -467,6 +470,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
   useEffect(() => {
     setStickyViewerPin(null);
+    passedViewerPinIdsRef.current = new Set();
   }, [room.roomId]);
 
   useEffect(() => {
@@ -488,6 +492,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       let next = sticky;
 
       if (next && last && metersBetween(last, next) < PASSED_CLEAR_LINE_M) {
+        passedViewerPinIdsRef.current.add(String(next.id));
         next = null;
       }
 
@@ -495,8 +500,13 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         apiHead?.id != null
           ? { id: apiHead.id, lat: apiHead.lat, lng: apiHead.lng }
           : marketTurn;
+      const candidateId = candidate ? String(candidate.id) : null;
+      const candidateWasPassed =
+        candidateId != null && passedViewerPinIdsRef.current.has(candidateId);
 
-      if (!next && candidate) return candidate;
+      // Lock pin identity: once shown, never switch to another pin until passed.
+      // Also ignore stale "already passed" pins that can briefly come back from API refreshes.
+      if (!next && candidate && !candidateWasPassed) return candidate;
 
       if (next && apiHead?.id === next.id) {
         return { ...next, lat: apiHead.lat, lng: apiHead.lng };
@@ -636,12 +646,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
       const pickZone = displayBetType === "next_zone";
       const zoneWhole = displayBetType === "turns_before_zone_exit" || displayBetType === "stop_count";
-      // Keep framing consistent with viewerTargetWidthMeters.
-      const framingM = pickZone
-        ? 700
-        : zoneWhole
-          ? Math.max(600, cityGridSpec.cellMeters)
-          : 500;
+      // Keep framing consistent with the width target for every active bet type.
+      const framingM = Math.max(250, viewerTargetWidthMeters ?? 250);
 
       return {
         bounds: squareWgs84BoundsFromCenter(centerLat, centerLng, framingM),
@@ -649,12 +655,16 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       };
     }
 
-    // Non–city_grid markets: apply a fixed frame based on the active bet type.
-    // next_turn is excluded above (returns early); everything else gets 500 m.
-    if (displayBetType != null) {
+    // Non–city_grid markets: still frame by active bet type so the map matches the ribbon /
+    // bottom sheet (engine `stop_count` etc. has no `cityGridSpec` but uses the same labels).
+    if (displayBetType != null && routeLast) {
+      const pickZone = displayBetType === "next_zone";
+      const zoneWhole =
+        displayBetType === "turns_before_zone_exit" || displayBetType === "stop_count";
+      const framingM = Math.max(250, viewerTargetWidthMeters ?? 250);
       return {
-        bounds: squareWgs84BoundsFromCenter(routeLast.lat, routeLast.lng, 500),
-        minZoom: 15.5,
+        bounds: squareWgs84BoundsFromCenter(routeLast.lat, routeLast.lng, framingM),
+        minZoom: pickZone ? 15.5 : zoneWhole ? 16.0 : 16.5,
       };
     }
 
@@ -666,6 +676,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     routeLast?.lat,
     routeLast?.lng,
     selectedZoneId,
+    viewerTargetWidthMeters,
   ]);
 
   const passedMarketTurn =
@@ -687,10 +698,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const viewerDecisionLatLng =
     viewerTurnTargetForMap != null
       ? { lat: viewerTurnTargetForMap.lat, lng: viewerTurnTargetForMap.lng }
-      : stickyViewerPin ??
-        (driverPins?.[0]
-          ? { lat: driverPins[0].lat, lng: driverPins[0].lng }
-          : null);
+      : stickyViewerPin
+        ? { lat: stickyViewerPin.lat, lng: stickyViewerPin.lng }
+        : null;
 
   // Per-bet lock rules (client-side mirror of server rules):
   // - next_turn: lock at <= 70m to next pin (looser, keeps market open longer)
@@ -890,7 +900,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const sheetBettingClosed =
     !currentMarket ||
     isLocked ||
-    (isEngineMarketType(displayBetType ?? "") &&
+    (viewerEnginePillType != null &&
+      isEngineMarketType(displayBetType ?? "") &&
       currentMarket.marketType !== (displayBetType ?? ""));
 
   const mapBetSheetOpen =
