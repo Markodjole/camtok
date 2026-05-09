@@ -572,10 +572,20 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
   /**
    * Single source of truth for "what bet is the viewer looking at right now".
-   * Uses the stable (≥5 s hold) version so the UI doesn't flicker.
-   * Pill click bypasses the hold and switches immediately.
+   * Priority:
+   *  1) Explicit pill pick by the viewer.
+   *  2) Currently open market type (engine markets + city_grid=>next_zone).
+   *  3) Stable auto-rotation fallback (≥5 s hold) when no market anchor exists.
    */
-  const displayBetType: BetTypeV2 | null = stableDisplayBetType;
+  const marketAnchoredBetType: BetTypeV2 | null =
+    currentMarket?.marketType === "city_grid"
+      ? "next_zone"
+      : (currentMarket?.marketType &&
+            isEngineMarketType(currentMarket.marketType)
+          ? (currentMarket.marketType as BetTypeV2)
+          : null);
+  const displayBetType: BetTypeV2 | null =
+    viewerEnginePillType ?? marketAnchoredBetType ?? stableDisplayBetType;
 
   const zonesVisualStyleForBet =
     displayBetType === "next_zone" ? "pick_zone" : zoneEngineBetActive ? "muted" : "default";
@@ -1142,22 +1152,32 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   };
 
   const showJoystick =
+    (() => {
+      const isNextTurnDisplay = String(displayBetType) === "next_turn";
+      return (
     joyPortalReady &&
     showLiveBets &&
     currentMarket != null &&
     !viewerHasBetOnCurrentMarket &&
     !isLocked &&
     (currentMarket.marketType !== "city_grid" ||
-      effectiveEngineType === "next_turn") &&
-    (!mapBetSheetOpen || effectiveEngineType === "next_turn");
+          isNextTurnDisplay) &&
+        (!mapBetSheetOpen || isNextTurnDisplay)
+      );
+    })();
 
   const joystickLocked =
+    (() => {
+      const isNextTurnDisplay = String(displayBetType) === "next_turn";
+      return (
     isLocked ||
     !currentMarket ||
     (currentMarket.marketType === "city_grid" &&
-      effectiveEngineType !== "next_turn") ||
+          !isNextTurnDisplay) ||
     !!placingOptionId ||
-    viewerHasBetOnCurrentMarket;
+        viewerHasBetOnCurrentMarket
+      );
+    })();
 
   const onPipPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     if (pipLongPressTimerRef.current) clearTimeout(pipLongPressTimerRef.current);
@@ -1188,7 +1208,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         currentBetHeadline={viewerCurrentBetHeadline}
         nowTick={nowTick}
         eligibleRoundPlans={activeBettingRound?.eligibleRoundPlans ?? []}
-        highlightedEngineType={effectiveEngineType}
+        highlightedEngineType={displayBetType}
         onSelectEngineType={(t) => {
           setViewerEnginePillType((prev) => (prev === t ? null : t));
         }}
