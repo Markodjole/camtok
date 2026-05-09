@@ -601,7 +601,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
    */
   const viewerTargetWidthMeters =
     displayBetType === "next_zone"
-      ? 700
+      ? 1000
       : zoneWholeViewBet
         ? Math.max(600, cityGridSpec?.cellMeters ?? 600)
         : 250;
@@ -1274,6 +1274,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             viewerFollowLatLngBounds={viewerGridMapFraming.bounds}
             viewerFollowBoundsMinZoom={viewerGridMapFraming.minZoom}
             viewerTargetWidthMeters={viewerTargetWidthMeters}
+            viewerZoomRuleKey={`${displayBetType ?? "none"}:${currentMarket?.id ?? "nomarket"}`}
             onZoneSelect={(id) => {
               setSelectedZoneId(id);
               if (id) setSelectedCheckpointId(null);
@@ -1435,6 +1436,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               viewerFollowLatLngBounds={viewerGridMapFraming.bounds}
               viewerFollowBoundsMinZoom={viewerGridMapFraming.minZoom}
               viewerTargetWidthMeters={viewerTargetWidthMeters}
+              viewerZoomRuleKey={`${displayBetType ?? "none"}:${currentMarket?.id ?? "nomarket"}`}
             />
             {routePoints.length === 0 && (
               <div className="absolute inset-0 flex items-center justify-center bg-black/30 text-[9px] text-white/70">

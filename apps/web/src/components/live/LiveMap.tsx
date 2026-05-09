@@ -133,9 +133,11 @@ export interface LiveMapProps {
    * system for ongoing zoom control. Cleared user overrides when it changes (bet change).
    * - 125 m  → next_turn (tight turn view)
    * - 250 m  → default / all other bets
-   * - 600 m  → next_zone (show surrounding cells)
+   * - 1000 m → next_zone (show surrounding cells)
    */
   viewerTargetWidthMeters?: number | null;
+  /** Changes when bet framing rules change; clears any latched user zoom override. */
+  viewerZoomRuleKey?: string | null;
   /** Muted polygons for engine-highlighted zone overlays. */
   zonesVisualStyle?: "default" | "muted" | "pick_zone";
 }
@@ -264,6 +266,7 @@ export function LiveMap({
   viewerFollowLatLngBounds = null,
   viewerFollowBoundsMinZoom = null,
   viewerTargetWidthMeters = null,
+  viewerZoomRuleKey = null,
   zonesVisualStyle = "default" as "default" | "muted" | "pick_zone",
 }: LiveMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -328,7 +331,7 @@ export function LiveMap({
   // so auto-zoom kicks in for the new bet's zoom level.
   useEffect(() => {
     userZoomOverrideRef.current = null;
-  }, [viewerTargetWidthMeters]);
+  }, [viewerTargetWidthMeters, viewerZoomRuleKey]);
   useEffect(() => {
     onUserInteractRef.current = onUserInteract;
   }, [onUserInteract]);
