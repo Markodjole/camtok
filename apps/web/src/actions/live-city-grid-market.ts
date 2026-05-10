@@ -6,6 +6,7 @@ import { buildCityGrid500 } from "@/lib/live/grid/cityGrid500";
 import { fetchCityViewportFromGoogle } from "@/lib/live/grid/googleCityViewport";
 import { Safety, type LiveMarketOption, type TransportMode } from "@bettok/live";
 import { liveBetRelaxServer } from "@/lib/live/liveBetRelax";
+import { MIN_MS_BETWEEN_SYSTEM_MARKETS } from "@/lib/live/liveBetMinOpenMs";
 
 /**
  * Opens a system market whose options are 500 m × 500 m grid cells over the
@@ -83,7 +84,10 @@ export async function openCityGridMarketForRoom(roomId: string) {
       const referenceMs = Number.isFinite(prevRevealMs as number)
         ? (prevRevealMs as number)
         : prevOpensMs;
-      if (Number.isFinite(referenceMs) && nowMs - referenceMs < 400) {
+      if (
+        Number.isFinite(referenceMs) &&
+        nowMs - referenceMs < MIN_MS_BETWEEN_SYSTEM_MARKETS
+      ) {
         return { error: "Spacing: previous market too recent" };
       }
     }

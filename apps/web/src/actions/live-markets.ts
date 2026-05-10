@@ -21,7 +21,10 @@ import {
 } from "@/lib/live/grid/cityGrid500";
 import { LIVE_BET_LOCK_DISTANCE_M } from "@/lib/live/liveBetLockDistance";
 import { liveBetRelaxServer } from "@/lib/live/liveBetRelax";
-import { MIN_MARKET_OPEN_MS_BEFORE_LOCK } from "@/lib/live/liveBetMinOpenMs";
+import {
+  MIN_MARKET_OPEN_MS_BEFORE_LOCK,
+  MIN_MS_BETWEEN_SYSTEM_MARKETS,
+} from "@/lib/live/liveBetMinOpenMs";
 import { buildServerClickSnapshot } from "@/lib/live/betting/clickSnapshot";
 import { computeDriverRouteInstruction } from "@/lib/live/routing/computeDriverRouteInstruction";
 
@@ -509,8 +512,10 @@ export async function openSystemMarketForRoom(roomId: string) {
       const referenceMs = Number.isFinite(prevRevealMs as number)
         ? (prevRevealMs as number)
         : prevOpensMs;
-      // 12 s minimum gap between any two markets in the same room.
-      if (Number.isFinite(referenceMs) && nowMs - referenceMs < 400) {
+      if (
+        Number.isFinite(referenceMs) &&
+        nowMs - referenceMs < MIN_MS_BETWEEN_SYSTEM_MARKETS
+      ) {
         return { error: "Spacing: previous decision too recent" };
       }
     }

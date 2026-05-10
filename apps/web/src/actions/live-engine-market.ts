@@ -9,6 +9,7 @@ import {
   provisionalOptionsForBetType,
 } from "@/lib/live/betting/engineMarketOptions";
 import { liveBetRelaxServer } from "@/lib/live/liveBetRelax";
+import { MIN_MS_BETWEEN_SYSTEM_MARKETS } from "@/lib/live/liveBetMinOpenMs";
 import { engineBetHeadline } from "@/lib/live/betting/betTypeV2Label";
 import { metersBetween } from "@/lib/live/routing/geometry";
 
@@ -123,7 +124,7 @@ export async function openEngineMarketForRoom(roomId: string) {
       : null;
     const prevOpensMs = Date.parse((prevMkt as { opens_at: string }).opens_at);
     const refMs = Number.isFinite(prevRevealMs as number) ? (prevRevealMs as number) : prevOpensMs;
-    if (Number.isFinite(refMs) && nowMs - refMs < 400) {
+    if (Number.isFinite(refMs) && nowMs - refMs < MIN_MS_BETWEEN_SYSTEM_MARKETS) {
       return { error: "Spacing: previous market too recent" };
     }
   }

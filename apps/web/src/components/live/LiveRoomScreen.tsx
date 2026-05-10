@@ -17,7 +17,10 @@ import { drivingRouteStyleBadges } from "@/lib/live/routing/drivingRouteStyle";
 import dynamic from "next/dynamic";
 import type { LiveFeedRow, RoutePoint } from "@/actions/live-feed";
 import { LIVE_BET_LOCK_DISTANCE_M } from "@/lib/live/liveBetLockDistance";
-import { MIN_MARKET_OPEN_MS_BEFORE_LOCK } from "@/lib/live/liveBetMinOpenMs";
+import {
+  MIN_MARKET_OPEN_MS_BEFORE_LOCK,
+  MIN_MS_BETWEEN_SYSTEM_MARKETS,
+} from "@/lib/live/liveBetMinOpenMs";
 import { liveBetRelaxClient } from "@/lib/live/liveBetRelax";
 import { metersBetween, squareWgs84BoundsFromCenter } from "@/lib/live/routing/geometry";
 import { LiveVideoPlayer } from "./LiveVideoPlayer";
@@ -322,9 +325,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   /**
    * Stable display bet — only switches to a new type when:
    *  1. The user explicitly tapped a pill (`viewerEnginePillType` changed), OR
-   *  2. The effective engine type changed AND the current type has been shown for ≥5 s
-   *     AND the new type is expected to last ≥5 s (we can't perfectly predict this,
-   *     so we just enforce the 5 s minimum hold on the outgoing type).
+   *  2. The effective engine type changed AND the current type has been shown for the
+   *     minimum hold window (same as MIN_MS_BETWEEN_SYSTEM_MARKETS on the server).
    */
   const [stableDisplayBetType, setStableDisplayBetType] = useState<BetTypeV2 | null>(
     effectiveEngineType,
@@ -601,7 +603,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           ? (currentMarket.marketType as BetTypeV2)
           : null);
   const displayBetType: BetTypeV2 | null =
-    viewerEnginePillType ?? stableDisplayBetType ?? marketAnchoredBetType;
+    viewerEnginePillType ?? stableDisplayBetType ?? effectiveEngineType ?? marketAnchoredBetType;
   /** Map camera tracks intent immediately; ribbon/sheet can stay stable via `displayBetType`. */
   const mapBetTypeForCamera: BetTypeV2 | null =
     viewerEnginePillType ?? effectiveEngineType ?? marketAnchoredBetType;
