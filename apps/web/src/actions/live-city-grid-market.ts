@@ -83,7 +83,7 @@ export async function openCityGridMarketForRoom(roomId: string) {
       const referenceMs = Number.isFinite(prevRevealMs as number)
         ? (prevRevealMs as number)
         : prevOpensMs;
-      if (Number.isFinite(referenceMs) && nowMs - referenceMs < 12_000) {
+      if (Number.isFinite(referenceMs) && nowMs - referenceMs < 400) {
         return { error: "Spacing: previous market too recent" };
       }
     }

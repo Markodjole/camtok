@@ -596,41 +596,34 @@ export function LiveMap({
             }
             const muted = zonesVisualStyle === "muted";
             const pickZone = zonesVisualStyle === "pick_zone";
-            // Light strokes + very low fill so roads read; zone hue only hints inside cells.
+            // Strong green outlines — always readable over the basemap.
+            const EDGE = "#22c55e";
+            const EDGE_SOFT = "#4ade80";
             let strokeColor: string;
             let strokeWeight: number;
             let fillC: string;
             let fillOp: number;
             let dashArr: string | undefined;
             if (pickZone) {
-              // All non-current cells: visible border + subtle pastel tint.
-              // Current cell (selected or active): highlighted.
-              strokeColor = selected
-                ? "rgba(255,255,255,0.90)"
-                : "rgba(148,163,184,0.75)";
-              strokeWeight = selected ? 2.5 : 1.6;
+              strokeColor = selected ? "#ecfdf5" : EDGE;
+              strokeWeight = selected ? 5 : 4;
               fillC = selected ? color : color;
-              // Keep current zone clear; tint only other zones.
-              fillOp = isCurrentZone ? 0 : selected ? 0.18 : isActive ? 0.09 : 0.04;
-              dashArr = selected ? undefined : undefined;
+              fillOp = isCurrentZone ? 0 : selected ? 0.14 : isActive ? 0.07 : 0.04;
+              dashArr = undefined;
             } else if (muted) {
-              strokeColor = selected
-                ? "rgba(255,255,255,0.62)"
-                : "rgba(203,213,225,0.42)";
-              strokeWeight = selected ? 1.75 : 1.1;
-              fillC = "rgba(148,163,184,0.5)";
-              fillOp = selected ? 0.06 : isActive ? 0.035 : 0.02;
-              dashArr = selected ? undefined : "6 5";
+              strokeColor = selected ? "#dcfce7" : EDGE_SOFT;
+              strokeWeight = selected ? 4.5 : 3.5;
+              fillC = "rgba(34,197,94,0.35)";
+              fillOp = selected ? 0.08 : isActive ? 0.045 : 0.025;
+              dashArr = selected ? undefined : "5 4";
             } else {
-              strokeColor = selected
-                ? "rgba(255,255,255,0.78)"
-                : "rgba(248,250,252,0.38)";
-              strokeWeight = selected ? 2.25 : 1.5;
+              strokeColor = selected ? "#f0fdf4" : EDGE;
+              strokeWeight = selected ? 5 : 4;
               fillC = color;
               fillOp = selected
-                ? isActive ? 0.1 : 0.05
-                : isActive ? 0.055 : 0.028;
-              dashArr = selected ? undefined : "7 5";
+                ? isActive ? 0.09 : 0.05
+                : isActive ? 0.05 : 0.03;
+              dashArr = selected ? undefined : "6 4";
             }
             const poly = L.polygon(latlngs, {
               color: strokeColor,

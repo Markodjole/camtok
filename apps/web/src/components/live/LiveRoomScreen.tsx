@@ -17,6 +17,7 @@ import { drivingRouteStyleBadges } from "@/lib/live/routing/drivingRouteStyle";
 import dynamic from "next/dynamic";
 import type { LiveFeedRow, RoutePoint } from "@/actions/live-feed";
 import { LIVE_BET_LOCK_DISTANCE_M } from "@/lib/live/liveBetLockDistance";
+import { MIN_MARKET_OPEN_MS_BEFORE_LOCK } from "@/lib/live/liveBetMinOpenMs";
 import { liveBetRelaxClient } from "@/lib/live/liveBetRelax";
 import { metersBetween, squareWgs84BoundsFromCenter } from "@/lib/live/routing/geometry";
 import { LiveVideoPlayer } from "./LiveVideoPlayer";
@@ -42,7 +43,7 @@ import { useViewerChromeStore } from "@/stores/viewer-chrome-store";
 import type { BetTypeV2 } from "@bettok/live";
 import {
   isEngineMarketType,
-  provisionalOptionsForBetType,
+  sheetOptionsForDisplayBet,
 } from "@/lib/live/betting/engineMarketOptions";
 
 const LiveMap = dynamic(() => import("./LiveMap").then((m) => m.LiveMap), {
@@ -811,7 +812,15 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       if (!Number.isFinite(t)) return false;
       return t <= Date.now();
     })();
-  const isLocked = isTimeLocked || isDistanceLocked;
+  /** Match server/tick: never treat market as lockable until this long after opens_at. */
+  const marketOpenGraceElapsed =
+    !currentMarket?.opensAt ||
+    !Number.isFinite(Date.parse(currentMarket.opensAt)) ||
+    nowTick >= Date.parse(currentMarket.opensAt) + MIN_MARKET_OPEN_MS_BEFORE_LOCK;
+
+  const isLocked =
+    marketOpenGraceElapsed &&
+    (isTimeLocked || isDistanceLocked);
 
   /** Ribbon: open vs closed from lock distance (+ time safety net), not revealAt flicker. */
   const viewerRailPhase: "none" | "pending" | "active" = (() => {
@@ -829,12 +838,15 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           })
         : Number.POSITIVE_INFINITY;
     const timeClosed =
+      marketOpenGraceElapsed &&
       !liveBetRelaxClient() &&
       !!currentMarket &&
       Number.isFinite(Date.parse(currentMarket.locksAt)) &&
       nowTick >= Date.parse(currentMarket.locksAt);
     const distClosed =
-      !liveBetRelaxClient() && distBet <= LIVE_BET_LOCK_DISTANCE_M;
+      marketOpenGraceElapsed &&
+      !liveBetRelaxClient() &&
+      distBet <= LIVE_BET_LOCK_DISTANCE_M;
     if (distClosed || timeClosed) return "active";
     return "pending";
   })();
@@ -937,14 +949,12 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     displayBetType !== "next_turn" &&
     displayBetType !== "next_zone";
 
-  // For engine bet types use the provisional option list (always meaningful labels).
-  // For other types fall back to what the open market provides.
+  // Real options when market matches; otherwise believable placeholders so the sheet is never empty.
   const sheetMarketOptions: Array<{ id: string; label: string; shortLabel?: string; displayOrder: number }> =
-    displayBetType && isEngineMarketType(displayBetType)
-      ? (currentMarket?.marketType === displayBetType && currentMarket.options.length
-          ? currentMarket.options
-          : provisionalOptionsForBetType(displayBetType as BetTypeV2))
-      : (currentMarket?.options ?? []);
+    useMemo(
+      () => sheetOptionsForDisplayBet(displayBetType, currentMarket),
+      [displayBetType, currentMarket],
+    );
   const sheetMarketOptionsLimited = sheetMarketOptions
     .slice()
     .sort((a, b) => a.displayOrder - b.displayOrder)
@@ -1006,13 +1016,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       setSelectedMapOptionId(selectedZoneId);
       return;
     }
-    if (displayBetType && isEngineMarketType(displayBetType)) {
-      // Prefer the actual market options when they match this bet type; fall
-      // back to provisional options so there is always a default selection.
-      const source =
-        currentMarket?.marketType === displayBetType && currentMarket.options.length
-          ? currentMarket.options
-          : provisionalOptionsForBetType(displayBetType as BetTypeV2);
+    if (displayBetType) {
+      const source = sheetOptionsForDisplayBet(displayBetType, currentMarket);
       const limited = source
         .slice()
         .sort((a, b) => a.displayOrder - b.displayOrder)
@@ -1031,6 +1036,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     selectedZoneId,
     selectedCheckpointId,
     displayBetType,
+    currentMarket?.options,
   ]);
 
   useEffect(() => {

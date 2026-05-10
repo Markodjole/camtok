@@ -21,6 +21,7 @@ import {
 } from "@/lib/live/grid/cityGrid500";
 import { LIVE_BET_LOCK_DISTANCE_M } from "@/lib/live/liveBetLockDistance";
 import { liveBetRelaxServer } from "@/lib/live/liveBetRelax";
+import { MIN_MARKET_OPEN_MS_BEFORE_LOCK } from "@/lib/live/liveBetMinOpenMs";
 import { buildServerClickSnapshot } from "@/lib/live/betting/clickSnapshot";
 import { computeDriverRouteInstruction } from "@/lib/live/routing/computeDriverRouteInstruction";
 
@@ -105,7 +106,7 @@ export async function placeLiveBet(input: PlaceLiveBetInput) {
   const { data: market } = await service
     .from("live_betting_markets")
     .select(
-      "id, room_id, status, locks_at, option_set, turn_point_lat, turn_point_lng, live_session_id, market_type, city_grid_spec",
+      "id, room_id, status, opens_at, locks_at, option_set, turn_point_lat, turn_point_lng, live_session_id, market_type, city_grid_spec",
     )
     .eq("id", parsed.data.marketId)
     .maybeSingle();
@@ -115,6 +116,10 @@ export async function placeLiveBet(input: PlaceLiveBetInput) {
     return { error: "Market not open" };
   }
   const roomIdForRoom = (market as { room_id: string }).room_id;
+  const opensAtMs = Date.parse((market as { opens_at: string }).opens_at);
+  const insideOpenGrace =
+    Number.isFinite(opensAtMs) &&
+    Date.now() < opensAtMs + MIN_MARKET_OPEN_MS_BEFORE_LOCK;
   const locksAt = new Date((market as { locks_at: string }).locks_at).getTime();
   const marketType = (market as { market_type?: string }).market_type ?? "";
   const isEngineType =
@@ -122,9 +127,16 @@ export async function placeLiveBet(input: PlaceLiveBetInput) {
     marketType === "stop_count" ||
     marketType === "turn_count_to_pin" ||
     marketType === "turns_before_zone_exit" ||
-    marketType === "zone_exit_time";
+    marketType === "zone_exit_time" ||
+    marketType === "zone_duration" ||
+    marketType === "eta_drift";
   const ignoreTimeLock = marketType === "city_grid" || isEngineType;
-  if (!liveBetRelaxServer() && !ignoreTimeLock && Date.now() >= locksAt) {
+  if (
+    !liveBetRelaxServer() &&
+    !insideOpenGrace &&
+    !ignoreTimeLock &&
+    Date.now() >= locksAt
+  ) {
     return { error: "Market has locked" };
   }
 
@@ -150,6 +162,7 @@ export async function placeLiveBet(input: PlaceLiveBetInput) {
 
   if (
     !liveBetRelaxServer() &&
+    !insideOpenGrace &&
     turnLat != null &&
     turnLng != null &&
     sessionId &&
@@ -177,7 +190,7 @@ export async function placeLiveBet(input: PlaceLiveBetInput) {
 
   const gridSpec = (market as { city_grid_spec: CityGridSpecCompact | null })
     .city_grid_spec;
-  if (!liveBetRelaxServer() && latestGpsRow) {
+  if (!liveBetRelaxServer() && !insideOpenGrace && latestGpsRow) {
     const gps = latestGpsRow as {
       normalized_lat: number | null;
       normalized_lng: number | null;
@@ -456,7 +469,7 @@ export async function openSystemMarketForRoom(roomId: string) {
     .eq("live_session_id", sessionId)
     .order("recorded_at", { ascending: false })
     .limit(10);
-  if (!recent || recent.length < 3) {
+  if (!recent || recent.length < 2) {
     return { error: "Not enough route data yet" };
   }
 
@@ -497,7 +510,7 @@ export async function openSystemMarketForRoom(roomId: string) {
         ? (prevRevealMs as number)
         : prevOpensMs;
       // 12 s minimum gap between any two markets in the same room.
-      if (Number.isFinite(referenceMs) && nowMs - referenceMs < 12_000) {
+      if (Number.isFinite(referenceMs) && nowMs - referenceMs < 400) {
         return { error: "Spacing: previous decision too recent" };
       }
     }

@@ -36,6 +36,8 @@ export type LiveFeedRow = {
     id: string;
     title: string;
     marketType: string;
+    /** When the current market row became open — used for min betting window. */
+    opensAt: string;
     locksAt: string;
     revealAt: string;
     options: Array<{ id: string; label: string; shortLabel?: string; displayOrder: number }>;
@@ -80,6 +82,7 @@ function liveFeedRowFromActiveRoomRow(r: Record<string, unknown>): LiveFeedRow {
           id: r.current_market_id as string,
           title: (r.current_market_title as string) ?? "",
           marketType: (r.current_market_type as string) ?? "",
+          opensAt: (r.current_market_opens_at as string) ?? "",
           locksAt: (r.current_market_locks_at as string) ?? "",
           revealAt: (r.current_market_reveal_at as string) ?? "",
           options:

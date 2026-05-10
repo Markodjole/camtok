@@ -26,6 +26,8 @@ const ENGINE_ROTATION_ORDER: BetTypeV2[] = [
   "turn_count_to_pin",
   "turns_before_zone_exit",
   "zone_exit_time",
+  "zone_duration",
+  "eta_drift",
 ];
 
 /**
@@ -106,7 +108,7 @@ export async function openEngineMarketForRoom(roomId: string) {
   );
   if (!options.length) return { error: "No provisional options for this bet type" };
 
-  // 6-second minimum spacing between markets (looser for demo activity).
+  // Short spacing so markets can rotate quickly during demos (~0.4 s).
   const { data: prevMkt } = await service
     .from("live_betting_markets")
     .select("opens_at, reveal_at")
@@ -121,7 +123,7 @@ export async function openEngineMarketForRoom(roomId: string) {
       : null;
     const prevOpensMs = Date.parse((prevMkt as { opens_at: string }).opens_at);
     const refMs = Number.isFinite(prevRevealMs as number) ? (prevRevealMs as number) : prevOpensMs;
-    if (Number.isFinite(refMs) && nowMs - refMs < 6_000) {
+    if (Number.isFinite(refMs) && nowMs - refMs < 400) {
       return { error: "Spacing: previous market too recent" };
     }
   }

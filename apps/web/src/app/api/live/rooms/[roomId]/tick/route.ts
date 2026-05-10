@@ -9,6 +9,7 @@ import {
 import { lockMarket, revealAndSettleMarket } from "@/actions/live-settlement";
 import { LIVE_BET_LOCK_DISTANCE_M } from "@/lib/live/liveBetLockDistance";
 import { liveBetRelaxServer } from "@/lib/live/liveBetRelax";
+import { MIN_MARKET_OPEN_MS_BEFORE_LOCK } from "@/lib/live/liveBetMinOpenMs";
 import { metersBetween } from "@/lib/live/routing/geometry";
 import { isEngineMarketType } from "@/lib/live/betting/engineMarketOptions";
 import { computeDriverRouteInstruction } from "@/lib/live/routing/computeDriverRouteInstruction";
@@ -79,16 +80,22 @@ export async function POST(
     const { data: market } = await service
       .from("live_betting_markets")
       .select(
-        "id, status, locks_at, reveal_at, turn_point_lat, turn_point_lng, live_session_id, market_type, city_grid_spec",
+        "id, status, opens_at, locks_at, reveal_at, turn_point_lat, turn_point_lng, live_session_id, market_type, city_grid_spec",
       )
       .eq("id", marketId)
       .maybeSingle();
     if (!market) return NextResponse.json({ action: "no_market" });
 
     const now = Date.now();
+    const opensAtStr = (market as { opens_at: string }).opens_at;
+    const opensAtMs = Date.parse(opensAtStr);
     const locksAtStr = (market as { locks_at: string }).locks_at;
     const locksAt = new Date(locksAtStr).getTime();
     const revealAt = new Date((market as { reveal_at: string }).reveal_at).getTime();
+    const minLockEligibleAt =
+      Number.isFinite(opensAtMs) ? opensAtMs + MIN_MARKET_OPEN_MS_BEFORE_LOCK : 0;
+    const marketAgeOkForLock =
+      !Number.isFinite(opensAtMs) || now >= minLockEligibleAt;
     const status = (market as { status: string }).status;
     const marketType = (market as { market_type: string | null }).market_type ?? "";
 
@@ -102,7 +109,7 @@ export async function POST(
       const turnLat = (market as { turn_point_lat: number | null }).turn_point_lat;
       const turnLng = (market as { turn_point_lng: number | null }).turn_point_lng;
       const sessionId = (market as { live_session_id: string | null }).live_session_id;
-      if (!liveBetRelaxServer() && sessionId) {
+      if (marketAgeOkForLock && !liveBetRelaxServer() && sessionId) {
         const { data: latestGps } = await service
           .from("live_route_snapshots")
           .select("normalized_lat,normalized_lng,raw_lat,raw_lng")
@@ -148,7 +155,10 @@ export async function POST(
       }
       const timeoutApplies =
         marketType !== "city_grid" && !isEngineMarketType(marketType);
-      if (distanceLocked || (timeoutApplies && now >= locksAt)) {
+      if (
+        marketAgeOkForLock &&
+        (distanceLocked || (timeoutApplies && now >= locksAt))
+      ) {
         const r = await lockMarket(marketId);
         return NextResponse.json({
           action: "lock",
