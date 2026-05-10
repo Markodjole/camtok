@@ -7,12 +7,21 @@
  * only one side is set.
  */
 
+/**
+ * TEMPORARY: flip to `false` before shipping — bypasses distance/time locks on
+ * client + server (`liveBetRelaxServer` / `liveBetRelaxClient`) so every bet
+ * stays placeable while product rules are iterated.
+ */
+export const LIVE_BET_UNLOCK_ALL_TEMP = true;
+
 export function liveBetRelaxServer(): boolean {
+  if (LIVE_BET_UNLOCK_ALL_TEMP) return true;
   const v = process.env.LIVE_RELAX_BETTING ?? "";
   return v === "1" || v.toLowerCase() === "true";
 }
 
 export function liveBetRelaxClient(): boolean {
+  if (LIVE_BET_UNLOCK_ALL_TEMP) return true;
   const v = process.env.NEXT_PUBLIC_LIVE_RELAX_BETTING ?? "";
   return v === "1" || v.toLowerCase() === "true";
 }

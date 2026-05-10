@@ -954,10 +954,11 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   // market is a different type than the engine bet being shown.
   const sheetBettingClosed =
     !currentMarket ||
-    isLocked ||
-    (viewerEnginePillType != null &&
-      isEngineMarketType(displayBetType ?? "") &&
-      currentMarket.marketType !== (displayBetType ?? ""));
+    (!liveBetRelaxClient() &&
+      (isLocked ||
+        (viewerEnginePillType != null &&
+          isEngineMarketType(displayBetType ?? "") &&
+          currentMarket.marketType !== (displayBetType ?? ""))));
 
   const mapBetSheetOpen =
     showViewerGridBetSheet || showViewerDirectionalBetSheet;
@@ -1524,7 +1525,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           marketOptions={[]}
           selectedOptionId={selectedZoneId}
           onSelectOption={() => undefined}
-          bettingClosed={isLocked || !currentMarket}
+          bettingClosed={
+            !currentMarket || (!liveBetRelaxClient() && isLocked)
+          }
           isPlacing={!!placingOptionId}
           error={mapSheetError}
           countdown={currentMarket ? <MarketTimer locksAt={currentMarket.locksAt} /> : null}
@@ -1564,7 +1567,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           bettingClosed={sheetBettingClosed}
           bettingPending={
             !currentMarket ||
-            (isEngineMarketType(displayBetType ?? "") &&
+            (!liveBetRelaxClient() &&
+              isEngineMarketType(displayBetType ?? "") &&
               currentMarket.marketType !== (displayBetType ?? ""))
           }
           isPlacing={!!placingOptionId}
