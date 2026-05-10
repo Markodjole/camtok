@@ -36,11 +36,13 @@ export function sheetOptionsForDisplayBet(
   currentMarket: MarketOptsRow | null | undefined,
 ): Array<{ id: string; label: string; shortLabel?: string; displayOrder: number }> {
   if (!displayBetType) return currentMarket?.options ?? [];
+  const dbOptions = currentMarket?.options;
   if (
     currentMarket?.marketType === displayBetType &&
-    (currentMarket.options?.length ?? 0) > 0
+    dbOptions &&
+    dbOptions.length > 0
   ) {
-    return currentMarket.options;
+    return dbOptions;
   }
   const prov = provisionalOptionsForBetType(displayBetType);
   if (prov.length > 0) return prov;
