@@ -15,6 +15,11 @@ import { LiveDecisionStatusRibbon } from "./LiveDecisionStatusRibbon";
 import { computeStreamGuidance } from "@/lib/live/streamGuidance";
 import { DestinationPicker, type PickedDestination } from "./DestinationPicker";
 import {
+  destinationStorageKey,
+  loadRecentDriveDestinations,
+  rememberDriveDestination,
+} from "@/lib/live/recentDriveDestinations";
+import {
   DEFAULT_DRIVING_ROUTE_STYLE,
   drivingRouteStyleBadges,
   type DrivingRouteStyle,
@@ -81,10 +86,11 @@ export function OwnerLiveControlPanel({
   characterId: string;
   characterDrivingRouteStyle?: DrivingRouteStyle;
 }) {
-  const [transportMode, setTransportMode] = useState<TransportMode>("walking");
-  const [statusText, setStatusText] = useState("");
-  const [intentLabel, setIntentLabel] = useState("");
+  /** Driving sessions always use car transport (safety + routing tuned for road). */
+  const DRIVER_TRANSPORT: TransportMode = "car";
   const [destination, setDestination] = useState<PickedDestination | null>(null);
+  const [recentDestinations, setRecentDestinations] = useState<PickedDestination[]>([]);
+  const [showNewPlaceSearch, setShowNewPlaceSearch] = useState(false);
   const [currentPos, setCurrentPos] = useState<{ lat: number; lng: number } | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [roomId, setRoomId] = useState<string | null>(null);
@@ -113,6 +119,12 @@ export function OwnerLiveControlPanel({
   const [pipDragReady, setPipDragReady] = useState(false);
 
   // Keep the screen awake for the entire live session.
+  useEffect(() => {
+    const list = loadRecentDriveDestinations(characterId);
+    setRecentDestinations(list);
+    setShowNewPlaceSearch(list.length === 0);
+  }, [characterId]);
+
   useEffect(() => {
     if (!sessionId) return;
     if (!("wakeLock" in navigator)) return;
@@ -149,9 +161,9 @@ export function OwnerLiveControlPanel({
     () =>
       drivingRouteStyleBadges(
         characterDrivingRouteStyle ?? DEFAULT_DRIVING_ROUTE_STYLE,
-        transportMode,
+        DRIVER_TRANSPORT,
       ),
-    [characterDrivingRouteStyle, transportMode],
+    [characterDrivingRouteStyle],
   );
 
   const watchIdRef = useRef<number | null>(null);
@@ -204,9 +216,7 @@ export function OwnerLiveControlPanel({
 
     const res = await startLiveSession({
       characterId,
-      transportMode,
-      statusText: statusText.trim() || undefined,
-      intentLabel: intentLabel.trim() || undefined,
+      transportMode: DRIVER_TRANSPORT,
       destination: destination
         ? {
             lat: destination.lat,
@@ -220,6 +230,11 @@ export function OwnerLiveControlPanel({
       setError(res.error ?? "Failed to start session");
       setStarting(false);
       return;
+    }
+
+    if (destination) {
+      rememberDriveDestination(characterId, destination);
+      setRecentDestinations(loadRecentDriveDestinations(characterId));
     }
 
     setSessionId(res.sessionId);
@@ -281,7 +296,7 @@ export function OwnerLiveControlPanel({
         await fetch(`/api/live/sessions/${sid}/location`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ transportMode, points: batch }),
+          body: JSON.stringify({ transportMode: DRIVER_TRANSPORT, points: batch }),
         }).catch(() => undefined);
       }
       const hb = await fetch(`/api/live/sessions/${sid}/heartbeat`, {
@@ -646,7 +661,7 @@ export function OwnerLiveControlPanel({
               className="h-full w-full"
               interactive={true}
               audienceRole="streamer"
-              transportMode={transportMode}
+              transportMode={DRIVER_TRANSPORT}
               rotateWithHeading={true}
               followMode={true}
               tileOpacity={1}
@@ -706,8 +721,8 @@ export function OwnerLiveControlPanel({
             aria-label="Live"
             title="Live"
           />
-          <span className="text-white/85" aria-label={transportMode} title={transportMode}>
-            <TransportModeIcon mode={transportMode} className="h-6 w-6" />
+          <span className="text-white/85" aria-label={DRIVER_TRANSPORT} title={DRIVER_TRANSPORT}>
+            <TransportModeIcon mode={DRIVER_TRANSPORT} className="h-6 w-6" />
           </span>
         </div>
 
@@ -740,7 +755,7 @@ export function OwnerLiveControlPanel({
                 className="h-full w-full"
                 interactive={false}
                 audienceRole="streamer"
-                transportMode={transportMode}
+                transportMode={DRIVER_TRANSPORT}
                 rotateWithHeading={true}
                 followMode={true}
                 tileOpacity={0.65}
@@ -813,45 +828,90 @@ export function OwnerLiveControlPanel({
       <h1 className="mb-6 text-xl font-semibold text-white">Go live</h1>
 
       <div className="space-y-4">
+        <p className="text-[11px] text-white/45">
+          Transport: car · saved destinations below (search to add a new one).
+        </p>
+
         <div>
-          <label className="text-xs text-white/40">Transport mode</label>
+          <label className="text-xs text-white/40">Destination</label>
           <select
-            value={transportMode}
-            onChange={(e) => setTransportMode(e.target.value as TransportMode)}
+            value={(() => {
+              if (showNewPlaceSearch) return "__new__";
+              if (!destination) return "";
+              return recentDestinations.some(
+                (d) =>
+                  destinationStorageKey(d) === destinationStorageKey(destination),
+              )
+                ? destinationStorageKey(destination)
+                : "";
+            })()}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v === "") {
+                setDestination(null);
+                setShowNewPlaceSearch(false);
+                return;
+              }
+              if (v === "__new__") {
+                setDestination(null);
+                setShowNewPlaceSearch(true);
+                return;
+              }
+              const hit = recentDestinations.find(
+                (d) => destinationStorageKey(d) === v,
+              );
+              if (hit) {
+                setDestination(hit);
+                setShowNewPlaceSearch(false);
+              }
+            }}
             className="mt-1 w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 text-sm text-white"
           >
-            <option value="walking">Walking</option>
-            <option value="bike">Bike</option>
-            <option value="scooter">Scooter</option>
-            <option value="car">Car</option>
+            <option value="">
+              {recentDestinations.length ? "Choose a saved place…" : "No saved places yet"}
+            </option>
+            {recentDestinations.map((d) => (
+              <option key={destinationStorageKey(d)} value={destinationStorageKey(d)}>
+                {d.label}
+              </option>
+            ))}
+            <option value="__new__">Search for a new place…</option>
           </select>
+          {destination &&
+          !recentDestinations.some(
+            (d) => destinationStorageKey(d) === destinationStorageKey(destination),
+          ) ? (
+            <p className="mt-1 truncate text-[11px] text-white/55" title={destination.label}>
+              Selected: {destination.label}
+            </p>
+          ) : null}
         </div>
 
-        <div>
-          <label className="text-xs text-white/40">Status</label>
-          <input
-            value={statusText}
-            onChange={(e) => setStatusText(e.target.value)}
-            placeholder="e.g. going out to get drinks"
-            className="mt-1 w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 text-sm text-white placeholder:text-white/20"
-          />
-        </div>
-
-        <div>
-          <label className="text-xs text-white/40">Intent (optional)</label>
-          <input
-            value={intentLabel}
-            onChange={(e) => setIntentLabel(e.target.value)}
-            placeholder="e.g. looking for food"
-            className="mt-1 w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 text-sm text-white placeholder:text-white/20"
-          />
-        </div>
-
-        <DestinationPicker
-          value={destination}
-          onChange={setDestination}
-          bias={currentPos}
-        />
+        {showNewPlaceSearch ? (
+          <div className="space-y-2">
+            <DestinationPicker
+              variant="searchOnly"
+              noTopLabel
+              value={null}
+              onChange={(next) => {
+                if (next) {
+                  setDestination(next);
+                  rememberDriveDestination(characterId, next);
+                  setRecentDestinations(loadRecentDriveDestinations(characterId));
+                  setShowNewPlaceSearch(false);
+                }
+              }}
+              bias={currentPos}
+            />
+            <button
+              type="button"
+              onClick={() => setShowNewPlaceSearch(false)}
+              className="text-[11px] font-medium text-white/50 underline-offset-2 hover:text-white/75 hover:underline"
+            >
+              Cancel search
+            </button>
+          </div>
+        ) : null}
 
         <p className="text-[11px] text-white/35">
           Uses your rear (world-facing) camera when the device supports it.

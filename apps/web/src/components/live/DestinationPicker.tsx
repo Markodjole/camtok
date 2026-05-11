@@ -33,10 +33,16 @@ export function DestinationPicker({
   value,
   onChange,
   bias,
+  variant = "full",
+  noTopLabel = false,
 }: {
   value: PickedDestination | null;
   onChange: (next: PickedDestination | null) => void;
   bias?: { lat: number; lng: number } | null;
+  /** `searchOnly` — text autocomplete only (no map pin mode). */
+  variant?: "full" | "searchOnly";
+  /** Parent already rendered a section title. */
+  noTopLabel?: boolean;
 }) {
   const [query, setQuery] = useState("");
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
@@ -139,7 +145,11 @@ export function DestinationPicker({
 
   return (
     <div className="space-y-2">
-      <label className="text-xs text-white/40">Destination</label>
+      {!noTopLabel ? (
+        <label className="text-xs text-white/40">
+          {variant === "searchOnly" ? "Search place" : "Destination"}
+        </label>
+      ) : null}
 
       {value ? (
         <div className="flex items-center gap-2 rounded-xl border border-red-500/40 bg-red-500/10 px-3 py-2.5">
@@ -208,6 +218,7 @@ export function DestinationPicker({
             )}
           </div>
 
+          {variant === "full" ? (
           <div className="flex items-center gap-2">
             <button
               type="button"
@@ -223,8 +234,9 @@ export function DestinationPicker({
               {pickerMode === "map" ? "Cancel map" : "Pick on map"}
             </button>
           </div>
+          ) : null}
 
-          {pickerMode === "map" && (
+          {variant === "full" && pickerMode === "map" && (
             <div className="space-y-2">
               <div className="relative h-64 overflow-hidden rounded-xl border border-white/10">
                 <DestinationMapPicker
