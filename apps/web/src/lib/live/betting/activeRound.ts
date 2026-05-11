@@ -120,7 +120,7 @@ export async function getActiveBettingRoundPayload(
     // turn_count: also keep broad so all bet types appear in minutes.
     canBuildTurnCountRound: hasPins || true,
     canBuildTurnsBeforeZoneExitRound: inZone,
-    canBuildEtaDriftRound: Boolean(room.destination),
+    canBuildEtaDriftRound: Boolean(room.destination) || hasPins,
   };
 
   const roundPlan = BettingEngineV2.selectBestRound(snapshot, { mvpOnly: true });

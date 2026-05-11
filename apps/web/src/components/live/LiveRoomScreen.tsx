@@ -276,6 +276,15 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
   const effectiveEngineType: BetTypeV2 | null = useMemo(() => {
     if (viewerEnginePillType != null) return viewerEnginePillType;
+    // Match the live system market so ribbon/camera follow the bet viewers can
+    // actually play — avoids getting stuck on time_vs_google in the UI while
+    // the server rotates types.
+    if (
+      currentMarket?.marketType &&
+      isEngineMarketType(currentMarket.marketType)
+    ) {
+      return currentMarket.marketType as BetTypeV2;
+    }
     if (!eligibleTypes.length) return null;
 
     const pinHeadRaw = driverPins?.[0]?.id;
@@ -330,6 +339,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     return rotated === lastAutoPickTypeRef.current ? alt : rotated;
   }, [
     viewerEnginePillType,
+    currentMarket?.marketType,
     eligibleTypes,
     rotationIdx,
     clientInZone,
@@ -627,8 +637,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
    * Single source of truth for "what bet is the viewer looking at right now".
    * Priority:
    *  1) Explicit pill pick by the viewer.
-   *  2) Stable auto-rotation across eligible bet types (time + position based).
-   *  3) Currently open market type as fallback so popup is always actionable.
+   *  2) Open market (engine or grid) so the headline matches the live round.
+   *  3) Stable auto-rotation / heuristics as fallback when between markets.
    */
   const marketAnchoredBetType: BetTypeV2 | null =
     currentMarket?.marketType === "city_grid"
@@ -638,7 +648,10 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           ? (currentMarket.marketType as BetTypeV2)
           : null);
   const displayBetType: BetTypeV2 | null =
-    viewerEnginePillType ?? stableDisplayBetType ?? effectiveEngineType ?? marketAnchoredBetType;
+    viewerEnginePillType ??
+    marketAnchoredBetType ??
+    stableDisplayBetType ??
+    effectiveEngineType;
   const bettableDisplayBetType: BetTypeV2 | null =
     currentMarket?.marketType &&
     isEngineMarketType(currentMarket.marketType) &&
@@ -665,14 +678,15 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
   /**
    * Three fixed zoom tiers, one per bet category — every bet maps to exactly one.
-   *  - TIGHT (250 m): next_turn (navigation feel).
-   *  - MID   (600 m): pin / route bets (time_vs_google, turn_count_to_pin, eta_drift).
-   *  - WIDE  (1600 m): zone-level bets (next_zone, stop_count, turns_before_zone_exit,
+   * Values are ~1 Leaflet zoom level wider than before so neighboring grid cells show.
+   *  - TIGHT (~320 m): next_turn (navigation feel).
+   *  - MID   (~850 m): pin / route bets (time_vs_google, turn_count_to_pin, eta_drift).
+   *  - WIDE  (~2200 m): zone-level bets (next_zone, stop_count, turns_before_zone_exit,
    *                                       zone_exit_time, zone_duration).
    */
-  const ZOOM_TIER_TIGHT_M = 250;
-  const ZOOM_TIER_MID_M = 600;
-  const ZOOM_TIER_WIDE_M = 1600;
+  const ZOOM_TIER_TIGHT_M = 320;
+  const ZOOM_TIER_MID_M = 850;
+  const ZOOM_TIER_WIDE_M = 2200;
   const viewerTargetWidthMeters = (() => {
     switch (mapBetTypeForCamera) {
       case "next_turn":
@@ -745,11 +759,12 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         mapBetTypeForCamera === "turns_before_zone_exit" ||
         mapBetTypeForCamera === "stop_count";
       // Keep framing consistent with the width target for every active bet type.
-      const framingM = Math.max(250, viewerTargetWidthMeters ?? 250);
+      const framingM = Math.max(320, viewerTargetWidthMeters ?? 320);
 
       return {
         bounds: squareWgs84BoundsFromCenter(centerLat, centerLng, framingM),
-        minZoom: pickZone ? 15.5 : zoneWhole ? 16.0 : 16.5,
+        // Lower floor ≈ one extra zoom-out step so adjacent cells stay visible.
+        minZoom: pickZone ? 14.5 : zoneWhole ? 15.0 : 15.5,
       };
     }
 
@@ -760,10 +775,10 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       const zoneWhole =
         mapBetTypeForCamera === "turns_before_zone_exit" ||
         mapBetTypeForCamera === "stop_count";
-      const framingM = Math.max(250, viewerTargetWidthMeters ?? 250);
+      const framingM = Math.max(320, viewerTargetWidthMeters ?? 320);
       return {
         bounds: squareWgs84BoundsFromCenter(routeLast.lat, routeLast.lng, framingM),
-        minZoom: pickZone ? 15.5 : zoneWhole ? 16.0 : 16.5,
+        minZoom: pickZone ? 14.5 : zoneWhole ? 15.0 : 15.5,
       };
     }
 

@@ -49,12 +49,14 @@ export async function openEngineMarketForRoom(roomId: string) {
    * seconds", so we never bail here on engine-snapshot errors.
    */
   const payload = await getActiveBettingRoundPayload(roomId, null);
-  const eligibleEngineTypes: BetTypeV2[] =
+  /** Reserved for telemetry / future gating — do not shrink rotation to this list. */
+  const _eligibleHint =
     "error" in payload
       ? []
       : (payload.eligibleRoundPlans ?? [])
           .map((p) => p.type)
           .filter((t): t is BetTypeV2 => ENGINE_BET_TYPES.has(t));
+  void _eligibleHint;
 
   const service = await createServiceClient();
 
@@ -96,11 +98,10 @@ export async function openEngineMarketForRoom(roomId: string) {
   const lastType =
     (recentMarkets?.[0] as { market_type?: string } | undefined)?.market_type ?? null;
 
-  // Strong variety first: rotate through engine types so users see everything.
-  const candidates = (eligibleEngineTypes.length
-    ? ENGINE_ROTATION_ORDER.filter((t) => eligibleEngineTypes.includes(t))
-    : ENGINE_ROTATION_ORDER
-  ).filter((t) => ENGINE_BET_TYPES.has(t));
+  // Always rotate the full engine lineup. Filtering by `eligibleRoundPlans`
+  // left rooms stuck on time_vs_google + one or two other types whenever the
+  // snapshot was conservative.
+  const candidates = ENGINE_ROTATION_ORDER.filter((t) => ENGINE_BET_TYPES.has(t));
   if (!candidates.length) return { error: "No engine candidate" };
 
   const lastIdx = lastType ? candidates.indexOf(lastType as BetTypeV2) : -1;

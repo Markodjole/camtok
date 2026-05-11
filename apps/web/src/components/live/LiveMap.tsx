@@ -203,7 +203,8 @@ const VIEWER_FOLLOW_BOUNDS_ZOOM_FLOOR = 14;
  * After `getBoundsZoom`, nudge **in** (viewer only) — fitBounds alone kept the
  * camera too loose for navigation-style follow.
  */
-const VIEWER_FIT_BOUNDS_ZOOM_BIAS = 0.25;
+/** Extra zoom-out after bounds fit (~1 Leaflet level — lower z = wider). */
+const VIEWER_FIT_BOUNDS_ZOOM_BIAS = -0.85;
 
 /**
  * Added to `mapProfile().zoom` for viewers only (streamer unchanged).
@@ -606,31 +607,30 @@ export function LiveMap({
             let fillOp: number;
             let dashArr: string | undefined;
             if (pickZone) {
-              strokeColor = selected
-                ? LINE_CURRENT
-                : isCurrentZone
-                  ? LINE_CURRENT
-                  : LINE_OTHER;
-              strokeWeight = selected ? 3 : 2;
-              fillC = color;
-              fillOp = isCurrentZone ? 0 : selected ? 0.14 : isActive ? 0.09 : 0.055;
+              const isOurCell = isCurrentZone || selected;
+              strokeColor = isOurCell ? LINE_CURRENT : LINE_OTHER;
+              strokeWeight = selected ? 4 : isCurrentZone ? 3.5 : 2;
+              if (isOurCell) {
+                fillC = color;
+                fillOp = selected ? 0.24 : 0.17;
+              } else {
+                // Veil other grid cells so the driver's square reads clearly.
+                fillC = "#020617";
+                fillOp = 0.5;
+              }
               dashArr = undefined;
             } else if (muted) {
-              strokeColor = selected
-                ? "#f8fafc"
-                : isCurrentZone
-                  ? LINE_CURRENT
-                  : LINE_OTHER;
-              strokeWeight = selected ? 2.5 : 2;
-              fillC = color;
-              fillOp = selected
-                ? 0.09
-                : isCurrentZone
-                  ? 0.035
-                  : isActive
-                    ? 0.065
-                    : 0.045;
-              dashArr = selected ? undefined : "5 4";
+              const isOurCell = isCurrentZone || selected;
+              strokeColor = isOurCell ? LINE_CURRENT : LINE_OTHER;
+              strokeWeight = selected ? 2.5 : isCurrentZone ? 2.5 : 2;
+              if (isOurCell) {
+                fillC = color;
+                fillOp = selected ? 0.12 : isCurrentZone ? 0.1 : 0.06;
+              } else {
+                fillC = "#0f172a";
+                fillOp = 0.42;
+              }
+              dashArr = selected || isCurrentZone ? undefined : "5 4";
             } else {
               strokeColor = selected
                 ? LINE_CURRENT
