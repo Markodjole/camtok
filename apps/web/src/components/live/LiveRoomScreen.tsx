@@ -714,15 +714,16 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
   /**
    * Three fixed zoom tiers, one per bet category — every bet maps to exactly one.
-   * Values are ~1 Leaflet zoom level wider than before so neighboring grid cells show.
    *  - TIGHT (~320 m): next_turn (navigation feel).
    *  - MID   (~850 m): pin / route bets (time_vs_google, turn_count_to_pin, eta_drift).
-   *  - WIDE  (~2200 m): zone-level bets (next_zone, stop_count, turns_before_zone_exit,
+   *  - WIDE  (~1400 m): zone-level bets (next_zone, stop_count, turns_before_zone_exit,
    *                                       zone_exit_time, zone_duration).
+   *    WIDE was 2200 m — viewer asked to bring this in so adjacent cells stay
+   *    big enough to tap accurately.
    */
   const ZOOM_TIER_TIGHT_M = 320;
   const ZOOM_TIER_MID_M = 850;
-  const ZOOM_TIER_WIDE_M = 2200;
+  const ZOOM_TIER_WIDE_M = 1400;
   const viewerTargetWidthMeters = (() => {
     switch (mapBetTypeForCamera) {
       case "next_turn":
