@@ -1177,8 +1177,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   useEffect(() => {
     const placeBottomLeft = () => {
       const boxW = Math.min(window.innerWidth * 0.34, 180);
-      // Flush against the BottomNav (~4.75rem) and the left edge.
-      const top = Math.max(48, window.innerHeight - boxW - 76);
+      // Flush against the BottomNav (h-16 = 64px) and the left edge — no gap.
+      const top = Math.max(48, window.innerHeight - boxW - 64);
       setPipPos({ top, left: 0 });
     };
     placeBottomLeft();
@@ -1567,7 +1567,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       ) : null}
       {/* ── PiP corner: swapped view + expand toggle ── */}
       <div
-        className="absolute z-30 overflow-hidden border border-white/15 shadow-2xl"
+        className="absolute z-30 overflow-hidden border-y border-l border-white/15 shadow-2xl"
         style={{
           top: pipPos.top,
           left: pipPos.left,
@@ -1910,16 +1910,16 @@ function MapSelectionBottomSheet({
   const sorted = [...marketOptions].sort((a, b) => a.displayOrder - b.displayOrder);
   return (
     <div
-      className="pointer-events-none fixed bottom-0 right-0 z-[200] pb-[calc(4.75rem+env(safe-area-inset-bottom,0px))]"
+      className="pointer-events-none fixed bottom-0 right-0 z-[200] pb-16"
       style={{
         // Use full remaining screen width to the right of the PiP square —
-        // no horizontal margins.
+        // no horizontal margins. pb-16 = BottomNav h-16, so no bottom gap.
         left: "min(34vw, 180px)",
         paddingRight: "0px",
       }}
     >
       <div
-        className="pointer-events-auto flex h-full flex-col border border-white/10 bg-black/40 p-2 text-white shadow-lg backdrop-blur-md"
+        className="pointer-events-auto flex h-full flex-col border-y border-r border-white/10 bg-black/40 p-2 text-white shadow-lg backdrop-blur-md"
         /** Match the PiP square (left): width:34vw capped at 180px → height the same. */
         style={{
           height: "min(34vw, 180px)",
