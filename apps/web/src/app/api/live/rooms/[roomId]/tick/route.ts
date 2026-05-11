@@ -49,24 +49,55 @@ export async function POST(
   const marketId = (room as { current_market_id: string | null }).current_market_id;
 
   if (phase === "waiting_for_next_market") {
-    /**
-     * Engine markets are the only thing the auto-cycle opens now — they have
-     * a tight ~5 s window so a new bet headline appears every few seconds.
-     * `city_grid` is preserved as a manual option (openCityGridMarketForRoom
-     * is still callable elsewhere) but its 50–95 s window made the auto-cycle
-     * stall, so it is no longer the default first choice here.
-     */
+    const { data: lastRow } = await service
+      .from("live_betting_markets")
+      .select("market_type")
+      .eq("room_id", roomId)
+      .order("opens_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const lastType =
+      (lastRow as { market_type?: string } | undefined)?.market_type ?? null;
+
+    /** Alternate grid ↔ engine so zone polygons + cell bets keep appearing. */
+    const tryGridFirst = lastType !== "city_grid";
+    let cityGridSkippedReason: string | null = null;
+
+    if (tryGridFirst) {
+      const grid = await openCityGridMarketForRoom(roomId);
+      if ("marketId" in grid && grid.marketId) {
+        return NextResponse.json({
+          action: "try_open_city_grid",
+          marketId: grid.marketId,
+        });
+      }
+      if ("error" in grid) cityGridSkippedReason = grid.error ?? null;
+    }
+
     const eng = await openEngineMarketForRoom(roomId);
     if ("marketId" in eng && eng.marketId) {
       return NextResponse.json({
         action: "try_open_engine_market",
+        cityGridSkippedReason,
         ...eng,
       });
     }
-    // Fallback to a system (turn) market only if engine open failed.
+
+    if (!tryGridFirst) {
+      const grid2 = await openCityGridMarketForRoom(roomId);
+      if ("marketId" in grid2 && grid2.marketId) {
+        return NextResponse.json({
+          action: "try_open_city_grid",
+          marketId: grid2.marketId,
+        });
+      }
+      if ("error" in grid2) cityGridSkippedReason = grid2.error ?? null;
+    }
+
     const r = await openSystemMarketForRoom(roomId);
     return NextResponse.json({
       action: "try_open_market",
+      cityGridSkippedReason,
       engineSkippedReason: "error" in eng ? eng.error : null,
       ...r,
     });
@@ -157,7 +188,9 @@ export async function POST(
       const HARD_OPEN_CAP_MS = 10_000;
       const overOpenCap =
         Number.isFinite(opensAtMs) && now - opensAtMs >= HARD_OPEN_CAP_MS;
-      const timeoutApplies = marketType !== "city_grid";
+      // Include city_grid so short `locks_at` (5s) can lock after min-open; edge
+      // distance still locks earlier when the driver leaves the cell.
+      const timeoutApplies = true;
       if (
         marketAgeOkForLock &&
         (distanceLocked || (timeoutApplies && now >= locksAt) || overOpenCap)

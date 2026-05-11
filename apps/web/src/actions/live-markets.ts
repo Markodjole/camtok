@@ -125,14 +125,9 @@ export async function placeLiveBet(input: PlaceLiveBetInput) {
     Date.now() < opensAtMs + MIN_MARKET_OPEN_MS_BEFORE_LOCK;
   const locksAt = new Date((market as { locks_at: string }).locks_at).getTime();
   const marketType = (market as { market_type?: string }).market_type ?? "";
-  // City-grid markets settle off cell-edge distance, not time. Every other
-  // market (engine + turn) honors the `locks_at` window so the popup closes
-  // after the few-second bet window the viewer is shown.
-  const ignoreTimeLock = marketType === "city_grid";
   if (
     !liveBetRelaxServer() &&
     !insideOpenGrace &&
-    !ignoreTimeLock &&
     Date.now() >= locksAt
   ) {
     return { error: "Market has locked" };

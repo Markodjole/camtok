@@ -870,10 +870,6 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     !liveBetRelaxClient() &&
     !!currentMarket &&
     (() => {
-      // City-grid locks on cell-edge distance, not time. Every other bet
-      // (engine + turn) honors `locks_at` so the popup closes after the
-      // few-second window the viewer was shown.
-      if (currentMarket.marketType === "city_grid") return false;
       const t = Date.parse(currentMarket.locksAt);
       if (!Number.isFinite(t)) return false;
       return t <= Date.now();
