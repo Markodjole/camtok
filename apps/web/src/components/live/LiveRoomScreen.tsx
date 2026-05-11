@@ -1015,9 +1015,10 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   );
 
   const [betPanelDismissed, setBetPanelDismissed] = useState(false);
-  /** Hold the popup closed for 2s after each new market opens so the viewer
-   *  feels the cadence of a fresh bet appearing. */
-  const BET_INTERSTITIAL_MS = 2_000;
+  /** Hold the popup closed briefly after each new market opens so the viewer
+   *  feels the cadence of a fresh bet appearing, then leaves plenty of time
+   *  for the actual tap. */
+  const BET_INTERSTITIAL_MS = 1_500;
   const lastSeenMarketIdRef = useRef<string | null>(null);
   useEffect(() => {
     const next = currentMarket?.id ?? null;

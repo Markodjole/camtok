@@ -18,9 +18,9 @@ import { metersBetween } from "@/lib/live/routing/geometry";
  * few seconds — the room then settles + opens a fresh market of a different
  * type. Real outcome data is still recorded against the lock-time snapshot.
  */
-const ENGINE_OPEN_SEC = 5;
+const ENGINE_OPEN_SEC = 8;
 /** Reveal a beat after lock so tick can settle and roll into the next market. */
-const ENGINE_REVEAL_AFTER_LOCK_MS = 1_000;
+const ENGINE_REVEAL_AFTER_LOCK_MS = 1_500;
 const ENGINE_ROTATION_ORDER: BetTypeV2[] = [
   "time_vs_google",
   "stop_count",

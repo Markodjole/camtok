@@ -129,8 +129,8 @@ export async function openCityGridMarketForRoom(roomId: string) {
   const now = new Date();
   const opensAt = now;
   /** Short windows (like engine markets) so the tick loop keeps alternating grid ↔ engine. */
-  const lockMs = liveBetRelaxServer() ? 900_000 : 5_000;
-  const revealMs = liveBetRelaxServer() ? 960_000 : 6_000;
+  const lockMs = liveBetRelaxServer() ? 900_000 : 8_000;
+  const revealMs = liveBetRelaxServer() ? 960_000 : 9_500;
   const locksAt = new Date(now.getTime() + lockMs);
   const revealAt = new Date(now.getTime() + revealMs);
 

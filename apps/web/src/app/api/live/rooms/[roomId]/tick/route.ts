@@ -181,11 +181,11 @@ export async function POST(
         }
       }
       /**
-       * Hard upper-bound: nothing stays in `market_open` beyond ~10 s past
+       * Hard upper-bound: nothing stays in `market_open` beyond ~13 s past
        * `opens_at`. Even if `locks_at` or the distance check don't fire we
        * force-lock so the cycle rolls and a new bet appears.
        */
-      const HARD_OPEN_CAP_MS = 10_000;
+      const HARD_OPEN_CAP_MS = 13_000;
       const overOpenCap =
         Number.isFinite(opensAtMs) && now - opensAtMs >= HARD_OPEN_CAP_MS;
       // Include city_grid so short `locks_at` (5s) can lock after min-open; edge

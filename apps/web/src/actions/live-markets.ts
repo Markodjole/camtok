@@ -115,8 +115,17 @@ export async function placeLiveBet(input: PlaceLiveBetInput) {
     .maybeSingle();
   if (!market) return { error: "Market not found" };
 
-  if ((market as { status: string }).status !== "open") {
-    return { error: "Market not open" };
+  const marketStatus = (market as { status: string }).status;
+  /**
+   * While we're tuning the bet cycle, accept bets on markets that have just
+   * `locked` too — viewers regularly tap an option a hair after the 5s lock
+   * fires, the market is moments from settle. Cancelled / settled still
+   * return an error so payouts cannot be double-touched.
+   */
+  if (marketStatus !== "open") {
+    if (!(liveBetRelaxServer() && marketStatus === "locked")) {
+      return { error: "Market not open" };
+    }
   }
   const roomIdForRoom = (market as { room_id: string }).room_id;
   const opensAtMs = Date.parse((market as { opens_at: string }).opens_at);
