@@ -614,9 +614,9 @@ export function LiveMap({
                 fillC = color;
                 fillOp = selected ? 0.24 : 0.17;
               } else {
-                // Veil other grid cells so the driver's square reads clearly.
+                // Light veil so the map underneath stays readable.
                 fillC = "#020617";
-                fillOp = 0.5;
+                fillOp = 0.18;
               }
               dashArr = undefined;
             } else if (muted) {
@@ -628,7 +628,7 @@ export function LiveMap({
                 fillOp = selected ? 0.12 : isCurrentZone ? 0.1 : 0.06;
               } else {
                 fillC = "#0f172a";
-                fillOp = 0.42;
+                fillOp = 0.14;
               }
               dashArr = selected || isCurrentZone ? undefined : "5 4";
             } else {
