@@ -1888,13 +1888,14 @@ function MapSelectionBottomSheet({
     <div
       className="pointer-events-none fixed bottom-0 right-0 z-[200] pb-[calc(4.75rem+env(safe-area-inset-bottom,0px))]"
       style={{
-        // Keep left PiP/square visible; sheet uses remaining screen width.
-        left: "calc(min(34vw, 180px) + 16px)",
-        paddingRight: "12px",
+        // Use full remaining screen width to the right of the PiP square —
+        // no horizontal margins.
+        left: "min(34vw, 180px)",
+        paddingRight: "0px",
       }}
     >
       <div
-        className="pointer-events-auto flex flex-col rounded-xl border border-white/10 bg-black/40 p-2 text-white shadow-lg backdrop-blur-md"
+        className="pointer-events-auto flex h-full flex-col border border-white/10 bg-black/40 p-2 text-white shadow-lg backdrop-blur-md"
         /** Match the PiP square (left): width:34vw capped at 180px → height the same. */
         style={{
           height: "min(34vw, 180px)",
