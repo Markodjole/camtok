@@ -112,7 +112,14 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [centerMoneyFlash, setCenterMoneyFlash] = useState<{
     kind: "stake" | "win" | "loss";
     amount: number;
+    /** Optional descriptor, e.g. "0–1 stops"; rendered as `$2 on 0–1 stops`. */
+    target?: string | null;
   } | null>(null);
+  /** Cache of the most recent city_grid spec so zone polygons keep showing
+   *  even while an engine market is the current round. */
+  const [latestCityGridSpec, setLatestCityGridSpec] = useState<
+    CityGridSpecCompact | null
+  >(null);
   /** When true: map is full-screen, camera feed is in the corner pip */
   const [mapExpanded, setMapExpanded] = useState(true);
   const [selectedZoneId, setSelectedZoneId] = useState<string | null>(null);
@@ -173,9 +180,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const passedMarketTurnIdsRef = useRef<Set<string>>(new Set());
   const centerFlashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pulseCenterMoney = useCallback(
-    (kind: "stake" | "win" | "loss", amount: number) => {
+    (kind: "stake" | "win" | "loss", amount: number, target?: string | null) => {
       if (centerFlashTimerRef.current) clearTimeout(centerFlashTimerRef.current);
-      setCenterMoneyFlash({ kind, amount });
+      setCenterMoneyFlash({ kind, amount, target: target ?? null });
       const ms = kind === "stake" ? 1_800 : 2_600;
       centerFlashTimerRef.current = setTimeout(() => {
         setCenterMoneyFlash(null);
@@ -236,6 +243,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   }, [eligibleTypes.length]);
 
   const currentMarket = room.currentMarket;
+  /** Live grid spec only when the current market is a grid round (used for
+   *  betting math). */
   const cityGridSpec = useMemo(
     () =>
       currentMarket?.marketType === "city_grid"
@@ -243,11 +252,28 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         : null,
     [currentMarket?.marketType, currentMarket?.cityGridSpec],
   );
+  /** Latch the most recent grid spec so zone polygons remain visible even
+   *  while an engine market is the active round. */
+  useEffect(() => {
+    if (
+      currentMarket?.marketType === "city_grid" &&
+      currentMarket.cityGridSpec
+    ) {
+      setLatestCityGridSpec(
+        currentMarket.cityGridSpec as CityGridSpecCompact,
+      );
+    }
+  }, [currentMarket?.marketType, currentMarket?.cityGridSpec]);
+  /** Drop the cached spec when the room changes (different driver / viewport). */
+  useEffect(() => {
+    setLatestCityGridSpec(null);
+  }, [room.roomId]);
   const currentZoneId = useMemo(() => {
-    if (!cityGridSpec || routePoints.length === 0) return null;
+    const spec = cityGridSpec ?? latestCityGridSpec;
+    if (!spec || routePoints.length === 0) return null;
     const last = routePoints[routePoints.length - 1]!;
-    return cellIdForPosition(cityGridSpec, last.lat, last.lng);
-  }, [cityGridSpec, routePoints]);
+    return cellIdForPosition(spec, last.lat, last.lng);
+  }, [cityGridSpec, latestCityGridSpec, routePoints]);
 
   /**
    * "Zone" for rotation = named region from streamer session OR current grid cell id.
@@ -419,13 +445,18 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     setJoyPortalReady(true);
   }, []);
 
-  const handleSettlement = useCallback((data: SkillFeedbackData) => {
-    if (data.won) {
-      pulseCenterMoney("win", data.payoutAmount);
-    } else {
-      pulseCenterMoney("loss", data.stakeAmount);
-    }
-  }, [pulseCenterMoney]);
+  const handleSettlement = useCallback(
+    (data: SkillFeedbackData) => {
+      const myOpt = data.options.find((o) => o.id === data.myOptionId) ?? null;
+      const targetLabel = myOpt?.shortLabel ?? myOpt?.label ?? null;
+      if (data.won) {
+        pulseCenterMoney("win", data.payoutAmount, targetLabel);
+      } else {
+        pulseCenterMoney("loss", data.stakeAmount, targetLabel);
+      }
+    },
+    [pulseCenterMoney],
+  );
 
   const onViewerRoomActivity = useCallback(
     (summary: { myOpenBetMarketIds: string[] }) => {
@@ -530,8 +561,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             market.options.find((o) => o.id === optionId)?.label ??
             null;
         }
-        pulseCenterMoney("stake", lastStakeAmount);
+        pulseCenterMoney("stake", lastStakeAmount, pickedLabel);
         setBetPanelDismissed(true);
+        setSelectedMapOptionId(null);
         setLastBetMarketId(market.id);
         setLastBetOptionLabel(pickedLabel);
         setMyOpenBetMarketIds((prev) => new Set(prev).add(market.id));
@@ -595,9 +627,12 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     routePoints,
   ]);
 
+  /** Polygons are drawn from `cityGridSpec` when a grid round is live, or from
+   *  the latched spec otherwise — viewer always sees the grid once it's known. */
+  const zonesSpec = cityGridSpec ?? latestCityGridSpec;
   const zones: MapZone[] = useMemo(() => {
-    if (!cityGridSpec) return [];
-    const cells = enumerateGridCells(cityGridSpec);
+    if (!zonesSpec) return [];
+    const cells = enumerateGridCells(zonesSpec);
     return cells.map((c) => ({
       id: c.id,
       slug: c.id,
@@ -607,7 +642,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       isActive: true,
       polygon: c.polygon,
     }));
-  }, [cityGridSpec]);
+  }, [zonesSpec]);
 
   const zoneMarketActive =
     currentMarket?.marketType === "city_grid" && zones.length > 0;
@@ -626,8 +661,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     );
   })();
 
-  /** Same as toggling the layers button on whenever the live bet uses the grid. */
-  const effectiveShowZones = zoneMarketActive || showZones;
+  /** Show zones whenever we know the grid — live bet or not — plus when the
+   *  layers button is on. Keeps polygons visible across engine ↔ grid cycling. */
+  const effectiveShowZones = zones.length > 0 || showZones;
 
   const PASSED_HIDE_PIN_LINE_M = 12;
   const routeLast =
@@ -979,9 +1015,25 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   );
 
   const [betPanelDismissed, setBetPanelDismissed] = useState(false);
+  /** Hold the popup closed for 2s after each new market opens so the viewer
+   *  feels the cadence of a fresh bet appearing. */
+  const BET_INTERSTITIAL_MS = 2_000;
+  const lastSeenMarketIdRef = useRef<string | null>(null);
   useEffect(() => {
-    setBetPanelDismissed(false);
-  }, [currentMarket?.id, mapExpanded]);
+    const next = currentMarket?.id ?? null;
+    if (next === lastSeenMarketIdRef.current) return;
+    lastSeenMarketIdRef.current = next;
+    if (!next) {
+      setBetPanelDismissed(false);
+      return;
+    }
+    setBetPanelDismissed(true);
+    const t = setTimeout(() => setBetPanelDismissed(false), BET_INTERSTITIAL_MS);
+    return () => clearTimeout(t);
+  }, [currentMarket?.id]);
+  useEffect(() => {
+    if (!mapExpanded) setBetPanelDismissed(false);
+  }, [mapExpanded]);
   useEffect(() => {
     if (displayBetType) setMapFollow(true);
   }, [displayBetType]);
@@ -1076,33 +1128,17 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     ],
   );
 
+  /** Reset any selection on market change — viewer must explicitly tap to bet. */
   useEffect(() => {
     if (currentMarket?.marketType === "city_grid") {
       setSelectedMapOptionId(selectedZoneId);
       return;
     }
-    if (viewerBetOfferType) {
-      const source = sheetOptionsForDisplayBet(viewerBetOfferType, currentMarket);
-      const limited = source
-        .slice()
-        .sort((a, b) => a.displayOrder - b.displayOrder)
-        .slice(0, 2);
-      setSelectedMapOptionId(limited[0]?.id ?? null);
-      return;
-    }
-    const first = (currentMarket?.options ?? [])
-      .slice()
-      .sort((a, b) => a.displayOrder - b.displayOrder)
-      .slice(0, 2)[0]?.id ?? null;
-    setSelectedMapOptionId(first);
+    setSelectedMapOptionId(null);
   }, [
     currentMarket?.id,
     currentMarket?.marketType,
     selectedZoneId,
-    selectedCheckpointId,
-    displayBetType,
-    viewerBetOfferType,
-    currentMarket?.options,
   ]);
 
   useEffect(() => {
@@ -1339,6 +1375,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         <ViewerCenterMoneyFlash
           kind={centerMoneyFlash.kind}
           amount={centerMoneyFlash.amount}
+          target={centerMoneyFlash.target ?? null}
         />
       ) : null}
 
@@ -1739,13 +1776,23 @@ function fmtUsdFlash(n: number): string {
 function ViewerCenterMoneyFlash({
   kind,
   amount,
+  target,
 }: {
   kind: "stake" | "win" | "loss";
   amount: number;
+  target: string | null;
 }) {
   const abs = Math.abs(amount);
   const s = fmtUsdFlash(abs);
-  const label = kind === "win" ? `+$${s}` : `-$${s}`;
+  /** Stake → "$2 on 0–1 stops"; settle → "+$24" / "-$2" (target shown below). */
+  const main =
+    kind === "stake"
+      ? target
+        ? `$${s} on ${target}`
+        : `$${s}`
+      : kind === "win"
+        ? `+$${s}`
+        : `-$${s}`;
   const colorClass =
     kind === "win"
       ? "text-emerald-400"
@@ -1755,14 +1802,19 @@ function ViewerCenterMoneyFlash({
 
   return (
     <div
-      className="pointer-events-none fixed inset-0 z-[245] flex items-center justify-center"
+      className="pointer-events-none fixed inset-0 z-[245] flex flex-col items-center justify-center gap-1"
       aria-live="polite"
     >
       <div
         className={`text-5xl font-black tabular-nums tracking-tight [text-shadow:0_0_28px_rgba(0,0,0,0.92)] sm:text-6xl ${colorClass}`}
       >
-        {label}
+        {main}
       </div>
+      {kind !== "stake" && target ? (
+        <div className="text-xs font-semibold text-white/85 [text-shadow:0_0_8px_rgba(0,0,0,0.92)] sm:text-sm">
+          on {target}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1890,11 +1942,7 @@ function MapSelectionBottomSheet({
           </div>
         )}
         {error ? <div className="mt-1.5 text-[10px] text-red-300">{error}</div> : null}
-        {oneTapOptionBet ? (
-          <div className="mt-2 rounded-lg border border-violet-300/30 bg-violet-500/15 px-2 py-1 text-center text-[10px] font-semibold text-violet-100/90">
-            Tap an option once to place bet instantly
-          </div>
-        ) : (
+        {oneTapOptionBet ? null : (
           <button
             type="button"
             disabled={bettingClosed || !selectedOptionId || isPlacing}
