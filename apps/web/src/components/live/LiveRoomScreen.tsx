@@ -612,12 +612,22 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     currentMarket.marketType !== displayBetType
       ? (currentMarket.marketType as BetTypeV2)
       : displayBetType;
+  /**
+   * What the viewer sheet / headline / locks describe. On `city_grid`, `next_turn` is only a
+   * map/camera hint — the actionable bet is still picking a cell (`next_zone`), otherwise both
+   * grid and directional sheets stay hidden.
+   */
+  const viewerBetOfferType: BetTypeV2 | null =
+    currentMarket?.marketType === "city_grid" &&
+    bettableDisplayBetType === "next_turn"
+      ? "next_zone"
+      : bettableDisplayBetType;
   /** Map camera tracks intent immediately; ribbon/sheet can stay stable via `displayBetType`. */
   const mapBetTypeForCamera: BetTypeV2 | null =
     viewerEnginePillType ?? effectiveEngineType ?? marketAnchoredBetType;
 
   const zonesVisualStyleForBet =
-    bettableDisplayBetType === "next_zone" ? "pick_zone" : zoneEngineBetActive ? "muted" : "default";
+    viewerBetOfferType === "next_zone" ? "pick_zone" : zoneEngineBetActive ? "muted" : "default";
 
   /**
    * Three fixed zoom tiers, one per bet category — every bet maps to exactly one.
@@ -776,14 +786,14 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const isDistanceLocked =
     !liveBetRelaxClient() &&
     (() => {
-      if (!bettableDisplayBetType) return false;
-      if (bettableDisplayBetType === "next_turn") {
+      if (!viewerBetOfferType) return false;
+      if (viewerBetOfferType === "next_turn") {
         return nextPinDistanceM != null && nextPinDistanceM <= 70;
       }
-      if (bettableDisplayBetType === "time_vs_google") {
+      if (viewerBetOfferType === "time_vs_google") {
         return nextPinDistanceM != null && nextPinDistanceM <= 160;
       }
-      if (bettableDisplayBetType === "next_zone") {
+      if (viewerBetOfferType === "next_zone") {
         const last = routePoints[routePoints.length - 1];
         if (!last || !cityGridSpec) return false;
         const edgeM = distanceToCurrentCellEdgeMeters(cityGridSpec, last.lat, last.lng);
@@ -946,7 +956,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const showViewerGridBetSheet =
     showBetBottomSheet &&
     currentMarket?.marketType === "city_grid" &&
-    bettableDisplayBetType === "next_zone";
+    viewerBetOfferType === "next_zone";
 
   // Directional/option sheet: show whenever a non-turn, non-zone pill is active,
   // even if there is no matching market open yet (button will be disabled).
@@ -955,15 +965,15 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     showLiveBets &&
     !betPanelDismissed &&
     !viewerHasBetOnCurrentMarket &&
-    bettableDisplayBetType != null &&
-    bettableDisplayBetType !== "next_turn" &&
-    bettableDisplayBetType !== "next_zone";
+    viewerBetOfferType != null &&
+    viewerBetOfferType !== "next_turn" &&
+    viewerBetOfferType !== "next_zone";
 
   // Real options when market matches; otherwise believable placeholders so the sheet is never empty.
   const sheetMarketOptions: Array<{ id: string; label: string; shortLabel?: string; displayOrder: number }> =
     useMemo(
-      () => sheetOptionsForDisplayBet(bettableDisplayBetType, currentMarket),
-      [bettableDisplayBetType, currentMarket],
+      () => sheetOptionsForDisplayBet(viewerBetOfferType, currentMarket),
+      [viewerBetOfferType, currentMarket],
     );
   const sheetMarketOptionsLimited = sheetMarketOptions
     .slice()
@@ -977,21 +987,21 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     (!liveBetRelaxClient() &&
       (isLocked ||
         (viewerEnginePillType != null &&
-          isEngineMarketType(bettableDisplayBetType ?? "") &&
-          currentMarket.marketType !== (bettableDisplayBetType ?? ""))));
+          isEngineMarketType(viewerBetOfferType ?? "") &&
+          currentMarket.marketType !== (viewerBetOfferType ?? ""))));
 
   const mapBetSheetOpen =
     showViewerGridBetSheet || showViewerDirectionalBetSheet;
 
   const viewerCurrentBetHeadline =
-    bettableDisplayBetType != null ? engineBetHeadline(bettableDisplayBetType) : null;
+    viewerBetOfferType != null ? engineBetHeadline(viewerBetOfferType) : null;
 
   const sheetBetHeadline = viewerCurrentBetHeadline ?? "Live bet";
 
   /** Subtitle copy for the grid sheet — driven by the active engine pill. */
   function gridSheetSubtitle(): string {
-    if (!bettableDisplayBetType) return "Tap the map to pick a cell.";
-    switch (bettableDisplayBetType) {
+    if (!viewerBetOfferType) return "Tap the map to pick a cell.";
+    switch (viewerBetOfferType) {
       case "next_zone":
         return selectedZone
           ? `Selected · ${selectedZone.name}`
@@ -1026,8 +1036,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       setSelectedMapOptionId(selectedZoneId);
       return;
     }
-    if (bettableDisplayBetType) {
-      const source = sheetOptionsForDisplayBet(bettableDisplayBetType, currentMarket);
+    if (viewerBetOfferType) {
+      const source = sheetOptionsForDisplayBet(viewerBetOfferType, currentMarket);
       const limited = source
         .slice()
         .sort((a, b) => a.displayOrder - b.displayOrder)
@@ -1046,7 +1056,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     selectedZoneId,
     selectedCheckpointId,
     displayBetType,
-    bettableDisplayBetType,
+    viewerBetOfferType,
     currentMarket?.options,
   ]);
 
@@ -1216,7 +1226,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
   const showJoystick =
     (() => {
-      const isNextTurnDisplay = String(bettableDisplayBetType) === "next_turn";
+      const isNextTurnDisplay = String(displayBetType) === "next_turn";
       return (
     joyPortalReady &&
     showLiveBets &&
@@ -1225,13 +1235,14 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     !isLocked &&
     (currentMarket.marketType !== "city_grid" ||
           isNextTurnDisplay) &&
-        (!mapBetSheetOpen || isNextTurnDisplay)
+        (!mapBetSheetOpen || isNextTurnDisplay) &&
+        !(currentMarket.marketType === "city_grid" && showViewerGridBetSheet)
       );
     })();
 
   const joystickLocked =
     (() => {
-      const isNextTurnDisplay = String(bettableDisplayBetType) === "next_turn";
+      const isNextTurnDisplay = String(displayBetType) === "next_turn";
       return (
     isLocked ||
     !currentMarket ||
@@ -1271,8 +1282,14 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         currentBetHeadline={viewerCurrentBetHeadline}
         nowTick={nowTick}
         eligibleRoundPlans={activeBettingRound?.eligibleRoundPlans ?? []}
-        highlightedEngineType={null}
-        onSelectEngineType={undefined}
+        highlightedEngineType={
+          displayBetType && displayBetType !== viewerBetOfferType
+            ? displayBetType
+            : null
+        }
+        onSelectEngineType={(t) => {
+          setViewerEnginePillType((prev) => (prev === t ? null : t));
+        }}
       />
       <BottomNav />
       <LiveEventToasts
@@ -1608,8 +1625,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           bettingPending={
             !currentMarket ||
             (!liveBetRelaxClient() &&
-              isEngineMarketType(bettableDisplayBetType ?? "") &&
-              currentMarket.marketType !== (bettableDisplayBetType ?? ""))
+              isEngineMarketType(viewerBetOfferType ?? "") &&
+              currentMarket.marketType !== (viewerBetOfferType ?? ""))
           }
           isPlacing={!!placingOptionId}
           error={mapSheetError}
