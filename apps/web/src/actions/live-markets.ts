@@ -498,23 +498,17 @@ export async function openSystemMarketForRoom(roomId: string) {
   {
     const { data: prevMkt } = await service
       .from("live_betting_markets")
-      .select("opens_at, reveal_at, status")
+      .select("opens_at")
       .eq("room_id", roomId)
       .order("opens_at", { ascending: false })
       .limit(1)
       .maybeSingle();
     if (prevMkt) {
       const nowMs = Date.now();
-      const prevRevealMs = (prevMkt as { reveal_at: string | null }).reveal_at
-        ? Date.parse((prevMkt as { reveal_at: string }).reveal_at)
-        : null;
       const prevOpensMs = Date.parse((prevMkt as { opens_at: string }).opens_at);
-      const referenceMs = Number.isFinite(prevRevealMs as number)
-        ? (prevRevealMs as number)
-        : prevOpensMs;
       if (
-        Number.isFinite(referenceMs) &&
-        nowMs - referenceMs < MIN_MS_BETWEEN_SYSTEM_MARKETS
+        Number.isFinite(prevOpensMs) &&
+        nowMs - prevOpensMs < MIN_MS_BETWEEN_SYSTEM_MARKETS
       ) {
         return { error: "Spacing: previous decision too recent" };
       }

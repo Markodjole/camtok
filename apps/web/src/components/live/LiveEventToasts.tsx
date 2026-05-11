@@ -150,7 +150,7 @@ export function BetPlacedPill({ text }: { text: string | null }) {
       className="pointer-events-none fixed left-0 right-0 z-[201] flex justify-center"
       style={{ top: "3.1rem" }}
     >
-      <div className="rounded-full border border-amber-400/40 bg-amber-500/20 px-4 py-1 text-sm font-bold text-amber-100 [text-shadow:0_0_2px_#000]">
+      <div className="rounded-full border border-violet-400/45 bg-violet-600/30 px-4 py-1 text-sm font-bold text-violet-100 [text-shadow:0_0_2px_#000]">
         {text}
       </div>
     </div>
@@ -159,8 +159,9 @@ export function BetPlacedPill({ text }: { text: string | null }) {
 
 export function useBetPill() {
   const [text, setText] = useState<string | null>(null);
-  const flash = (stake: number) => {
-    setText(`$${stake}  bet  placed`);
+  const flash = (stake: number, pickLabel?: string | null) => {
+    const pick = pickLabel?.trim();
+    setText(pick ? `${pick} · $${stake} placed` : `$${stake} placed`);
     setTimeout(() => setText(null), 2000);
   };
   return { betPill: text, flash };

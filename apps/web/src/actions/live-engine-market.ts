@@ -109,22 +109,20 @@ export async function openEngineMarketForRoom(roomId: string) {
   );
   if (!options.length) return { error: "No provisional options for this bet type" };
 
-  // Short spacing so markets can rotate quickly during demos (~0.4 s).
   const { data: prevMkt } = await service
     .from("live_betting_markets")
-    .select("opens_at, reveal_at")
+    .select("opens_at")
     .eq("room_id", roomId)
     .order("opens_at", { ascending: false })
     .limit(1)
     .maybeSingle();
   if (prevMkt) {
     const nowMs = Date.now();
-    const prevRevealMs = (prevMkt as { reveal_at: string | null }).reveal_at
-      ? Date.parse((prevMkt as { reveal_at: string }).reveal_at)
-      : null;
     const prevOpensMs = Date.parse((prevMkt as { opens_at: string }).opens_at);
-    const refMs = Number.isFinite(prevRevealMs as number) ? (prevRevealMs as number) : prevOpensMs;
-    if (Number.isFinite(refMs) && nowMs - refMs < MIN_MS_BETWEEN_SYSTEM_MARKETS) {
+    if (
+      Number.isFinite(prevOpensMs) &&
+      nowMs - prevOpensMs < MIN_MS_BETWEEN_SYSTEM_MARKETS
+    ) {
       return { error: "Spacing: previous market too recent" };
     }
   }

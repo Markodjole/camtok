@@ -332,7 +332,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     effectiveEngineType,
   );
   const stableDisplayLastChangedAtRef = useRef<number>(0);
-  const BET_MIN_DISPLAY_MS = 5_000;
+  const BET_MIN_DISPLAY_MS = MIN_MS_BETWEEN_SYSTEM_MARKETS;
 
   useEffect(() => {
     if (viewerEnginePillType != null) {
@@ -460,6 +460,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
   async function placeBet(optionId: string) {
     if (!room.currentMarket) return;
+    if (placingOptionId) return;
     const market = room.currentMarket;
     setError(null);
     setMapSheetError(null);
@@ -475,7 +476,6 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         }),
       });
       if (res.ok) {
-        flash(lastStakeAmount);
         let pickedLabel: string | null = null;
         if (market.marketType === "city_grid") {
           const spec = market.cityGridSpec;
@@ -487,6 +487,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             market.options.find((o) => o.id === optionId)?.label ??
             null;
         }
+        flash(lastStakeAmount, pickedLabel);
         setLastBetMarketId(market.id);
         setLastBetOptionLabel(pickedLabel);
         setMyOpenBetMarketIds((prev) => new Set(prev).add(market.id));
@@ -604,12 +605,19 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           : null);
   const displayBetType: BetTypeV2 | null =
     viewerEnginePillType ?? stableDisplayBetType ?? effectiveEngineType ?? marketAnchoredBetType;
+  const bettableDisplayBetType: BetTypeV2 | null =
+    currentMarket?.marketType &&
+    isEngineMarketType(currentMarket.marketType) &&
+    displayBetType != null &&
+    currentMarket.marketType !== displayBetType
+      ? (currentMarket.marketType as BetTypeV2)
+      : displayBetType;
   /** Map camera tracks intent immediately; ribbon/sheet can stay stable via `displayBetType`. */
   const mapBetTypeForCamera: BetTypeV2 | null =
     viewerEnginePillType ?? effectiveEngineType ?? marketAnchoredBetType;
 
   const zonesVisualStyleForBet =
-    displayBetType === "next_zone" ? "pick_zone" : zoneEngineBetActive ? "muted" : "default";
+    bettableDisplayBetType === "next_zone" ? "pick_zone" : zoneEngineBetActive ? "muted" : "default";
 
   /**
    * Three fixed zoom tiers, one per bet category — every bet maps to exactly one.
@@ -768,14 +776,14 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const isDistanceLocked =
     !liveBetRelaxClient() &&
     (() => {
-      if (!displayBetType) return false;
-      if (displayBetType === "next_turn") {
+      if (!bettableDisplayBetType) return false;
+      if (bettableDisplayBetType === "next_turn") {
         return nextPinDistanceM != null && nextPinDistanceM <= 70;
       }
-      if (displayBetType === "time_vs_google") {
+      if (bettableDisplayBetType === "time_vs_google") {
         return nextPinDistanceM != null && nextPinDistanceM <= 160;
       }
-      if (displayBetType === "next_zone") {
+      if (bettableDisplayBetType === "next_zone") {
         const last = routePoints[routePoints.length - 1];
         if (!last || !cityGridSpec) return false;
         const edgeM = distanceToCurrentCellEdgeMeters(cityGridSpec, last.lat, last.lng);
@@ -938,7 +946,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const showViewerGridBetSheet =
     showBetBottomSheet &&
     currentMarket?.marketType === "city_grid" &&
-    displayBetType === "next_zone";
+    bettableDisplayBetType === "next_zone";
 
   // Directional/option sheet: show whenever a non-turn, non-zone pill is active,
   // even if there is no matching market open yet (button will be disabled).
@@ -947,15 +955,15 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     showLiveBets &&
     !betPanelDismissed &&
     !viewerHasBetOnCurrentMarket &&
-    displayBetType != null &&
-    displayBetType !== "next_turn" &&
-    displayBetType !== "next_zone";
+    bettableDisplayBetType != null &&
+    bettableDisplayBetType !== "next_turn" &&
+    bettableDisplayBetType !== "next_zone";
 
   // Real options when market matches; otherwise believable placeholders so the sheet is never empty.
   const sheetMarketOptions: Array<{ id: string; label: string; shortLabel?: string; displayOrder: number }> =
     useMemo(
-      () => sheetOptionsForDisplayBet(displayBetType, currentMarket),
-      [displayBetType, currentMarket],
+      () => sheetOptionsForDisplayBet(bettableDisplayBetType, currentMarket),
+      [bettableDisplayBetType, currentMarket],
     );
   const sheetMarketOptionsLimited = sheetMarketOptions
     .slice()
@@ -969,21 +977,21 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     (!liveBetRelaxClient() &&
       (isLocked ||
         (viewerEnginePillType != null &&
-          isEngineMarketType(displayBetType ?? "") &&
-          currentMarket.marketType !== (displayBetType ?? ""))));
+          isEngineMarketType(bettableDisplayBetType ?? "") &&
+          currentMarket.marketType !== (bettableDisplayBetType ?? ""))));
 
   const mapBetSheetOpen =
     showViewerGridBetSheet || showViewerDirectionalBetSheet;
 
   const viewerCurrentBetHeadline =
-    displayBetType != null ? engineBetHeadline(displayBetType) : null;
+    bettableDisplayBetType != null ? engineBetHeadline(bettableDisplayBetType) : null;
 
   const sheetBetHeadline = viewerCurrentBetHeadline ?? "Live bet";
 
   /** Subtitle copy for the grid sheet — driven by the active engine pill. */
   function gridSheetSubtitle(): string {
-    if (!displayBetType) return "Tap the map to pick a cell.";
-    switch (displayBetType) {
+    if (!bettableDisplayBetType) return "Tap the map to pick a cell.";
+    switch (bettableDisplayBetType) {
       case "next_zone":
         return selectedZone
           ? `Selected · ${selectedZone.name}`
@@ -1018,8 +1026,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       setSelectedMapOptionId(selectedZoneId);
       return;
     }
-    if (displayBetType) {
-      const source = sheetOptionsForDisplayBet(displayBetType, currentMarket);
+    if (bettableDisplayBetType) {
+      const source = sheetOptionsForDisplayBet(bettableDisplayBetType, currentMarket);
       const limited = source
         .slice()
         .sort((a, b) => a.displayOrder - b.displayOrder)
@@ -1038,6 +1046,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     selectedZoneId,
     selectedCheckpointId,
     displayBetType,
+    bettableDisplayBetType,
     currentMarket?.options,
   ]);
 
@@ -1207,7 +1216,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
   const showJoystick =
     (() => {
-      const isNextTurnDisplay = String(displayBetType) === "next_turn";
+      const isNextTurnDisplay = String(bettableDisplayBetType) === "next_turn";
       return (
     joyPortalReady &&
     showLiveBets &&
@@ -1222,7 +1231,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
   const joystickLocked =
     (() => {
-      const isNextTurnDisplay = String(displayBetType) === "next_turn";
+      const isNextTurnDisplay = String(bettableDisplayBetType) === "next_turn";
       return (
     isLocked ||
     !currentMarket ||
@@ -1262,10 +1271,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         currentBetHeadline={viewerCurrentBetHeadline}
         nowTick={nowTick}
         eligibleRoundPlans={activeBettingRound?.eligibleRoundPlans ?? []}
-        highlightedEngineType={displayBetType}
-        onSelectEngineType={(t) => {
-          setViewerEnginePillType((prev) => (prev === t ? null : t));
-        }}
+        highlightedEngineType={null}
+        onSelectEngineType={undefined}
       />
       <BottomNav />
       <LiveEventToasts
@@ -1332,6 +1339,21 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             onZoneSelect={(id) => {
               setSelectedZoneId(id);
               if (id) setSelectedCheckpointId(null);
+              if (
+                id &&
+                showViewerGridBetSheet &&
+                !isLocked &&
+                !placingOptionId &&
+                !viewerHasBetOnCurrentMarket
+              ) {
+                void placeBet(id).then((result) => {
+                  if (result?.ok) {
+                    setSelectedZoneId(null);
+                    setSelectedCheckpointId(null);
+                    setMapSheetError(null);
+                  }
+                });
+              }
             }}
             onCheckpointSelect={(id) => {
               setSelectedCheckpointId(id);
@@ -1571,13 +1593,23 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           }
           marketOptions={sheetMarketOptionsLimited}
           selectedOptionId={selectedMapOptionId}
-          onSelectOption={setSelectedMapOptionId}
+          onSelectOption={(id) => {
+            setSelectedMapOptionId(id);
+            if (sheetBettingClosed || placingOptionId || viewerHasBetOnCurrentMarket) return;
+            void placeBet(id).then((result) => {
+              if (result?.ok) {
+                setSelectedZoneId(null);
+                setSelectedCheckpointId(null);
+                setMapSheetError(null);
+              }
+            });
+          }}
           bettingClosed={sheetBettingClosed}
           bettingPending={
             !currentMarket ||
             (!liveBetRelaxClient() &&
-              isEngineMarketType(displayBetType ?? "") &&
-              currentMarket.marketType !== (displayBetType ?? ""))
+              isEngineMarketType(bettableDisplayBetType ?? "") &&
+              currentMarket.marketType !== (bettableDisplayBetType ?? ""))
           }
           isPlacing={!!placingOptionId}
           error={mapSheetError}
@@ -1597,6 +1629,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               setMapSheetError(null);
             }
           }}
+          oneTapOptionBet
         />
       ) : null}
 
@@ -1693,6 +1726,7 @@ function MapSelectionBottomSheet({
   onClose,
   onPlaceBet,
   gridMode = false,
+  oneTapOptionBet = false,
 }: {
   betHeadline: string;
   selectionDetail: string | null;
@@ -1707,6 +1741,7 @@ function MapSelectionBottomSheet({
   onClose: () => void;
   onPlaceBet: () => Promise<void>;
   gridMode?: boolean;
+  oneTapOptionBet?: boolean;
 }) {
   const sorted = [...marketOptions].sort((a, b) => a.displayOrder - b.displayOrder);
   return (
@@ -1753,10 +1788,10 @@ function MapSelectionBottomSheet({
                 <button
                   key={opt.id}
                   type="button"
-                  onClick={() => onSelectOption(opt.id)}
+                  onClick={() => void onSelectOption(opt.id)}
                   className={`block w-full rounded-lg px-2 py-1 text-left text-[10px] ${
                     active
-                      ? "border border-red-400/55 bg-red-500/15 text-white"
+                      ? "border border-violet-400/55 bg-violet-500/20 text-white"
                       : "border border-transparent bg-white/5 text-white/80"
                   }`}
                 >
@@ -1767,24 +1802,30 @@ function MapSelectionBottomSheet({
           </div>
         )}
         {error ? <div className="mt-1.5 text-[10px] text-red-300">{error}</div> : null}
-        <button
-          type="button"
-          disabled={bettingClosed || !selectedOptionId || isPlacing}
-          onClick={() => void onPlaceBet()}
-          className="mt-2 w-full rounded-lg bg-red-500/90 px-2 py-1.5 text-[11px] font-semibold text-white disabled:bg-white/15 disabled:text-white/45"
-        >
-          {bettingPending
-            ? "Opening soon…"
-            : bettingClosed
-              ? "Betting closed"
-              : isPlacing
-                ? "Placing…"
-                : !selectedOptionId
-                  ? gridMode
-                    ? "Choose a cell on the map"
-                    : "Select option"
-                  : "Place bet"}
-        </button>
+        {oneTapOptionBet ? (
+          <div className="mt-2 rounded-lg border border-violet-300/30 bg-violet-500/15 px-2 py-1 text-center text-[10px] font-semibold text-violet-100/90">
+            Tap an option once to place bet instantly
+          </div>
+        ) : (
+          <button
+            type="button"
+            disabled={bettingClosed || !selectedOptionId || isPlacing}
+            onClick={() => void onPlaceBet()}
+            className="mt-2 w-full rounded-lg bg-red-500/90 px-2 py-1.5 text-[11px] font-semibold text-white disabled:bg-white/15 disabled:text-white/45"
+          >
+            {bettingPending
+              ? "Opening soon…"
+              : bettingClosed
+                ? "Betting closed"
+                : isPlacing
+                  ? "Placing…"
+                  : !selectedOptionId
+                    ? gridMode
+                      ? "Choose a cell on the map"
+                      : "Select option"
+                    : "Place bet"}
+          </button>
+        )}
       </div>
     </div>
   );
