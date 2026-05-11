@@ -1893,7 +1893,14 @@ function MapSelectionBottomSheet({
         paddingRight: "12px",
       }}
     >
-      <div className="pointer-events-auto rounded-xl border border-white/10 bg-black/40 p-2 text-white shadow-lg backdrop-blur-md">
+      <div
+        className="pointer-events-auto flex flex-col rounded-xl border border-white/10 bg-black/40 p-2 text-white shadow-lg backdrop-blur-md"
+        /** Match the PiP square (left): width:34vw capped at 180px → height the same. */
+        style={{
+          height: "min(34vw, 180px)",
+          minHeight: "min(34vw, 180px)",
+        }}
+      >
         <div className="mb-1 flex items-start gap-2">
           <div className="min-w-0 flex-1">
             <div className="text-[11px] font-semibold leading-snug text-white">
@@ -1921,7 +1928,7 @@ function MapSelectionBottomSheet({
           </div>
         </div>
         {gridMode ? null : (
-          <div className="max-h-28 space-y-1 overflow-y-auto">
+          <div className="min-h-0 flex-1 space-y-1 overflow-y-auto">
             {sorted.map((opt) => {
               const active = selectedOptionId === opt.id;
               return (
