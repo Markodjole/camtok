@@ -49,28 +49,24 @@ export async function POST(
   const marketId = (room as { current_market_id: string | null }).current_market_id;
 
   if (phase === "waiting_for_next_market") {
-    const grid = await openCityGridMarketForRoom(roomId);
-    if ("marketId" in grid && grid.marketId) {
-      return NextResponse.json({
-        action: "try_open_city_grid",
-        marketId: grid.marketId,
-      });
-    }
-    // Prefer engine markets before system turn-markets so viewers see all bet
-    // types in a short driving span.
+    /**
+     * Engine markets are the only thing the auto-cycle opens now — they have
+     * a tight ~5 s window so a new bet headline appears every few seconds.
+     * `city_grid` is preserved as a manual option (openCityGridMarketForRoom
+     * is still callable elsewhere) but its 50–95 s window made the auto-cycle
+     * stall, so it is no longer the default first choice here.
+     */
     const eng = await openEngineMarketForRoom(roomId);
     if ("marketId" in eng && eng.marketId) {
       return NextResponse.json({
         action: "try_open_engine_market",
-        cityGridSkippedReason: "error" in grid ? grid.error : null,
         ...eng,
       });
     }
-    // Fallback to system (turn) market.
+    // Fallback to a system (turn) market only if engine open failed.
     const r = await openSystemMarketForRoom(roomId);
     return NextResponse.json({
       action: "try_open_market",
-      cityGridSkippedReason: "error" in grid ? grid.error : null,
       engineSkippedReason: "error" in eng ? eng.error : null,
       ...r,
     });
@@ -153,25 +149,40 @@ export async function POST(
           }
         }
       }
-      // Allow time-based lock on every market type now (engine + system). The
-      // engine markets have a short `locks_at` so a new bet appears every few
-      // seconds; city-grid still locks on cell-edge proximity, not time.
+      /**
+       * Hard upper-bound: nothing stays in `market_open` beyond ~10 s past
+       * `opens_at`. Even if `locks_at` or the distance check don't fire we
+       * force-lock so the cycle rolls and a new bet appears.
+       */
+      const HARD_OPEN_CAP_MS = 10_000;
+      const overOpenCap =
+        Number.isFinite(opensAtMs) && now - opensAtMs >= HARD_OPEN_CAP_MS;
       const timeoutApplies = marketType !== "city_grid";
       if (
         marketAgeOkForLock &&
-        (distanceLocked || (timeoutApplies && now >= locksAt))
+        (distanceLocked || (timeoutApplies && now >= locksAt) || overOpenCap)
       ) {
         const r = await lockMarket(marketId);
         return NextResponse.json({
           action: "lock",
-          reason: distanceLocked ? (distanceReason ?? "distance") : "timeout",
+          reason: distanceLocked
+            ? (distanceReason ?? "distance")
+            : overOpenCap
+              ? "hard_cap"
+              : "timeout",
           ...r,
         });
       }
     }
     if (status === "locked") {
+      /**
+       * Hard upper-bound: nothing stays in `market_locked` beyond ~3 s past
+       * `locks_at` — settle on time so the next bet can open.
+       */
+      const HARD_LOCK_CAP_MS = 3_000;
+      const lockedTooLong =
+        Number.isFinite(locksAt) && now - locksAt >= HARD_LOCK_CAP_MS;
       if (isEngineMarketType(marketType)) {
-        // Event-driven settlement: check natural condition for this bet type.
         const settle = await shouldSettleEngineMarket(service, {
           marketId,
           marketType,
@@ -179,13 +190,18 @@ export async function POST(
           liveSessionId: (market as { live_session_id: string | null }).live_session_id,
           roomId,
         });
-        if (settle) {
+        if (settle || lockedTooLong) {
           const r = await revealAndSettleMarket(marketId);
-          return NextResponse.json({ action: "engine_event_reveal", marketType, ...r });
+          return NextResponse.json({
+            action: "engine_event_reveal",
+            marketType,
+            reason: settle ? "event" : "hard_cap",
+            ...r,
+          });
         }
         return NextResponse.json({ action: "engine_waiting", marketType, phase });
       }
-      if (now >= revealAt) {
+      if (now >= revealAt || lockedTooLong) {
         const r = await revealAndSettleMarket(marketId);
         return NextResponse.json({ action: "reveal", ...r });
       }

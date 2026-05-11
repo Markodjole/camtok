@@ -40,8 +40,21 @@ const ENGINE_ROTATION_ORDER: BetTypeV2[] = [
 export async function openEngineMarketForRoom(roomId: string) {
   unstable_noStore();
 
+  /**
+   * Engine eligibility used to gate market opening — but a single transient
+   * failure in the betting engine snapshot (e.g. brief geocode hiccup) would
+   * stall the entire cycle. We now treat eligibility as a *hint* only: if it
+   * resolves we filter the rotation by it; if it errors we still open one of
+   * the rotation defaults. The user's priority is "a new bet every few
+   * seconds", so we never bail here on engine-snapshot errors.
+   */
   const payload = await getActiveBettingRoundPayload(roomId, null);
-  if ("error" in payload) return { error: payload.error };
+  const eligibleEngineTypes: BetTypeV2[] =
+    "error" in payload
+      ? []
+      : (payload.eligibleRoundPlans ?? [])
+          .map((p) => p.type)
+          .filter((t): t is BetTypeV2 => ENGINE_BET_TYPES.has(t));
 
   const service = await createServiceClient();
 
@@ -57,10 +70,6 @@ export async function openEngineMarketForRoom(roomId: string) {
 
   const sessionId = (room as { live_session_id: string }).live_session_id;
   const capturedZone = (room as { region_label: string | null }).region_label ?? null;
-
-  const eligibleEngineTypes = (payload.eligibleRoundPlans ?? [])
-    .map((p) => p.type)
-    .filter((t): t is BetTypeV2 => ENGINE_BET_TYPES.has(t));
 
   const { data: recentMarkets } = await service
     .from("live_betting_markets")

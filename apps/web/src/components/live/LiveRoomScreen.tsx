@@ -402,13 +402,23 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   );
 
   useEffect(() => {
+    /**
+     * Every viewer also POSTs /tick alongside the state pull. The tick
+     * endpoint is idempotent (phase guards prevent double transitions) and
+     * driving it from viewers means the bet cycle keeps rolling even when the
+     * streamer's tab is backgrounded and its setInterval is throttled.
+     */
     const id = setInterval(async () => {
       try {
-        // Room state only — tick is driven by the streamer panel so we do not
-        // POST /tick from every viewer (dev terminal spam + redundant load).
-        const stateRes = await fetch(`/api/live/rooms/${initialRoom.roomId}/state`, {
-          cache: "no-store",
-        });
+        const [stateRes] = await Promise.all([
+          fetch(`/api/live/rooms/${initialRoom.roomId}/state`, {
+            cache: "no-store",
+          }),
+          fetch(`/api/live/rooms/${initialRoom.roomId}/tick`, {
+            method: "POST",
+            cache: "no-store",
+          }).catch(() => undefined),
+        ]);
         if (stateRes.ok) {
           const json = (await stateRes.json()) as { room: LiveFeedRow | null };
           if (json.room) setRoom(json.room);
@@ -416,7 +426,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       } catch {
         /* transient */
       }
-    }, 2000);
+    }, 1500);
     return () => clearInterval(id);
   }, [initialRoom.roomId]);
 
