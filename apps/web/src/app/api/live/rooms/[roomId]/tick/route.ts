@@ -153,8 +153,10 @@ export async function POST(
           }
         }
       }
-      const timeoutApplies =
-        marketType !== "city_grid" && !isEngineMarketType(marketType);
+      // Allow time-based lock on every market type now (engine + system). The
+      // engine markets have a short `locks_at` so a new bet appears every few
+      // seconds; city-grid still locks on cell-edge proximity, not time.
+      const timeoutApplies = marketType !== "city_grid";
       if (
         marketAgeOkForLock &&
         (distanceLocked || (timeoutApplies && now >= locksAt))

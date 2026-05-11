@@ -19,7 +19,7 @@ import type { LiveFeedRow, RoutePoint } from "@/actions/live-feed";
 import { LIVE_BET_LOCK_DISTANCE_M } from "@/lib/live/liveBetLockDistance";
 import {
   MIN_MARKET_OPEN_MS_BEFORE_LOCK,
-  MIN_MS_BETWEEN_SYSTEM_MARKETS,
+  VIEWER_BET_MIN_DISPLAY_MS,
 } from "@/lib/live/liveBetMinOpenMs";
 import { liveBetRelaxClient } from "@/lib/live/liveBetRelax";
 import { metersBetween, squareWgs84BoundsFromCenter } from "@/lib/live/routing/geometry";
@@ -326,13 +326,13 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
    * Stable display bet — only switches to a new type when:
    *  1. The user explicitly tapped a pill (`viewerEnginePillType` changed), OR
    *  2. The effective engine type changed AND the current type has been shown for the
-   *     minimum hold window (same as MIN_MS_BETWEEN_SYSTEM_MARKETS on the server).
+   *     minimum hold window (VIEWER_BET_MIN_DISPLAY_MS).
    */
   const [stableDisplayBetType, setStableDisplayBetType] = useState<BetTypeV2 | null>(
     effectiveEngineType,
   );
   const stableDisplayLastChangedAtRef = useRef<number>(0);
-  const BET_MIN_DISPLAY_MS = MIN_MS_BETWEEN_SYSTEM_MARKETS;
+  const BET_MIN_DISPLAY_MS = VIEWER_BET_MIN_DISPLAY_MS;
 
   useEffect(() => {
     if (viewerEnginePillType != null) {
@@ -821,13 +821,10 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     !liveBetRelaxClient() &&
     !!currentMarket &&
     (() => {
-      // Keep engine + city-grid bets open until their individual distance/event locks.
-      if (
-        currentMarket.marketType === "city_grid" ||
-        isEngineMarketType(currentMarket.marketType)
-      ) {
-        return false;
-      }
+      // City-grid locks on cell-edge distance, not time. Every other bet
+      // (engine + turn) honors `locks_at` so the popup closes after the
+      // few-second window the viewer was shown.
+      if (currentMarket.marketType === "city_grid") return false;
       const t = Date.parse(currentMarket.locksAt);
       if (!Number.isFinite(t)) return false;
       return t <= Date.now();

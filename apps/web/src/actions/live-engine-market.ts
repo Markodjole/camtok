@@ -13,14 +13,14 @@ import { MIN_MS_BETWEEN_SYSTEM_MARKETS } from "@/lib/live/liveBetMinOpenMs";
 import { engineBetHeadline } from "@/lib/live/betting/betTypeV2Label";
 import { metersBetween } from "@/lib/live/routing/geometry";
 
-/** Betting window for provisional engine markets (seconds). */
-const ENGINE_OPEN_SEC = 120;
 /**
- * Far-future placeholder for reveal_at on engine markets.
- * Actual reveal is event-driven (zone exit, turn, pin reached, etc.).
- * Using 2 hours so the time-based path in the tick route never fires accidentally.
+ * Engine markets time-lock quickly so the viewer sees a new bet headline every
+ * few seconds — the room then settles + opens a fresh market of a different
+ * type. Real outcome data is still recorded against the lock-time snapshot.
  */
-const ENGINE_REVEAL_FAR_FUTURE_MS = 2 * 60 * 60 * 1_000;
+const ENGINE_OPEN_SEC = 5;
+/** Reveal a beat after lock so tick can settle and roll into the next market. */
+const ENGINE_REVEAL_AFTER_LOCK_MS = 1_000;
 const ENGINE_ROTATION_ORDER: BetTypeV2[] = [
   "time_vs_google",
   "stop_count",
@@ -103,6 +103,12 @@ export async function openEngineMarketForRoom(roomId: string) {
   ) {
     betType = candidates.find((t) => t !== betType) ?? betType;
   }
+  // Never repeat the immediately-previous bet type — the viewer should always
+  // see a different headline on each cycle.
+  if (lastType && betType === lastType && candidates.length > 1) {
+    betType =
+      candidates.find((t) => t !== lastType) ?? betType;
+  }
 
   const options = provisionalOptionsForBetType(
     betType as Parameters<typeof provisionalOptionsForBetType>[0],
@@ -132,8 +138,7 @@ export async function openEngineMarketForRoom(roomId: string) {
   const now = new Date();
   const locksAtMs = now.getTime() + (relax ? 3_600_000 : ENGINE_OPEN_SEC * 1_000);
   const locksAt = new Date(locksAtMs);
-  // Reveal is event-driven, not time-based. Set far-future as a safety net.
-  const revealAt = new Date(locksAtMs + ENGINE_REVEAL_FAR_FUTURE_MS);
+  const revealAt = new Date(locksAtMs + ENGINE_REVEAL_AFTER_LOCK_MS);
 
   const { data: market, error: marketError } = await service
     .from("live_betting_markets")
@@ -209,8 +214,11 @@ export async function shouldSettleEngineMarket(
   },
 ): Promise<boolean> {
   const locksAtMs = new Date(locksAt).getTime();
-  // Hard upper-bound: settle after 4 minutes if the condition never fires.
-  if (Date.now() - locksAtMs > 4 * 60 * 1_000) return true;
+  // Engine markets are now short bet windows — settle ~1 s after they lock so
+  // the room can roll into the next bet type quickly. Real outcomes for "did
+  // the driver actually turn here" are still recorded against the lock-time
+  // GPS snapshot during the lifetime of the snapshot.
+  if (Date.now() - locksAtMs > 1_000) return true;
 
   switch (marketType) {
     case "zone_exit_time":

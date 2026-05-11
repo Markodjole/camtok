@@ -312,9 +312,11 @@ export function OwnerLiveControlPanel({
   }
 
   function startTick(rid: string) {
+    // Faster tick keeps the bet-cycle tight: a fresh engine bet appears every
+    // few seconds (lock → settle → open next bet of a different type).
     tickRef.current = setInterval(async () => {
       await fetch(`/api/live/rooms/${rid}/tick`, { method: "POST" }).catch(() => undefined);
-    }, 4000);
+    }, 1500);
   }
 
   async function stopLive() {
