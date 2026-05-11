@@ -1154,8 +1154,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   useEffect(() => {
     const placeBottomLeft = () => {
       const boxW = Math.min(window.innerWidth * 0.34, 180);
+      // Flush against the BottomNav (~4.75rem) and the left edge.
       const top = Math.max(48, window.innerHeight - boxW - 76);
-      setPipPos({ top, left: 12 });
+      setPipPos({ top, left: 0 });
     };
     placeBottomLeft();
     window.addEventListener("resize", placeBottomLeft);
@@ -1543,7 +1544,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       ) : null}
       {/* ── PiP corner: swapped view + expand toggle ── */}
       <div
-        className="absolute z-30 overflow-hidden rounded-2xl border border-white/25 shadow-2xl"
+        className="absolute z-30 overflow-hidden border border-white/15 shadow-2xl"
         style={{
           top: pipPos.top,
           left: pipPos.left,
@@ -1551,7 +1552,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           height: "34vw",
           maxWidth: 180,
           maxHeight: 180,
-          opacity: 0.9,
+          opacity: 0.95,
           touchAction: "none",
           cursor: pipDragReady ? "grabbing" : "grab",
         }}
