@@ -958,16 +958,19 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     currentMarket?.marketType === "city_grid" &&
     viewerBetOfferType === "next_zone";
 
-  // Directional/option sheet: show whenever a non-turn, non-zone pill is active,
-  // even if there is no matching market open yet (button will be disabled).
+  // Directional/option sheet: shown for every bet type that isn't the city-grid
+  // cell picker. Even when there's no matching market yet, we render disabled
+  // options so the viewer never sees an empty UI while the pill advertises a bet.
   const showViewerDirectionalBetSheet =
     mapExpanded &&
     showLiveBets &&
     !betPanelDismissed &&
     !viewerHasBetOnCurrentMarket &&
     viewerBetOfferType != null &&
-    viewerBetOfferType !== "next_turn" &&
-    viewerBetOfferType !== "next_zone";
+    !(
+      currentMarket?.marketType === "city_grid" &&
+      viewerBetOfferType === "next_zone"
+    );
 
   // Real options when market matches; otherwise believable placeholders so the sheet is never empty.
   const sheetMarketOptions: Array<{ id: string; label: string; shortLabel?: string; displayOrder: number }> =
@@ -1224,34 +1227,26 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     setPipPos({ top: nextTop, left: nextLeft });
   };
 
+  /**
+   * The directional sheet now owns one-tap betting for every bet type, so the
+   * joystick is reserved for moments when no sheet is up — keeps the popup the
+   * single, primary bet surface.
+   */
   const showJoystick =
-    (() => {
-      const isNextTurnDisplay = String(displayBetType) === "next_turn";
-      return (
     joyPortalReady &&
     showLiveBets &&
     currentMarket != null &&
     !viewerHasBetOnCurrentMarket &&
     !isLocked &&
-    (currentMarket.marketType !== "city_grid" ||
-          isNextTurnDisplay) &&
-        (!mapBetSheetOpen || isNextTurnDisplay) &&
-        !(currentMarket.marketType === "city_grid" && showViewerGridBetSheet)
-      );
-    })();
+    currentMarket.marketType !== "city_grid" &&
+    !mapBetSheetOpen;
 
   const joystickLocked =
-    (() => {
-      const isNextTurnDisplay = String(displayBetType) === "next_turn";
-      return (
     isLocked ||
     !currentMarket ||
-    (currentMarket.marketType === "city_grid" &&
-          !isNextTurnDisplay) ||
+    currentMarket.marketType === "city_grid" ||
     !!placingOptionId ||
-        viewerHasBetOnCurrentMarket
-      );
-    })();
+    viewerHasBetOnCurrentMarket;
 
   const onPipPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     if (pipLongPressTimerRef.current) clearTimeout(pipLongPressTimerRef.current);

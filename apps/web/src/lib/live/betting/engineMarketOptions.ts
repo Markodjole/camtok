@@ -28,25 +28,19 @@ type MarketOptsRow = {
 };
 
 /**
- * Prefer DB-backed options when the open market matches this bet type; otherwise
- * show realistic placeholder choices so the sheet never looks empty.
+ * When a market is open we always show its real `option_set` so the optionId
+ * placed with the bet is one the server will accept. Placeholder options are
+ * only used when there is no live market yet but a bet headline is being
+ * advertised, so the sheet never looks empty.
  */
 export function sheetOptionsForDisplayBet(
   displayBetType: BetTypeV2 | null,
   currentMarket: MarketOptsRow | null | undefined,
 ): Array<{ id: string; label: string; shortLabel?: string; displayOrder: number }> {
-  if (!displayBetType) return currentMarket?.options ?? [];
   const dbOptions = currentMarket?.options;
-  if (
-    currentMarket?.marketType === displayBetType &&
-    dbOptions &&
-    dbOptions.length > 0
-  ) {
-    return dbOptions;
-  }
-  const prov = provisionalOptionsForBetType(displayBetType);
-  if (prov.length > 0) return prov;
-  return currentMarket?.options ?? [];
+  if (dbOptions && dbOptions.length > 0) return dbOptions;
+  if (!displayBetType) return [];
+  return provisionalOptionsForBetType(displayBetType);
 }
 
 /** Placeholder options when no matching market row exists — reads like real stakes. */
