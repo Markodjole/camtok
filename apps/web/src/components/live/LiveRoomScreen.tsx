@@ -27,8 +27,8 @@ import { LiveVideoPlayer } from "./LiveVideoPlayer";
 import { DirectionalBetPad } from "./DirectionalBetPad";
 import { LiveDecisionStatusRibbon } from "./LiveDecisionStatusRibbon";
 import { useCountdown } from "./useCountdown";
-import { BetPlacedPill, LiveEventToasts, useBetPill } from "./LiveEventToasts";
-import { SkillFeedbackCard, type SkillFeedbackData } from "./SkillFeedbackCard";
+import { LiveEventToasts } from "./LiveEventToasts";
+import type { SkillFeedbackData } from "./SkillFeedbackCard";
 import { ReplaySheet } from "./ReplaySheet";
 import { LiveViewerStakePicker } from "./LiveViewerStakePicker";
 import { TopBar } from "@/components/layout/top-bar";
@@ -108,7 +108,11 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [error, setError] = useState<string | null>(null);
   const [mapSheetError, setMapSheetError] = useState<string | null>(null);
   const [showReplay, setShowReplay] = useState(false);
-  const [skillFeedback, setSkillFeedback] = useState<SkillFeedbackData | null>(null);
+  /** Big center readout: stake committed, then win (green +) or loss (red -). */
+  const [centerMoneyFlash, setCenterMoneyFlash] = useState<{
+    kind: "stake" | "win" | "loss";
+    amount: number;
+  } | null>(null);
   /** When true: map is full-screen, camera feed is in the corner pip */
   const [mapExpanded, setMapExpanded] = useState(true);
   const [selectedZoneId, setSelectedZoneId] = useState<string | null>(null);
@@ -167,8 +171,25 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   } | null>(null);
   const passedViewerPinIdsRef = useRef<Set<string>>(new Set());
   const passedMarketTurnIdsRef = useRef<Set<string>>(new Set());
-  const skillFeedbackTimerRef = { current: null as ReturnType<typeof setTimeout> | null };
-  const { betPill, flash } = useBetPill();
+  const centerFlashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pulseCenterMoney = useCallback(
+    (kind: "stake" | "win" | "loss", amount: number) => {
+      if (centerFlashTimerRef.current) clearTimeout(centerFlashTimerRef.current);
+      setCenterMoneyFlash({ kind, amount });
+      const ms = kind === "stake" ? 1_800 : 2_600;
+      centerFlashTimerRef.current = setTimeout(() => {
+        setCenterMoneyFlash(null);
+        centerFlashTimerRef.current = null;
+      }, ms);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    return () => {
+      if (centerFlashTimerRef.current) clearTimeout(centerFlashTimerRef.current);
+    };
+  }, []);
   const { data: activeBettingRound } = useActiveBetRound(room.roomId, 2500);
   const [viewerEnginePillType, setViewerEnginePillType] = useState<BetTypeV2 | null>(
     null,
@@ -389,10 +410,12 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   }, []);
 
   const handleSettlement = useCallback((data: SkillFeedbackData) => {
-    setSkillFeedback(data);
-    if (skillFeedbackTimerRef.current) clearTimeout(skillFeedbackTimerRef.current);
-    skillFeedbackTimerRef.current = setTimeout(() => setSkillFeedback(null), 7000);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    if (data.won) {
+      pulseCenterMoney("win", data.payoutAmount);
+    } else {
+      pulseCenterMoney("loss", data.stakeAmount);
+    }
+  }, [pulseCenterMoney]);
 
   const onViewerRoomActivity = useCallback(
     (summary: { myOpenBetMarketIds: string[] }) => {
@@ -497,7 +520,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             market.options.find((o) => o.id === optionId)?.label ??
             null;
         }
-        flash(lastStakeAmount, pickedLabel);
+        pulseCenterMoney("stake", lastStakeAmount);
+        setBetPanelDismissed(true);
         setLastBetMarketId(market.id);
         setLastBetOptionLabel(pickedLabel);
         setMyOpenBetMarketIds((prev) => new Set(prev).add(market.id));
@@ -946,7 +970,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [betPanelDismissed, setBetPanelDismissed] = useState(false);
   useEffect(() => {
     setBetPanelDismissed(false);
-  }, [currentMarket?.id, mapExpanded, displayBetType]);
+  }, [currentMarket?.id, mapExpanded]);
   useEffect(() => {
     if (displayBetType) setMapFollow(true);
   }, [displayBetType]);
@@ -1300,15 +1324,12 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         onSettlement={handleSettlement}
         onRoomActivity={onViewerRoomActivity}
       />
-      <BetPlacedPill text={betPill} />
-
-      {/* Skill feedback card — shown after each settled bet */}
-      {skillFeedback && (
-        <SkillFeedbackCard
-          data={skillFeedback}
-          onDismiss={() => setSkillFeedback(null)}
+      {centerMoneyFlash ? (
+        <ViewerCenterMoneyFlash
+          kind={centerMoneyFlash.kind}
+          amount={centerMoneyFlash.amount}
         />
-      )}
+      ) : null}
 
       {/* Replay sheet — shown when user taps history button */}
       {showReplay && (
@@ -1694,6 +1715,43 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             document.body,
           )
         : null}
+    </div>
+  );
+}
+
+function fmtUsdFlash(n: number): string {
+  const r = Math.round(n * 100) / 100;
+  return Number.isInteger(r) ? String(r) : r.toFixed(2);
+}
+
+/** Full-screen center money cue: stake (white), win (green +payout), loss (red -stake). */
+function ViewerCenterMoneyFlash({
+  kind,
+  amount,
+}: {
+  kind: "stake" | "win" | "loss";
+  amount: number;
+}) {
+  const abs = Math.abs(amount);
+  const s = fmtUsdFlash(abs);
+  const label = kind === "win" ? `+$${s}` : `-$${s}`;
+  const colorClass =
+    kind === "win"
+      ? "text-emerald-400"
+      : kind === "loss"
+        ? "text-rose-400"
+        : "text-white";
+
+  return (
+    <div
+      className="pointer-events-none fixed inset-0 z-[245] flex items-center justify-center"
+      aria-live="polite"
+    >
+      <div
+        className={`text-5xl font-black tabular-nums tracking-tight [text-shadow:0_0_28px_rgba(0,0,0,0.92)] sm:text-6xl ${colorClass}`}
+      >
+        {label}
+      </div>
     </div>
   );
 }
