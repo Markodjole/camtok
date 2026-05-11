@@ -1011,15 +1011,21 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           null)
       : null);
 
+  /**
+   * "Has bet on this market" derives purely from local state: the moment
+   * placeBet succeeds we stamp `lastBetMarketId`, and a market-change effect
+   * clears it. Using the activity-API set caused stale "open bet" rows to
+   * keep the popup hidden across markets even after the bet settled.
+   */
   const viewerHasBetOnCurrentMarket = Boolean(
-    currentMarket && myOpenBetMarketIds.has(currentMarket.id),
+    currentMarket && lastBetMarketId === currentMarket.id,
   );
+  void myOpenBetMarketIds;
 
   const [betPanelDismissed, setBetPanelDismissed] = useState(false);
-  /** Hold the popup closed briefly after each new market opens so the viewer
-   *  feels the cadence of a fresh bet appearing, then leaves plenty of time
-   *  for the actual tap. */
-  const BET_INTERSTITIAL_MS = 1_500;
+  /** Brief pause after a new market opens so the viewer feels a fresh bet
+   *  appearing; kept short so each market has lots of bettable time. */
+  const BET_INTERSTITIAL_MS = 800;
   const lastSeenMarketIdRef = useRef<string | null>(null);
   useEffect(() => {
     const next = currentMarket?.id ?? null;
@@ -1036,17 +1042,32 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   useEffect(() => {
     if (!mapExpanded) setBetPanelDismissed(false);
   }, [mapExpanded]);
+  /** Safety: if `betPanelDismissed` is stuck on while a market is open and
+   *  the viewer hasn't bet, force it off after 3s so the popup can never be
+   *  permanently suppressed by a missed timer / unmount race. */
+  useEffect(() => {
+    if (!betPanelDismissed) return;
+    if (viewerHasBetOnCurrentMarket) return;
+    if (!currentMarket) return;
+    const t = setTimeout(() => setBetPanelDismissed(false), 3_000);
+    return () => clearTimeout(t);
+  }, [betPanelDismissed, viewerHasBetOnCurrentMarket, currentMarket?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (displayBetType) setMapFollow(true);
   }, [displayBetType]);
 
+  /**
+   * Keep the popup visible while a market exists, even through its short
+   * lock window — the server now accepts bets on `locked` markets while the
+   * relax flag is on. `isLocked` no longer gates the sheet.
+   */
   const showBetBottomSheet =
     mapExpanded &&
     showLiveBets &&
     currentMarket != null &&
     !betPanelDismissed &&
-    !viewerHasBetOnCurrentMarket &&
-    !isLocked;
+    !viewerHasBetOnCurrentMarket;
+  void isLocked;
 
   // Grid cell-picker sheet: only for next_zone on city_grid markets.
   const showViewerGridBetSheet =
