@@ -73,6 +73,20 @@ export function DirectionalBetPad({
   const gMag = Math.min(1, Math.hypot(gForce.x, gForce.y));
   const activeDir = pressing ?? flashDir;
 
+  /**
+   * Only render directions that have a real option backing them. The `next_turn`
+   * round ships exactly 3 options (left / straight / right) — showing a dead
+   * "Back" button confused viewers into thinking there was a fourth bet
+   * available.
+   */
+  const availableDirs = useMemo<Set<Direction>>(() => {
+    const out = new Set<Direction>();
+    for (const dir of DIRECTION_ORDER) {
+      if (matchOption(options, dir)) out.add(dir);
+    }
+    return out;
+  }, [options]);
+
   useEffect(() => {
     return () => { if (flashTimerRef.current) clearTimeout(flashTimerRef.current); };
   }, []);
@@ -130,46 +144,50 @@ export function DirectionalBetPad({
           />
         </div>
 
-        {/* UP */}
-        <DpadButton
-          dir="forward"
-          activeDir={activeDir}
-          locked={locked}
-          option={matchOption(options, "forward")}
-          onPress={handlePress}
-          amountLabel={amountLabel}
-          style={{ top: 0, left: "50%", transform: "translateX(-50%)" }}
-        />
-        {/* LEFT */}
-        <DpadButton
-          dir="left"
-          activeDir={activeDir}
-          locked={locked}
-          option={matchOption(options, "left")}
-          onPress={handlePress}
-          amountLabel={amountLabel}
-          style={{ left: 0, top: "50%", transform: "translateY(-50%)" }}
-        />
-        {/* RIGHT */}
-        <DpadButton
-          dir="right"
-          activeDir={activeDir}
-          locked={locked}
-          option={matchOption(options, "right")}
-          onPress={handlePress}
-          amountLabel={amountLabel}
-          style={{ right: 0, top: "50%", transform: "translateY(-50%)" }}
-        />
-        {/* DOWN */}
-        <DpadButton
-          dir="back"
-          activeDir={activeDir}
-          locked={locked}
-          option={matchOption(options, "back")}
-          onPress={handlePress}
-          amountLabel={amountLabel}
-          style={{ bottom: 0, left: "50%", transform: "translateX(-50%)" }}
-        />
+        {availableDirs.has("forward") ? (
+          <DpadButton
+            dir="forward"
+            activeDir={activeDir}
+            locked={locked}
+            option={matchOption(options, "forward")}
+            onPress={handlePress}
+            amountLabel={amountLabel}
+            style={{ top: 0, left: "50%", transform: "translateX(-50%)" }}
+          />
+        ) : null}
+        {availableDirs.has("left") ? (
+          <DpadButton
+            dir="left"
+            activeDir={activeDir}
+            locked={locked}
+            option={matchOption(options, "left")}
+            onPress={handlePress}
+            amountLabel={amountLabel}
+            style={{ left: 0, top: "50%", transform: "translateY(-50%)" }}
+          />
+        ) : null}
+        {availableDirs.has("right") ? (
+          <DpadButton
+            dir="right"
+            activeDir={activeDir}
+            locked={locked}
+            option={matchOption(options, "right")}
+            onPress={handlePress}
+            amountLabel={amountLabel}
+            style={{ right: 0, top: "50%", transform: "translateY(-50%)" }}
+          />
+        ) : null}
+        {availableDirs.has("back") ? (
+          <DpadButton
+            dir="back"
+            activeDir={activeDir}
+            locked={locked}
+            option={matchOption(options, "back")}
+            onPress={handlePress}
+            amountLabel={amountLabel}
+            style={{ bottom: 0, left: "50%", transform: "translateX(-50%)" }}
+          />
+        ) : null}
       </div>
     </div>
   );

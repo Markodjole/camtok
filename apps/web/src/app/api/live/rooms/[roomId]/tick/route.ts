@@ -69,15 +69,25 @@ export async function POST(
       .maybeSingle();
     if (market) {
       const status = (market as { status: string }).status;
+      const mType = (market as { market_type: string }).market_type;
       const locksAtMs = new Date(
         (market as { locks_at: string }).locks_at,
       ).getTime();
       const nowMs = Date.now();
-      if (status === "open" && nowMs >= locksAtMs) {
-        // Lock the current market and immediately drop the room back to
-        // `waiting_for_next_market` so the *next* tick opens a new bet card.
-        // We do NOT wait for settlement here — that happens asynchronously
-        // via `sweepPendingSettlements` once the natural event fires.
+      /**
+       * Stale-market eviction: only the 3 active bet types (`next_turn`,
+       * `next_zone`, `zone_exit_time`) are allowed in front of the viewer.
+       * Anything else (a `time_vs_google` row from before this rewrite, an
+       * old `next_direction` system market, etc.) is force-locked + cleared
+       * so the next tick opens one of the 3 supported bets.
+       */
+      const isActiveRotationType =
+        mType === "next_turn" ||
+        mType === "city_grid" ||
+        mType === "zone_exit_time";
+      const shouldLockNow =
+        status === "open" && (nowMs >= locksAtMs || !isActiveRotationType);
+      if (shouldLockNow) {
         await lockMarket(marketId);
         await service
           .from("live_rooms")

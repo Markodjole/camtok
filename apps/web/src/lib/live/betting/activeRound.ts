@@ -123,10 +123,26 @@ export async function getActiveBettingRoundPayload(
     canBuildEtaDriftRound: Boolean(room.destination) || hasPins,
   };
 
-  const roundPlan = BettingEngineV2.selectBestRound(snapshot, { mvpOnly: true });
-  const eligibleRoundPlans = BettingEngineV2.listEligibleRounds(snapshot, {
+  const roundPlanRaw = BettingEngineV2.selectBestRound(snapshot, {
     mvpOnly: true,
   });
+  const eligibleRoundPlansRaw = BettingEngineV2.listEligibleRounds(snapshot, {
+    mvpOnly: true,
+  });
+  /**
+   * Today's product only ships 3 bet types: `next_turn`, `next_zone`, and
+   * `zone_exit_time`. The betting engine still computes eligibility for the
+   * full MVP list, so the viewer ribbon used to show pills for bets we no
+   * longer open (ETA vs Google, Stops this zone, …). Drop everything else
+   * before it leaves the server so no stale headline can render on the
+   * viewer.
+   */
+  const ACTIVE_TYPES = new Set(["next_turn", "next_zone", "zone_exit_time"]);
+  const eligibleRoundPlans = eligibleRoundPlansRaw.filter((p) =>
+    ACTIVE_TYPES.has(p.type),
+  );
+  const roundPlan =
+    roundPlanRaw && ACTIVE_TYPES.has(roundPlanRaw.type) ? roundPlanRaw : null;
 
   let userBet: LiveBetRowPublic | null = null;
   if (userId && mkt) {

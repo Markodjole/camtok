@@ -562,7 +562,6 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             null;
         }
         pulseCenterMoney("stake", lastStakeAmount, pickedLabel);
-        setBetPanelDismissed(true);
         setSelectedMapOptionId(null);
         setLastBetMarketId(market.id);
         setLastBetOptionLabel(pickedLabel);
@@ -1024,36 +1023,19 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   );
   void myOpenBetMarketIds;
 
-  const [betPanelDismissed, setBetPanelDismissed] = useState(false);
-  /** Brief pause after a new market opens so the viewer feels a fresh bet
-   *  appearing; kept short so each market has lots of bettable time. */
-  const BET_INTERSTITIAL_MS = 800;
+  /**
+   * `betPanelDismissed` used to start true for an 800 ms interstitial so the
+   * popup "felt fresh", and could be flipped on by the close button. The
+   * product rule now is: bet card appears IMMEDIATELY when the market opens
+   * and stays for the full 7-second `locks_at` window — no interstitial, no
+   * dismiss-then-reappear UX. The flag is kept (always false) so we can
+   * reintroduce a dismiss action later without rewiring every consumer.
+   */
+  const betPanelDismissed = false;
   const lastSeenMarketIdRef = useRef<string | null>(null);
   useEffect(() => {
-    const next = currentMarket?.id ?? null;
-    if (next === lastSeenMarketIdRef.current) return;
-    lastSeenMarketIdRef.current = next;
-    if (!next) {
-      setBetPanelDismissed(false);
-      return;
-    }
-    setBetPanelDismissed(true);
-    const t = setTimeout(() => setBetPanelDismissed(false), BET_INTERSTITIAL_MS);
-    return () => clearTimeout(t);
+    lastSeenMarketIdRef.current = currentMarket?.id ?? null;
   }, [currentMarket?.id]);
-  useEffect(() => {
-    if (!mapExpanded) setBetPanelDismissed(false);
-  }, [mapExpanded]);
-  /** Safety: if `betPanelDismissed` is stuck on while a market is open and
-   *  the viewer hasn't bet, force it off after 3s so the popup can never be
-   *  permanently suppressed by a missed timer / unmount race. */
-  useEffect(() => {
-    if (!betPanelDismissed) return;
-    if (viewerHasBetOnCurrentMarket) return;
-    if (!currentMarket) return;
-    const t = setTimeout(() => setBetPanelDismissed(false), 3_000);
-    return () => clearTimeout(t);
-  }, [betPanelDismissed, viewerHasBetOnCurrentMarket, currentMarket?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (displayBetType) setMapFollow(true);
   }, [displayBetType]);
@@ -1694,7 +1676,6 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             setSelectedZoneId(null);
             setSelectedCheckpointId(null);
             setMapSheetError(null);
-            setBetPanelDismissed(true);
           }}
           onPlaceBet={async () => {
             if (!selectedZoneId) return;
@@ -1747,7 +1728,6 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             setSelectedZoneId(null);
             setSelectedCheckpointId(null);
             setMapSheetError(null);
-            setBetPanelDismissed(true);
           }}
           onPlaceBet={async () => {
             if (!selectedMapOptionId || sheetBettingClosed) return;
@@ -1762,19 +1742,11 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         />
       ) : null}
 
-      {betPanelDismissed &&
-      mapExpanded &&
-      showLiveBets &&
-      currentMarket != null &&
-      !viewerHasBetOnCurrentMarket ? (
-        <button
-          type="button"
-          onClick={() => setBetPanelDismissed(false)}
-          className="fixed bottom-[calc(4.75rem+env(safe-area-inset-bottom,0px))] left-1/2 z-[199] -translate-x-1/2 rounded-full border border-violet-400/35 bg-violet-950/75 px-4 py-2 text-[11px] font-semibold text-violet-100 shadow-lg backdrop-blur-md active:bg-violet-900/85"
-        >
-          Show bet card
-        </button>
-      ) : null}
+      {/*
+        Previously rendered a "Show bet card" CTA when the viewer dismissed
+        the popup mid-window. The new 7-second rule forbids dismissal, so the
+        button is unreachable and removed entirely.
+      */}
 
       {joyPortalReady && showJoystick
         ? createPortal(
