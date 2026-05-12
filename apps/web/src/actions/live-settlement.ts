@@ -10,6 +10,7 @@ import {
 } from "@bettok/live";
 import {
   cellIdForPosition,
+  parseGridOptionId as parseGridFromId,
   type CityGridSpecCompact,
 } from "@/lib/live/grid/cityGrid500";
 import { isEngineMarketType } from "@/lib/live/betting/engineMarketOptions";
@@ -183,22 +184,17 @@ export async function lockMarket(marketId: string) {
 
   const options = (market as { option_set: LiveMarketOption[] }).option_set;
   const marketType = (market as { market_type?: string }).market_type ?? "";
-  const gridSpec = (market as { city_grid_spec: CityGridSpecCompact | null })
-    .city_grid_spec;
+  void marketType;
+  void cellIdForPosition;
 
-  let selected = options[0]?.id ?? "unknown";
-  if (marketType === "city_grid" && gridSpec && snapshot) {
-    const lat =
-      (snapshot as { normalized_lat: number | null }).normalized_lat ??
-      (snapshot as { raw_lat?: number }).raw_lat;
-    const lng =
-      (snapshot as { normalized_lng: number | null }).normalized_lng ??
-      (snapshot as { raw_lng?: number }).raw_lng;
-    if (typeof lat === "number" && typeof lng === "number") {
-      const cell = cellIdForPosition(gridSpec, lat, lng);
-      if (cell) selected = cell;
-    }
-  }
+  /**
+   * `selected` is the system's provisional "best guess" outcome stored on
+   * the lock record for audit / commit-hash purposes. The real winner is
+   * resolved later in `revealAndSettleMarket`. For all three active bet
+   * types (`next_turn`, `next_zone`, `zone_exit_time`) the option set is
+   * small and bounded; using the first option as the placeholder is fine.
+   */
+  const selected = options[0]?.id ?? "unknown";
 
   const candidateOptionIds = options.map((o) => o.id);
 
@@ -274,7 +270,7 @@ export async function revealAndSettleMarket(marketId: string) {
   const { data: market } = await service
     .from("live_betting_markets")
     .select(
-      "id, room_id, live_session_id, status, option_set, decision_node_id, reveal_at, market_type, city_grid_spec",
+      "id, room_id, live_session_id, status, option_set, decision_node_id, reveal_at, market_type, city_grid_spec, subtitle",
     )
     .eq("id", marketId)
     .maybeSingle();
@@ -398,15 +394,31 @@ export async function revealAndSettleMarket(marketId: string) {
 
   if (marketType === "city_grid" && gridSpec) {
     /**
-     * The grid market is settled the moment the driver crosses into a
-     * different cell (see tick `grid_cell_crossed_reveal`), which can fire
-     * well before the original `reveal_at` safety timeout. Resolving from a
-     * `revealAt - 15 s` window in that case returns zero rows and refunds
-     * the market by mistake. Use the freshest GPS snapshot directly so the
-     * winning cell is whichever one the driver is in *right now*.
+     * `next_zone` now ships 4 cardinal options (N / E / S / W). Read the
+     * start cell from the market subtitle, the current cell from the latest
+     * GPS, and resolve direction from the (row, col) delta. Driver still
+     * sitting in the start cell when `reveal_at` finally hits → refund.
      */
     const liveSessionId = (market as { live_session_id: string })
       .live_session_id;
+    const subtitleStr = (market as { subtitle: string | null }).subtitle;
+    let startRow: number | null = null;
+    let startCol: number | null = null;
+    try {
+      const meta = JSON.parse(subtitleStr ?? "{}") as {
+        startRow?: number;
+        startCol?: number;
+      };
+      startRow = typeof meta.startRow === "number" ? meta.startRow : null;
+      startCol = typeof meta.startCol === "number" ? meta.startCol : null;
+    } catch {
+      // ignore parse failures — fall through to refund below.
+    }
+    if (startRow == null || startCol == null) {
+      await refundMarket(marketId, "city_grid_no_start_cell");
+      return { status: "ambiguous", reason: "city_grid_no_start_cell" };
+    }
+
     const { data: latestGps } = await service
       .from("live_route_snapshots")
       .select("normalized_lat,normalized_lng,raw_lat,raw_lng")
@@ -426,12 +438,37 @@ export async function revealAndSettleMarket(marketId: string) {
     };
     const lat = g.normalized_lat ?? g.raw_lat;
     const lng = g.normalized_lng ?? g.raw_lng;
-    const win = cellIdForPosition(gridSpec, lat, lng);
-    if (!win) {
+    const currCellId = cellIdForPosition(gridSpec, lat, lng);
+    if (!currCellId) {
       await refundMarket(marketId, "city_grid_outside_cells");
       return { status: "ambiguous", reason: "city_grid_outside_cells" };
     }
-    return await settleMarketWithWinner(marketId, win, "gps_cell_enter");
+    const curr = parseGridFromId(currCellId);
+    if (!curr) {
+      await refundMarket(marketId, "city_grid_bad_cell_id");
+      return { status: "ambiguous", reason: "city_grid_bad_cell_id" };
+    }
+    const dRow = curr.row - startRow;
+    const dCol = curr.col - startCol;
+    if (dRow === 0 && dCol === 0) {
+      await refundMarket(marketId, "city_grid_still_in_zone");
+      return { status: "ambiguous", reason: "city_grid_still_in_zone" };
+    }
+    /**
+     * Dominant axis wins. Latitude rows: north = larger row, south = smaller.
+     * Longitude cols: east = larger col, west = smaller.
+     */
+    let winningOption: "north" | "east" | "south" | "west";
+    if (Math.abs(dRow) >= Math.abs(dCol)) {
+      winningOption = dRow > 0 ? "north" : "south";
+    } else {
+      winningOption = dCol > 0 ? "east" : "west";
+    }
+    return await settleMarketWithWinner(
+      marketId,
+      winningOption,
+      "gps_zone_exit_direction",
+    );
   }
 
   const { data: decision } = await service

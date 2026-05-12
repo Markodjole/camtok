@@ -19,6 +19,7 @@ import {
   parseGridOptionId,
   type CityGridSpecCompact,
 } from "@/lib/live/grid/cityGrid500";
+import { getOrBuildGridSpecForRoom } from "@/lib/live/grid/gridSpecForRoom";
 
 /**
  * Active engine rotation. Other engine types still live in
@@ -65,6 +66,7 @@ export async function openEngineMarketForRoom(roomId: string) {
    * Outside that radius the user's "show the zone bets while inside the
    * inner circle" rule fails and we skip without erroring loudly.
    */
+  let engineGridSpec: CityGridSpecCompact | null = null;
   if (betType === "zone_exit_time") {
     const ctx = await loadGridCenterContext(service, sessionId, roomId);
     if (!ctx.ok) return { error: ctx.error };
@@ -73,6 +75,7 @@ export async function openEngineMarketForRoom(roomId: string) {
         error: `zone_exit_time: ${Math.round(ctx.distanceM)} m from cell center > ${ZONE_BET_CENTER_RADIUS_M} m`,
       };
     }
+    engineGridSpec = ctx.spec;
   }
 
   const options = provisionalOptionsForBetType(
@@ -106,6 +109,13 @@ export async function openEngineMarketForRoom(roomId: string) {
       subtitle: JSON.stringify({ capturedZone }),
       market_type: betType,
       option_set: options,
+      /**
+       * Persist the resolved grid spec on this row so subsequent zone bets
+       * (either type) reuse it without round-tripping Google again.
+       */
+      city_grid_spec: engineGridSpec
+        ? (engineGridSpec as unknown as Record<string, unknown>)
+        : null,
       opens_at: now.toISOString(),
       locks_at: locksAt.toISOString(),
       reveal_at: revealAt.toISOString(),
@@ -307,24 +317,15 @@ async function loadGridCenterContext(
   const lng = g.normalized_lng ?? g.raw_lng;
 
   /**
-   * The grid spec lives on `city_grid` markets. Pull the most recent one in
-   * this room — they're emitted often enough that any grid bet is built
-   * against the freshest spec. If none exists yet, the zone bets aren't
-   * eligible — the user wants to gate them on "near the center of the
-   * current zone", and the zone definition comes from this spec.
+   * Resolve the grid spec via the shared helper — reuses the spec from the
+   * most recent `city_grid` market or builds one on the fly from Google.
+   * Without this fallback `zone_exit_time` could not open before the very
+   * first `next_zone` had opened (chicken-and-egg) and the user reported
+   * the bet never showing.
    */
-  const { data: gridRow } = await service
-    .from("live_betting_markets")
-    .select("city_grid_spec")
-    .eq("room_id", roomId)
-    .eq("market_type", "city_grid")
-    .not("city_grid_spec", "is", null)
-    .order("opens_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  const spec = (gridRow as { city_grid_spec: CityGridSpecCompact | null } | null)
-    ?.city_grid_spec;
-  if (!spec) return { ok: false, error: "Zone gate: no grid spec yet" };
+  const specRes = await getOrBuildGridSpecForRoom(service, roomId, liveSessionId);
+  if (!specRes.ok) return { ok: false, error: specRes.error };
+  const spec = specRes.spec;
 
   const cellId = cellIdForPosition(spec, lat, lng);
   if (!cellId) return { ok: false, error: "Zone gate: driver outside grid" };

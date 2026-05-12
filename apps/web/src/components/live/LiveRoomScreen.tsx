@@ -24,7 +24,6 @@ import {
 import { liveBetRelaxClient } from "@/lib/live/liveBetRelax";
 import { metersBetween, squareWgs84BoundsFromCenter } from "@/lib/live/routing/geometry";
 import { LiveVideoPlayer } from "./LiveVideoPlayer";
-import { DirectionalBetPad } from "./DirectionalBetPad";
 import { LiveDecisionStatusRibbon } from "./LiveDecisionStatusRibbon";
 import { useCountdown } from "./useCountdown";
 import { LiveEventToasts } from "./LiveEventToasts";
@@ -44,10 +43,7 @@ import {
 } from "./OwnerLiveControlPanel";
 import { useViewerChromeStore } from "@/stores/viewer-chrome-store";
 import type { BetTypeV2 } from "@bettok/live";
-import {
-  isEngineMarketType,
-  sheetOptionsForDisplayBet,
-} from "@/lib/live/betting/engineMarketOptions";
+import { isEngineMarketType } from "@/lib/live/betting/engineMarketOptions";
 
 const LiveMap = dynamic(() => import("./LiveMap").then((m) => m.LiveMap), {
   ssr: false,
@@ -1055,90 +1051,46 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     if (!Number.isFinite(t)) return false;
     return nowTick >= t;
   })();
-  const showBetBottomSheet =
+  /**
+   * Unified bet card visibility: every active bet type renders through the
+   * same `MapSelectionBottomSheet` so the viewer sees the same component,
+   * the same countdown, and the same one-touch interaction regardless of
+   * whether the round is `next_turn`, `next_zone`, or `zone_exit_time`.
+   * The old joystick + grid-map-tap surfaces are gone.
+   */
+  const showUnifiedBetSheet =
     mapExpanded &&
     showLiveBets &&
     currentMarket != null &&
-    !betPanelDismissed &&
     !viewerHasBetOnCurrentMarket &&
     !betWindowClosed;
   void isLocked;
+  void betPanelDismissed;
 
-  // Grid cell-picker sheet: only for next_zone on city_grid markets.
-  const showViewerGridBetSheet =
-    showBetBottomSheet &&
-    currentMarket?.marketType === "city_grid" &&
-    viewerBetOfferType === "next_zone";
+  const sheetMarketOptions = useMemo<
+    Array<{
+      id: string;
+      label: string;
+      shortLabel?: string;
+      displayOrder: number;
+    }>
+  >(() => currentMarket?.options ?? [], [currentMarket]);
 
-  // Directional/option sheet: shown for every bet type that isn't the city-grid
-  // cell picker. Even when there's no matching market yet, we render disabled
-  // options so the viewer never sees an empty UI while the pill advertises a bet.
-  const showViewerDirectionalBetSheet =
-    mapExpanded &&
-    showLiveBets &&
-    !betPanelDismissed &&
-    !viewerHasBetOnCurrentMarket &&
-    !betWindowClosed &&
-    viewerBetOfferType != null &&
-    /** `next_turn` is the joystick bet — skip the bottom sheet so the
-     *  joystick is the single primary surface for that round. */
-    currentMarket?.marketType !== "next_turn" &&
-    !(
-      currentMarket?.marketType === "city_grid" &&
-      viewerBetOfferType === "next_zone"
-    );
-
-  // Real options when market matches; otherwise believable placeholders so the sheet is never empty.
-  const sheetMarketOptions: Array<{ id: string; label: string; shortLabel?: string; displayOrder: number }> =
-    useMemo(
-      () => sheetOptionsForDisplayBet(viewerBetOfferType, currentMarket),
-      [viewerBetOfferType, currentMarket],
-    );
-  const sheetMarketOptionsLimited = sheetMarketOptions
-    .slice()
-    .sort((a, b) => a.displayOrder - b.displayOrder)
-    .slice(0, 2);
-
-  // Betting is closed when: no market open, time/distance locked, OR the open
-  // market is a different type than the engine bet being shown.
+  /**
+   * One-touch sheet: tapping an option places the bet immediately. The only
+   * remaining "closed" trigger is the 7-second window expiring (already
+   * captured by `betWindowClosed`, which also hides the sheet entirely).
+   */
   const sheetBettingClosed =
     !currentMarket ||
-    (!liveBetRelaxClient() &&
-      (isLocked ||
-        (viewerEnginePillType != null &&
-          isEngineMarketType(viewerBetOfferType ?? "") &&
-          currentMarket.marketType !== (viewerBetOfferType ?? ""))));
+    (!liveBetRelaxClient() && isLocked);
 
-  const mapBetSheetOpen =
-    showViewerGridBetSheet || showViewerDirectionalBetSheet;
+  const mapBetSheetOpen = showUnifiedBetSheet;
 
   const viewerCurrentBetHeadline =
     viewerBetOfferType != null ? engineBetHeadline(viewerBetOfferType) : null;
 
   const sheetBetHeadline = viewerCurrentBetHeadline ?? "Live bet";
-
-  /** Subtitle copy for the grid sheet — driven by the active engine pill. */
-  function gridSheetSubtitle(): string {
-    if (!viewerBetOfferType) return "Tap the map to pick a cell.";
-    switch (viewerBetOfferType) {
-      case "next_zone":
-        return selectedZone
-          ? `Selected · ${selectedZone.name}`
-          : "Tap the map to pick a square, then Place bet.";
-      case "turns_before_zone_exit":
-        return "How many turns before the driver leaves this zone?";
-      case "stop_count":
-        return "How many stops in this zone?";
-      case "zone_exit_time":
-        return "How long until the driver leaves this zone?";
-      case "zone_duration":
-        return "How long will the driver stay in this zone?";
-      default:
-        return selectedZone
-          ? `Selected · ${selectedZone.name}`
-          : "Tap the map once to pick a cell, then tap Place bet.";
-    }
-  }
 
   const driverRouteBadges = useMemo(
     () => drivingRouteStyleBadges(room.drivingRouteStyle, room.transportMode),
@@ -1329,25 +1281,13 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   };
 
   /**
-   * `next_turn` is the joystick bet (one-tap left / straight / right). Every
-   * other bet uses the bottom-sheet popup. The joystick only shows while
-   * the bet window is still open (7 s rule).
+   * The joystick (DirectionalBetPad) and the grid-tap UI were removed in
+   * favour of a single unified bet card so every market — `next_turn`,
+   * `next_zone`, and `zone_exit_time` — looks and feels identical. The
+   * `joyPortalReady` ref is still produced by the layout but no longer
+   * gates any input surface.
    */
-  const isNextTurnMarket = currentMarket?.marketType === "next_turn";
-  const showJoystick =
-    joyPortalReady &&
-    showLiveBets &&
-    currentMarket != null &&
-    isNextTurnMarket &&
-    !viewerHasBetOnCurrentMarket &&
-    !betWindowClosed;
-
-  const joystickLocked =
-    !currentMarket ||
-    !isNextTurnMarket ||
-    !!placingOptionId ||
-    viewerHasBetOnCurrentMarket ||
-    betWindowClosed;
+  void joyPortalReady;
 
   const onPipPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     if (pipLongPressTimerRef.current) clearTimeout(pipLongPressTimerRef.current);
@@ -1448,23 +1388,14 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             viewerTargetWidthMeters={viewerTargetWidthMeters}
             viewerZoomRuleKey={`${mapBetTypeForCamera ?? "none"}:${currentMarket?.id ?? "nomarket"}`}
             onZoneSelect={(id) => {
+              /**
+               * Tapping a cell on the map is now informational only — the
+               * actual bet lives in the unified bottom sheet (N/E/S/W).
+               * Keep the selection so the map highlights what the viewer
+               * tapped.
+               */
               setSelectedZoneId(id);
               if (id) setSelectedCheckpointId(null);
-              if (
-                id &&
-                showViewerGridBetSheet &&
-                !isLocked &&
-                !placingOptionId &&
-                !viewerHasBetOnCurrentMarket
-              ) {
-                void placeBet(id).then((result) => {
-                  if (result?.ok) {
-                    setSelectedZoneId(null);
-                    setSelectedCheckpointId(null);
-                    setMapSheetError(null);
-                  }
-                });
-              }
             }}
             onCheckpointSelect={(id) => {
               setSelectedCheckpointId(id);
@@ -1655,57 +1586,31 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       {/* ── Bottom gradient scrim ────────────────────────── */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-44 bg-gradient-to-t from-black/70 to-transparent" />
 
-      {showViewerGridBetSheet ? (
+      {showUnifiedBetSheet ? (
         <MapSelectionBottomSheet
           betHeadline={
-            viewerCurrentBetHeadline ??
             currentMarket.title ??
-            sheetBetHeadline
-          }
-          selectionDetail={gridSheetSubtitle()}
-          marketOptions={[]}
-          selectedOptionId={selectedZoneId}
-          onSelectOption={() => undefined}
-          bettingClosed={
-            !currentMarket || (!liveBetRelaxClient() && isLocked)
-          }
-          isPlacing={!!placingOptionId}
-          error={mapSheetError}
-          countdown={currentMarket ? <MarketTimer locksAt={currentMarket.locksAt} /> : null}
-          onClose={() => {
-            setSelectedZoneId(null);
-            setSelectedCheckpointId(null);
-            setMapSheetError(null);
-          }}
-          onPlaceBet={async () => {
-            if (!selectedZoneId) return;
-            const result = await placeBet(selectedZoneId);
-            if (result?.ok) {
-              setSelectedZoneId(null);
-              setSelectedCheckpointId(null);
-              setMapSheetError(null);
-            }
-          }}
-          gridMode
-        />
-      ) : null}
-      {showViewerDirectionalBetSheet ? (
-        <MapSelectionBottomSheet
-          betHeadline={
             viewerCurrentBetHeadline ??
-            currentMarket?.title ??
             sheetBetHeadline
           }
-          selectionDetail={
-            directionalPickLabel
-              ? `Pick · ${directionalPickLabel}`
-              : null
-          }
-          marketOptions={sheetMarketOptionsLimited}
+          selectionDetail={null}
+          marketOptions={sheetMarketOptions}
           selectedOptionId={selectedMapOptionId}
           onSelectOption={(id) => {
+            /**
+             * Unified one-touch bet: a tap on any option commits the bet
+             * immediately. No "Place bet" confirmation step — the user
+             * explicitly asked that every bet feel the same and take one
+             * touch.
+             */
             setSelectedMapOptionId(id);
-            if (sheetBettingClosed || placingOptionId || viewerHasBetOnCurrentMarket) return;
+            if (
+              sheetBettingClosed ||
+              placingOptionId ||
+              viewerHasBetOnCurrentMarket
+            ) {
+              return;
+            }
             void placeBet(id).then((result) => {
               if (result?.ok) {
                 setSelectedZoneId(null);
@@ -1715,15 +1620,11 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             });
           }}
           bettingClosed={sheetBettingClosed}
-          bettingPending={
-            !currentMarket ||
-            (!liveBetRelaxClient() &&
-              isEngineMarketType(viewerBetOfferType ?? "") &&
-              currentMarket.marketType !== (viewerBetOfferType ?? ""))
-          }
           isPlacing={!!placingOptionId}
           error={mapSheetError}
-          countdown={currentMarket ? <MarketTimer locksAt={currentMarket.locksAt} /> : null}
+          countdown={
+            currentMarket ? <MarketTimer locksAt={currentMarket.locksAt} /> : null
+          }
           onClose={() => {
             setSelectedZoneId(null);
             setSelectedCheckpointId(null);
@@ -1741,41 +1642,6 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           oneTapOptionBet
         />
       ) : null}
-
-      {/*
-        Previously rendered a "Show bet card" CTA when the viewer dismissed
-        the popup mid-window. The new 7-second rule forbids dismissal, so the
-        button is unreachable and removed entirely.
-      */}
-
-      {joyPortalReady && showJoystick
-        ? createPortal(
-            <div
-              className="pointer-events-none fixed right-3 z-[380] flex max-w-[100vw] flex-col items-end"
-              style={{
-                bottom: "calc(5.25rem + env(safe-area-inset-bottom, 0px))",
-              }}
-            >
-              <div className="pointer-events-auto flex flex-col items-center">
-                <DirectionalBetPad
-                  options={currentMarket?.options ?? []}
-                  betAmount={lastStakeAmount}
-                  onBet={async (optionId, _dir) => {
-                    await placeBet(optionId);
-                  }}
-                  locked={joystickLocked}
-                  routePoints={routePoints}
-                />
-                {error ? (
-                  <div className="mt-1 max-w-[10rem] text-right text-[10px] text-red-400">
-                    {error}
-                  </div>
-                ) : null}
-              </div>
-            </div>,
-            document.body,
-          )
-        : null}
     </div>
   );
 }

@@ -217,16 +217,19 @@ export async function placeLiveBet(input: PlaceLiveBetInput) {
       }
     }
   }
-  if (marketType === "city_grid") {
-    if (!gridSpec || !isValidGridOptionForSpec(gridSpec, parsed.data.optionId)) {
-      return { error: "Invalid grid square" };
-    }
-  } else {
+  /**
+   * `next_zone` now uses 4 fixed cardinal options (N/E/S/W) just like every
+   * other unified bet card, so the legacy `grid:r/c` validation no longer
+   * applies. All three active bet types accept option ids that come from
+   * the market's stored `option_set`.
+   */
+  {
     const options = (market as { option_set: LiveMarketOption[] }).option_set;
     if (!options.some((o) => o.id === parsed.data.optionId)) {
       return { error: "Invalid option" };
     }
   }
+  void isValidGridOptionForSpec;
 
   if (parsed.data.stakeAmount > 50) {
     return { error: "Stake too high (max 50 for now)" };

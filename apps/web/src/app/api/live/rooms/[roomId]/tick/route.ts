@@ -220,7 +220,7 @@ async function sweepPendingSettlements(
   const { data: locked } = await service
     .from("live_betting_markets")
     .select(
-      "id, status, opens_at, locks_at, reveal_at, market_type, city_grid_spec, lock_evidence_json, live_session_id, turn_point_lat, turn_point_lng",
+      "id, status, opens_at, locks_at, reveal_at, market_type, city_grid_spec, lock_evidence_json, live_session_id, turn_point_lat, turn_point_lng, subtitle",
     )
     .eq("room_id", roomId)
     .eq("status", "locked")
@@ -248,8 +248,8 @@ async function sweepPendingSettlements(
       const crossed = await driverCrossedCell(service, {
         row,
         sessionId,
-        opensAtStr,
       });
+      void opensAtStr;
       if (crossed) {
         await revealAndSettleMarket(mid);
         notes.push({ marketId: mid, reason: "cell_crossed" });
@@ -292,42 +292,31 @@ async function driverCrossedCell(
   args: {
     row: unknown;
     sessionId: string | null;
-    opensAtStr: string;
   },
 ): Promise<boolean> {
   const gridSpec = (args.row as { city_grid_spec: CityGridSpecCompact | null })
     .city_grid_spec;
   if (!gridSpec || !args.sessionId) return false;
 
-  const lockEvidence = (
-    args.row as { lock_evidence_json: { selectedOptionId?: string } | null }
-  ).lock_evidence_json;
-  let startCell: string | null = lockEvidence?.selectedOptionId ?? null;
-
-  if (!startCell) {
-    const { data: openGps } = await service
-      .from("live_route_snapshots")
-      .select("normalized_lat,normalized_lng,raw_lat,raw_lng")
-      .eq("live_session_id", args.sessionId)
-      .lte("recorded_at", args.opensAtStr)
-      .order("recorded_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (openGps) {
-      const g = openGps as {
-        normalized_lat: number | null;
-        normalized_lng: number | null;
-        raw_lat: number;
-        raw_lng: number;
-      };
-      startCell = cellIdForPosition(
-        gridSpec,
-        g.normalized_lat ?? g.raw_lat,
-        g.normalized_lng ?? g.raw_lng,
-      );
-    }
+  /**
+   * The market's subtitle JSON carries the start cell coordinates (row/col)
+   * captured at open time — see `openCityGridMarketForRoom`. We compare
+   * against the driver's latest cell to decide if they have crossed out.
+   */
+  const subtitleStr = (args.row as { subtitle: string | null }).subtitle;
+  let startRow: number | null = null;
+  let startCol: number | null = null;
+  try {
+    const meta = JSON.parse(subtitleStr ?? "{}") as {
+      startRow?: number;
+      startCol?: number;
+    };
+    if (typeof meta.startRow === "number") startRow = meta.startRow;
+    if (typeof meta.startCol === "number") startCol = meta.startCol;
+  } catch {
+    // ignore parse errors — without a start cell we cannot decide a crossing.
   }
-  if (!startCell) return false;
+  if (startRow == null || startCol == null) return false;
 
   const { data: latest } = await service
     .from("live_route_snapshots")
@@ -348,7 +337,9 @@ async function driverCrossedCell(
     g.normalized_lat ?? g.raw_lat,
     g.normalized_lng ?? g.raw_lng,
   );
-  return Boolean(currentCell && currentCell !== startCell);
+  if (!currentCell) return false;
+  const startCell = `grid:r${startRow}:c${startCol}`;
+  return currentCell !== startCell;
 }
 
 async function driverPassedPin(
