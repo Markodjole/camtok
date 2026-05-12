@@ -5,7 +5,6 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { buildCityGrid500 } from "@/lib/live/grid/cityGrid500";
 import { fetchCityViewportFromGoogle } from "@/lib/live/grid/googleCityViewport";
 import { Safety, type LiveMarketOption, type TransportMode } from "@bettok/live";
-import { liveBetRelaxServer } from "@/lib/live/liveBetRelax";
 import { MIN_MS_BETWEEN_SYSTEM_MARKETS } from "@/lib/live/liveBetMinOpenMs";
 
 /**
@@ -128,9 +127,16 @@ export async function openCityGridMarketForRoom(roomId: string) {
 
   const now = new Date();
   const opensAt = now;
-  /** Short windows (like engine markets) so the tick loop keeps alternating grid ↔ engine. */
-  const lockMs = liveBetRelaxServer() ? 900_000 : 8_000;
-  const revealMs = liveBetRelaxServer() ? 960_000 : 9_500;
+  /**
+   * Short windows so the tick loop keeps alternating grid ↔ engine every
+   * ~10s. Do NOT extend these when `liveBetRelaxServer()` is on — that flag
+   * is meant to bypass *bet-placement gates* (so users can still tap during
+   * the lock window), not the lifecycle clock. Pushing `locks_at`/`reveal_at`
+   * into the far future stalls the room in `market_locked` forever because
+   * the tick's settle check compares against this column.
+   */
+  const lockMs = 8_000;
+  const revealMs = 9_500;
   const locksAt = new Date(now.getTime() + lockMs);
   const revealAt = new Date(now.getTime() + revealMs);
 

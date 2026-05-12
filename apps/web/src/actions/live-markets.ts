@@ -630,29 +630,35 @@ export async function openSystemMarketForRoom(roomId: string) {
   if (decision.triggerEtaSeconds < minTotal) {
     return { error: "ETA too short for safe betting window" };
   }
-  // The "betting window" is now driven by *distance* — bets close when
-  // the vehicle reaches `BET_LOCK_DISTANCE_M` from the turn point
-  // (handled in the tick route + placeLiveBet). We still need a
-  // `locks_at` timestamp because downstream code (state machine, UI
-  // countdown) depends on it, but we set it to a generous upper bound
-  // so the distance-based trigger fires first under normal driving. If
-  // the distance trigger never fires (e.g. GPS lost, vehicle stopped),
-  // this acts as a safety timeout.
-  const relax = liveBetRelaxServer();
-  const effectiveBetOpenSec = Math.max(
-    betOpenSec,
-    decision.triggerEtaSeconds - preTurnBufferSec,
-    relax ? 3600 : 600,
+  /**
+   * `locks_at` drives the tick state machine — once a market is in
+   * `locked` status, the tick compares `now` against `locks_at` /
+   * `reveal_at` to decide when to settle. We previously floored this at
+   * 600 s ("safety timeout") and 3600 s under the relax flag so the
+   * distance-based trigger always fired first. With the relax flag on,
+   * however, the distance check is bypassed entirely, the tick's
+   * 13 s hard-cap force-locks the market, and the room then sits in
+   * `market_locked` forever because `now >= revealAt` (set far in the
+   * future) is never true. Keep `locks_at` close to the natural
+   * `betOpenSec` so cycles roll smoothly; the hard-cap and the distance
+   * trigger (when GPS is available) both lock comfortably before this.
+   */
+  const effectiveBetOpenSec = Math.min(
+    Math.max(betOpenSec, decision.triggerEtaSeconds - preTurnBufferSec),
+    12,
   );
   const now = new Date();
   const opensAt = now;
   const locksAtMs = now.getTime() + effectiveBetOpenSec * 1000;
   const locksAt = new Date(locksAtMs);
   // Reveal lines up with the expected turn completion so UI drops the rail
-  // shortly after the driver passes the point.
-  const revealAt = new Date(
-    now.getTime() + (decision.triggerEtaSeconds + 2) * 1000,
+  // shortly after the driver passes the point — but never more than a few
+  // seconds after lock, or the state machine stalls in `market_locked`.
+  const revealMs = Math.min(
+    (decision.triggerEtaSeconds + 2) * 1000,
+    locksAtMs - now.getTime() + 2_000,
   );
+  const revealAt = new Date(now.getTime() + revealMs);
 
   const { data: decisionRow, error: decisionError } = await service
     .from("route_decision_nodes")

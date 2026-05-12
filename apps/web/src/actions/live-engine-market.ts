@@ -8,7 +8,6 @@ import {
   ENGINE_BET_TYPES,
   provisionalOptionsForBetType,
 } from "@/lib/live/betting/engineMarketOptions";
-import { liveBetRelaxServer } from "@/lib/live/liveBetRelax";
 import { MIN_MS_BETWEEN_SYSTEM_MARKETS } from "@/lib/live/liveBetMinOpenMs";
 import { engineBetHeadline } from "@/lib/live/betting/betTypeV2Label";
 import { metersBetween } from "@/lib/live/routing/geometry";
@@ -144,9 +143,17 @@ export async function openEngineMarketForRoom(roomId: string) {
   }
 
   const title = engineBetHeadline(betType as Parameters<typeof engineBetHeadline>[0]);
-  const relax = liveBetRelaxServer();
+  /**
+   * Short bet windows so the room keeps cycling. Previously the
+   * `liveBetRelaxServer()` flag pushed `locks_at` an hour into the future to
+   * keep bets placeable during the lock window — but that also stalled the
+   * tick's settle check, which compares against `locks_at`/`reveal_at` on
+   * the market row. The relax flag is honored elsewhere (placeLiveBet still
+   * accepts bets on `locked` markets in relax mode), so we never need to
+   * extend the lifecycle clock here.
+   */
   const now = new Date();
-  const locksAtMs = now.getTime() + (relax ? 3_600_000 : ENGINE_OPEN_SEC * 1_000);
+  const locksAtMs = now.getTime() + ENGINE_OPEN_SEC * 1_000;
   const locksAt = new Date(locksAtMs);
   const revealAt = new Date(locksAtMs + ENGINE_REVEAL_AFTER_LOCK_MS);
 
