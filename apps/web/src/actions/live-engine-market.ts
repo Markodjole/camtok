@@ -94,16 +94,32 @@ export async function openEngineMarketForRoom(roomId: string) {
     return false;
   };
 
-  const lastType =
-    (recentMarkets?.[0] as { market_type?: string } | undefined)?.market_type ?? null;
-
   // Always rotate the full engine lineup. Filtering by `eligibleRoundPlans`
   // left rooms stuck on time_vs_google + one or two other types whenever the
   // snapshot was conservative.
   const candidates = ENGINE_ROTATION_ORDER.filter((t) => ENGINE_BET_TYPES.has(t));
   if (!candidates.length) return { error: "No engine candidate" };
 
-  const lastIdx = lastType ? candidates.indexOf(lastType as BetTypeV2) : -1;
+  /**
+   * Rotate based on the last *engine* market in the room — not just the last
+   * market overall. The tick alternates grid ↔ engine so the most recent row
+   * is almost always `city_grid`, which isn't in `candidates`. That collapsed
+   * `indexOf` to `-1` and forced every engine market back to `candidates[0]`
+   * (= `time_vs_google`). Filtering by engine types restores the round-robin
+   * across all 7 engine bet headlines.
+   */
+  const lastEngineRow = (recentMarkets ?? []).find((m) => {
+    const t = (m as { market_type?: string }).market_type;
+    return typeof t === "string" && ENGINE_BET_TYPES.has(t);
+  });
+  const lastEngineType =
+    (lastEngineRow as { market_type?: string } | undefined)?.market_type ?? null;
+  const lastType =
+    (recentMarkets?.[0] as { market_type?: string } | undefined)?.market_type ?? null;
+
+  const lastIdx = lastEngineType
+    ? candidates.indexOf(lastEngineType as BetTypeV2)
+    : -1;
   let betType = candidates[(lastIdx + 1 + candidates.length) % candidates.length]!;
   if (
     (betType === "turns_before_zone_exit" || betType === "stop_count") &&
@@ -112,12 +128,13 @@ export async function openEngineMarketForRoom(roomId: string) {
   ) {
     betType = candidates.find((t) => t !== betType) ?? betType;
   }
-  // Never repeat the immediately-previous bet type — the viewer should always
-  // see a different headline on each cycle.
-  if (lastType && betType === lastType && candidates.length > 1) {
+  // Never repeat the immediately-previous engine bet type — the viewer should
+  // always see a different headline on each engine cycle.
+  if (lastEngineType && betType === lastEngineType && candidates.length > 1) {
     betType =
-      candidates.find((t) => t !== lastType) ?? betType;
+      candidates.find((t) => t !== lastEngineType) ?? betType;
   }
+  void lastType;
 
   const options = provisionalOptionsForBetType(
     betType as Parameters<typeof provisionalOptionsForBetType>[0],

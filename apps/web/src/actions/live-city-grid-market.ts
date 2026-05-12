@@ -128,15 +128,17 @@ export async function openCityGridMarketForRoom(roomId: string) {
   const now = new Date();
   const opensAt = now;
   /**
-   * Short windows so the tick loop keeps alternating grid ↔ engine every
-   * ~10s. Do NOT extend these when `liveBetRelaxServer()` is on — that flag
-   * is meant to bypass *bet-placement gates* (so users can still tap during
-   * the lock window), not the lifecycle clock. Pushing `locks_at`/`reveal_at`
-   * into the far future stalls the room in `market_locked` forever because
-   * the tick's settle check compares against this column.
+   * `locks_at` is the betting window — users have 8 s to pick a square.
+   * `reveal_at` is a *safety timeout* for the settle phase. The grid market
+   * is only meant to resolve once the driver actually crosses into a
+   * different cell (the tick uses `lock_evidence_json.selectedOptionId` as
+   * the starting cell and watches GPS). Up to `reveal_at` we keep waiting.
+   * If GPS stalls or the driver loops back without crossing, we fall back to
+   * resolving with whatever cell they're in at the timeout so the room
+   * doesn't sit on a stale locked market forever.
    */
   const lockMs = 8_000;
-  const revealMs = 9_500;
+  const revealMs = 90_000;
   const locksAt = new Date(now.getTime() + lockMs);
   const revealAt = new Date(now.getTime() + revealMs);
 

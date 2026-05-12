@@ -329,15 +329,36 @@ export async function revealAndSettleMarket(marketId: string) {
   }
 
   if (marketType === "city_grid" && gridSpec) {
-    const usable = committed.filter(
-      (p) => Number.isFinite(p.lat) && Number.isFinite(p.lng),
-    );
-    if (!usable.length) {
+    /**
+     * The grid market is settled the moment the driver crosses into a
+     * different cell (see tick `grid_cell_crossed_reveal`), which can fire
+     * well before the original `reveal_at` safety timeout. Resolving from a
+     * `revealAt - 15 s` window in that case returns zero rows and refunds
+     * the market by mistake. Use the freshest GPS snapshot directly so the
+     * winning cell is whichever one the driver is in *right now*.
+     */
+    const liveSessionId = (market as { live_session_id: string })
+      .live_session_id;
+    const { data: latestGps } = await service
+      .from("live_route_snapshots")
+      .select("normalized_lat,normalized_lng,raw_lat,raw_lng")
+      .eq("live_session_id", liveSessionId)
+      .order("recorded_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (!latestGps) {
       await refundMarket(marketId, "city_grid_no_gps");
       return { status: "insufficient_confidence", reason: "city_grid_no_gps" };
     }
-    const last = usable[usable.length - 1]!;
-    const win = cellIdForPosition(gridSpec, last.lat, last.lng);
+    const g = latestGps as {
+      normalized_lat: number | null;
+      normalized_lng: number | null;
+      raw_lat: number;
+      raw_lng: number;
+    };
+    const lat = g.normalized_lat ?? g.raw_lat;
+    const lng = g.normalized_lng ?? g.raw_lng;
+    const win = cellIdForPosition(gridSpec, lat, lng);
     if (!win) {
       await refundMarket(marketId, "city_grid_outside_cells");
       return { status: "ambiguous", reason: "city_grid_outside_cells" };
