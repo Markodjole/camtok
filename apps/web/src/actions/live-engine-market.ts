@@ -2,33 +2,31 @@
 
 import { unstable_noStore } from "next/cache";
 import { createServiceClient } from "@/lib/supabase/server";
-import { getActiveBettingRoundPayload } from "@/lib/live/betting/activeRound";
 import type { BetTypeV2 } from "@bettok/live";
 import {
   ENGINE_BET_TYPES,
   provisionalOptionsForBetType,
 } from "@/lib/live/betting/engineMarketOptions";
-import { MIN_MS_BETWEEN_SYSTEM_MARKETS } from "@/lib/live/liveBetMinOpenMs";
 import { engineBetHeadline } from "@/lib/live/betting/betTypeV2Label";
 import { metersBetween } from "@/lib/live/routing/geometry";
+import {
+  BET_OPEN_WINDOW_MS,
+  ZONE_BET_CENTER_RADIUS_M,
+} from "@/lib/live/betting/betWindowConstants";
+import {
+  cellIdForPosition,
+  gridCellCenter,
+  parseGridOptionId,
+  type CityGridSpecCompact,
+} from "@/lib/live/grid/cityGrid500";
 
 /**
- * Engine markets time-lock quickly so the viewer sees a new bet headline every
- * few seconds — the room then settles + opens a fresh market of a different
- * type. Real outcome data is still recorded against the lock-time snapshot.
+ * Active engine rotation. Other engine types still live in
+ * `engineMarketOptions.ts` for future enablement, but only `zone_exit_time`
+ * is offered today — the other six need real outcome wiring and are off until
+ * that ships.
  */
-const ENGINE_OPEN_SEC = 8;
-/** Reveal a beat after lock so tick can settle and roll into the next market. */
-const ENGINE_REVEAL_AFTER_LOCK_MS = 1_500;
-const ENGINE_ROTATION_ORDER: BetTypeV2[] = [
-  "time_vs_google",
-  "stop_count",
-  "turn_count_to_pin",
-  "turns_before_zone_exit",
-  "zone_exit_time",
-  "zone_duration",
-  "eta_drift",
-];
+const ENGINE_ROTATION_ORDER: BetTypeV2[] = ["zone_exit_time"];
 
 /**
  * Opens a provisional engine-bet market for the given room.
@@ -39,24 +37,6 @@ const ENGINE_ROTATION_ORDER: BetTypeV2[] = [
 export async function openEngineMarketForRoom(roomId: string) {
   unstable_noStore();
 
-  /**
-   * Engine eligibility used to gate market opening — but a single transient
-   * failure in the betting engine snapshot (e.g. brief geocode hiccup) would
-   * stall the entire cycle. We now treat eligibility as a *hint* only: if it
-   * resolves we filter the rotation by it; if it errors we still open one of
-   * the rotation defaults. The user's priority is "a new bet every few
-   * seconds", so we never bail here on engine-snapshot errors.
-   */
-  const payload = await getActiveBettingRoundPayload(roomId, null);
-  /** Reserved for telemetry / future gating — do not shrink rotation to this list. */
-  const _eligibleHint =
-    "error" in payload
-      ? []
-      : (payload.eligibleRoundPlans ?? [])
-          .map((p) => p.type)
-          .filter((t): t is BetTypeV2 => ENGINE_BET_TYPES.has(t));
-  void _eligibleHint;
-
   const service = await createServiceClient();
 
   const { data: room } = await service
@@ -65,114 +45,56 @@ export async function openEngineMarketForRoom(roomId: string) {
     .eq("id", roomId)
     .maybeSingle();
   if (!room) return { error: "Room not found" };
-  if ((room as { phase: string }).phase !== "waiting_for_next_market") {
+  const phaseStr = (room as { phase: string }).phase;
+  if (phaseStr !== "waiting_for_next_market") {
     return { error: "Room not in waiting phase" };
   }
 
   const sessionId = (room as { live_session_id: string }).live_session_id;
   const capturedZone = (room as { region_label: string | null }).region_label ?? null;
 
-  const { data: recentMarkets } = await service
-    .from("live_betting_markets")
-    .select("market_type, subtitle, opens_at")
-    .eq("room_id", roomId)
-    .order("opens_at", { ascending: false })
-    .limit(12);
-
-  const wasShownInCurrentZone = (marketType: string): boolean => {
-    if (!capturedZone) return false;
-    for (const m of recentMarkets ?? []) {
-      const row = m as { market_type: string; subtitle: string | null };
-      if (row.market_type !== marketType) continue;
-      try {
-        const meta = JSON.parse(row.subtitle ?? "{}") as { capturedZone?: string | null };
-        if ((meta.capturedZone ?? null) === capturedZone) return true;
-      } catch {
-        /* ignore */
-      }
-    }
-    return false;
-  };
-
-  // Always rotate the full engine lineup. Filtering by `eligibleRoundPlans`
-  // left rooms stuck on time_vs_google + one or two other types whenever the
-  // snapshot was conservative.
   const candidates = ENGINE_ROTATION_ORDER.filter((t) => ENGINE_BET_TYPES.has(t));
   if (!candidates.length) return { error: "No engine candidate" };
+  // Single-type rotation today — `zone_exit_time` is the only enabled engine
+  // bet. Picking with modulo so adding more types later just works.
+  const betType: BetTypeV2 = candidates[0]!;
 
   /**
-   * Rotate based on the last *engine* market in the room — not just the last
-   * market overall. The tick alternates grid ↔ engine so the most recent row
-   * is almost always `city_grid`, which isn't in `candidates`. That collapsed
-   * `indexOf` to `-1` and forced every engine market back to `candidates[0]`
-   * (= `time_vs_google`). Filtering by engine types restores the round-robin
-   * across all 7 engine bet headlines.
+   * Zone-bet gating: only open when the driver is sitting close to the
+   * center of their current grid cell (≤ ZONE_BET_CENTER_RADIUS_M = 100 m).
+   * Outside that radius the user's "show the zone bets while inside the
+   * inner circle" rule fails and we skip without erroring loudly.
    */
-  const lastEngineRow = (recentMarkets ?? []).find((m) => {
-    const t = (m as { market_type?: string }).market_type;
-    return typeof t === "string" && ENGINE_BET_TYPES.has(t);
-  });
-  const lastEngineType =
-    (lastEngineRow as { market_type?: string } | undefined)?.market_type ?? null;
-  const lastType =
-    (recentMarkets?.[0] as { market_type?: string } | undefined)?.market_type ?? null;
-
-  const lastIdx = lastEngineType
-    ? candidates.indexOf(lastEngineType as BetTypeV2)
-    : -1;
-  let betType = candidates[(lastIdx + 1 + candidates.length) % candidates.length]!;
-  if (
-    (betType === "turns_before_zone_exit" || betType === "stop_count") &&
-    wasShownInCurrentZone(betType) &&
-    candidates.length > 1
-  ) {
-    betType = candidates.find((t) => t !== betType) ?? betType;
+  if (betType === "zone_exit_time") {
+    const ctx = await loadGridCenterContext(service, sessionId, roomId);
+    if (!ctx.ok) return { error: ctx.error };
+    if (ctx.distanceM > ZONE_BET_CENTER_RADIUS_M) {
+      return {
+        error: `zone_exit_time: ${Math.round(ctx.distanceM)} m from cell center > ${ZONE_BET_CENTER_RADIUS_M} m`,
+      };
+    }
   }
-  // Never repeat the immediately-previous engine bet type — the viewer should
-  // always see a different headline on each engine cycle.
-  if (lastEngineType && betType === lastEngineType && candidates.length > 1) {
-    betType =
-      candidates.find((t) => t !== lastEngineType) ?? betType;
-  }
-  void lastType;
 
   const options = provisionalOptionsForBetType(
     betType as Parameters<typeof provisionalOptionsForBetType>[0],
   );
   if (!options.length) return { error: "No provisional options for this bet type" };
 
-  const { data: prevMkt } = await service
-    .from("live_betting_markets")
-    .select("opens_at")
-    .eq("room_id", roomId)
-    .order("opens_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (prevMkt) {
-    const nowMs = Date.now();
-    const prevOpensMs = Date.parse((prevMkt as { opens_at: string }).opens_at);
-    if (
-      Number.isFinite(prevOpensMs) &&
-      nowMs - prevOpensMs < MIN_MS_BETWEEN_SYSTEM_MARKETS
-    ) {
-      return { error: "Spacing: previous market too recent" };
-    }
-  }
-
   const title = engineBetHeadline(betType as Parameters<typeof engineBetHeadline>[0]);
   /**
-   * Short bet windows so the room keeps cycling. Previously the
-   * `liveBetRelaxServer()` flag pushed `locks_at` an hour into the future to
-   * keep bets placeable during the lock window — but that also stalled the
-   * tick's settle check, which compares against `locks_at`/`reveal_at` on
-   * the market row. The relax flag is honored elsewhere (placeLiveBet still
-   * accepts bets on `locked` markets in relax mode), so we never need to
-   * extend the lifecycle clock here.
+   * Fixed 7-second open window. The tick force-locks the market when this
+   * timestamp passes (or earlier if the viewer commits a bet). Settlement
+   * is decoupled — `shouldSettleEngineMarket` watches the natural event
+   * (e.g. driver leaves the captured zone for `zone_exit_time`) and the
+   * grid market's parallel cell-cross detector handles `next_zone`.
    */
   const now = new Date();
-  const locksAtMs = now.getTime() + ENGINE_OPEN_SEC * 1_000;
+  const locksAtMs = now.getTime() + BET_OPEN_WINDOW_MS;
   const locksAt = new Date(locksAtMs);
-  const revealAt = new Date(locksAtMs + ENGINE_REVEAL_AFTER_LOCK_MS);
+  // `reveal_at` is just the lifecycle safety timeout for settlement — keep
+  // it generous (5 minutes) so the bet doesn't refund itself before the
+  // driver actually leaves the zone.
+  const revealAt = new Date(locksAtMs + 5 * 60_000);
 
   const { data: market, error: marketError } = await service
     .from("live_betting_markets")
@@ -181,9 +103,7 @@ export async function openEngineMarketForRoom(roomId: string) {
       live_session_id: sessionId,
       source: "system_generated",
       title,
-      // Subtitle stores metadata needed for event-driven settlement.
       subtitle: JSON.stringify({ capturedZone }),
-      // market_type doubles as the engine bet-type identifier for settlement.
       market_type: betType,
       option_set: options,
       opens_at: now.toISOString(),
@@ -247,12 +167,13 @@ export async function shouldSettleEngineMarket(
     roomId: string;
   },
 ): Promise<boolean> {
-  const locksAtMs = new Date(locksAt).getTime();
-  // Engine markets are now short bet windows — settle ~1 s after they lock so
-  // the room can roll into the next bet type quickly. Real outcomes for "did
-  // the driver actually turn here" are still recorded against the lock-time
-  // GPS snapshot during the lifetime of the snapshot.
-  if (Date.now() - locksAtMs > 1_000) return true;
+  /**
+   * Wait for the natural per-type event before settling — the tick now opens
+   * the next bet card the moment the previous one locks, so settlement no
+   * longer races the rotation. The 1-second fast-path that used to live here
+   * caused `zone_exit_time` to resolve before the driver had a chance to
+   * leave the zone (the exact bug the user flagged).
+   */
 
   switch (marketType) {
     case "zone_exit_time":
@@ -351,4 +272,67 @@ export async function shouldSettleEngineMarket(
     default:
       return false;
   }
+}
+
+/**
+ * Resolve the driver's distance from the center of their current grid cell.
+ * Returns `{ ok: false, error }` whenever any prerequisite is missing
+ * (no GPS, no recent `city_grid` market to source `cityGridSpec` from,
+ * driver outside the grid bounds) so callers can skip cleanly.
+ */
+async function loadGridCenterContext(
+  service: Awaited<ReturnType<typeof createServiceClient>>,
+  liveSessionId: string,
+  roomId: string,
+): Promise<
+  | { ok: true; distanceM: number; cellId: string; spec: CityGridSpecCompact }
+  | { ok: false; error: string }
+> {
+  const { data: latestGps } = await service
+    .from("live_route_snapshots")
+    .select("normalized_lat,normalized_lng,raw_lat,raw_lng")
+    .eq("live_session_id", liveSessionId)
+    .order("recorded_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (!latestGps) return { ok: false, error: "Zone gate: no GPS yet" };
+
+  const g = latestGps as {
+    normalized_lat: number | null;
+    normalized_lng: number | null;
+    raw_lat: number;
+    raw_lng: number;
+  };
+  const lat = g.normalized_lat ?? g.raw_lat;
+  const lng = g.normalized_lng ?? g.raw_lng;
+
+  /**
+   * The grid spec lives on `city_grid` markets. Pull the most recent one in
+   * this room — they're emitted often enough that any grid bet is built
+   * against the freshest spec. If none exists yet, the zone bets aren't
+   * eligible — the user wants to gate them on "near the center of the
+   * current zone", and the zone definition comes from this spec.
+   */
+  const { data: gridRow } = await service
+    .from("live_betting_markets")
+    .select("city_grid_spec")
+    .eq("room_id", roomId)
+    .eq("market_type", "city_grid")
+    .not("city_grid_spec", "is", null)
+    .order("opens_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const spec = (gridRow as { city_grid_spec: CityGridSpecCompact | null } | null)
+    ?.city_grid_spec;
+  if (!spec) return { ok: false, error: "Zone gate: no grid spec yet" };
+
+  const cellId = cellIdForPosition(spec, lat, lng);
+  if (!cellId) return { ok: false, error: "Zone gate: driver outside grid" };
+
+  const parsed = parseGridOptionId(cellId);
+  if (!parsed) return { ok: false, error: "Zone gate: bad cell id" };
+
+  const center = gridCellCenter(spec, parsed.row, parsed.col);
+  const distanceM = metersBetween({ lat, lng }, center);
+  return { ok: true, distanceM, cellId, spec };
 }

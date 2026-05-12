@@ -679,10 +679,12 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const marketAnchoredBetType: BetTypeV2 | null =
     currentMarket?.marketType === "city_grid"
       ? "next_zone"
-      : (currentMarket?.marketType &&
-            isEngineMarketType(currentMarket.marketType)
-          ? (currentMarket.marketType as BetTypeV2)
-          : null);
+      : currentMarket?.marketType === "next_turn"
+        ? "next_turn"
+        : (currentMarket?.marketType &&
+              isEngineMarketType(currentMarket.marketType)
+            ? (currentMarket.marketType as BetTypeV2)
+            : null);
   const displayBetType: BetTypeV2 | null =
     viewerEnginePillType ??
     marketAnchoredBetType ??
@@ -1057,16 +1059,27 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   }, [displayBetType]);
 
   /**
-   * Keep the popup visible while a market exists, even through its short
-   * lock window — the server now accepts bets on `locked` markets while the
-   * relax flag is on. `isLocked` no longer gates the sheet.
+   * Product rule: every bet stays on screen for at most 7 seconds, or until
+   * the viewer commits a bet, whichever comes first. `locks_at` on the
+   * market row is exactly `opens_at + 7 s`, so flipping `betWindowClosed`
+   * the moment `locks_at` passes hides the popup without waiting for the
+   * server to clear `current_market_id`. The bet itself stays bettable on
+   * the server only inside the open window — once locked, attempts return
+   * "Market has locked", so the UI must match that gate.
    */
+  const betWindowClosed = (() => {
+    if (!currentMarket) return false;
+    const t = Date.parse(currentMarket.locksAt);
+    if (!Number.isFinite(t)) return false;
+    return nowTick >= t;
+  })();
   const showBetBottomSheet =
     mapExpanded &&
     showLiveBets &&
     currentMarket != null &&
     !betPanelDismissed &&
-    !viewerHasBetOnCurrentMarket;
+    !viewerHasBetOnCurrentMarket &&
+    !betWindowClosed;
   void isLocked;
 
   // Grid cell-picker sheet: only for next_zone on city_grid markets.
@@ -1083,7 +1096,11 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     showLiveBets &&
     !betPanelDismissed &&
     !viewerHasBetOnCurrentMarket &&
+    !betWindowClosed &&
     viewerBetOfferType != null &&
+    /** `next_turn` is the joystick bet — skip the bottom sheet so the
+     *  joystick is the single primary surface for that round. */
+    currentMarket?.marketType !== "next_turn" &&
     !(
       currentMarket?.marketType === "city_grid" &&
       viewerBetOfferType === "next_zone"
@@ -1330,25 +1347,25 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   };
 
   /**
-   * The directional sheet now owns one-tap betting for every bet type, so the
-   * joystick is reserved for moments when no sheet is up — keeps the popup the
-   * single, primary bet surface.
+   * `next_turn` is the joystick bet (one-tap left / straight / right). Every
+   * other bet uses the bottom-sheet popup. The joystick only shows while
+   * the bet window is still open (7 s rule).
    */
+  const isNextTurnMarket = currentMarket?.marketType === "next_turn";
   const showJoystick =
     joyPortalReady &&
     showLiveBets &&
     currentMarket != null &&
+    isNextTurnMarket &&
     !viewerHasBetOnCurrentMarket &&
-    !isLocked &&
-    currentMarket.marketType !== "city_grid" &&
-    !mapBetSheetOpen;
+    !betWindowClosed;
 
   const joystickLocked =
-    isLocked ||
     !currentMarket ||
-    currentMarket.marketType === "city_grid" ||
+    !isNextTurnMarket ||
     !!placingOptionId ||
-    viewerHasBetOnCurrentMarket;
+    viewerHasBetOnCurrentMarket ||
+    betWindowClosed;
 
   const onPipPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     if (pipLongPressTimerRef.current) clearTimeout(pipLongPressTimerRef.current);

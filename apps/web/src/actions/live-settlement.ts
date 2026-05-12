@@ -315,6 +315,74 @@ export async function revealAndSettleMarket(marketId: string) {
     };
   });
 
+  /**
+   * `next_turn` (left / straight / right): compare the driver's committed
+   * heading change against the bet options. Build a synthetic decision row
+   * on the fly so `revealFromMovement` has direction labels to match — the
+   * market itself doesn't have a `route_decision_nodes` row because it's
+   * gated on pin distance rather than the decision detector.
+   */
+  if (marketType === "next_turn") {
+    const opts = (market as { option_set: LiveMarketOption[] }).option_set;
+
+    /**
+     * Pull GPS from the lock moment forward — the settle path fires the
+     * instant the driver is within ~15 m of the pin, well before
+     * `reveal_at`, so the default `revealAt - 15 s` window would return
+     * nothing and refund the bet. We anchor on `opens_at` to capture the
+     * pre-pin heading too.
+     */
+    const opensAtStr = (market as { opens_at?: string }).opens_at;
+    let nextTurnCommitted = committed;
+    if (opensAtStr) {
+      const { data: snaps } = await service
+        .from("live_route_snapshots")
+        .select(
+          "recorded_at, normalized_lat, normalized_lng, raw_lat, raw_lng, speed_mps, heading_deg, confidence_score",
+        )
+        .eq(
+          "live_session_id",
+          (market as { live_session_id: string }).live_session_id,
+        )
+        .gte("recorded_at", opensAtStr)
+        .order("recorded_at", { ascending: true })
+        .limit(120);
+      nextTurnCommitted = (snaps ?? []).map((r) => {
+        const lat = (r.normalized_lat ?? r.raw_lat) as number;
+        const lng = (r.normalized_lng ?? r.raw_lng) as number;
+        return {
+          recordedAt: r.recorded_at as string,
+          lat,
+          lng,
+          speedMps: (r.speed_mps as number | null) ?? undefined,
+          headingDeg: (r.heading_deg as number | null) ?? undefined,
+          normalizedLat: lat,
+          normalizedLng: lng,
+          confidence: (r.confidence_score as number | null) ?? 0.5,
+          discarded: false,
+        };
+      });
+    }
+
+    const syntheticDecision: { options: RouteDecisionOption[] } = {
+      options: opts.map((o) => ({
+        optionId: o.id,
+        label: o.label,
+        directionType: o.id as RouteDecisionOption["directionType"],
+      })),
+    };
+    const result = RouteState.revealFromMovement(
+      opts,
+      syntheticDecision,
+      nextTurnCommitted,
+    );
+    if (result.status !== "matched") {
+      await refundMarket(marketId, result.reason);
+      return { status: result.status, reason: result.reason };
+    }
+    return await settleMarketWithWinner(marketId, result.winningOptionId, result.reason);
+  }
+
   // Provisional engine bet: randomly pick a winner from the option set.
   // Real outcome logic will be added once telemetry/settlement data is wired.
   if (isEngineMarketType(marketType)) {
@@ -428,16 +496,34 @@ async function refundMarket(marketId: string, reason: string) {
     .eq("id", marketId)
     .maybeSingle();
   if (market) {
+    const rid = (market as { room_id: string }).room_id;
     await service.from("live_room_events").insert({
-      room_id: (market as { room_id: string }).room_id,
+      room_id: rid,
       market_id: marketId,
       event_type: "market_cancelled",
       payload: { reason },
     });
-    await service.from("live_rooms").update({
-      phase: "waiting_for_next_market",
-      current_market_id: null,
-    }).eq("id", (market as { room_id: string }).room_id);
+    /**
+     * Only reset the room's phase / current_market_id when we just refunded
+     * the market that IS the room's current market. Settlements now run in
+     * a background sweep against orphaned locked markets, so clearing the
+     * pointer unconditionally would knock the currently-visible bet off the
+     * viewer screen mid-window.
+     */
+    const { data: roomNow } = await service
+      .from("live_rooms")
+      .select("current_market_id")
+      .eq("id", rid)
+      .maybeSingle();
+    const currentId =
+      (roomNow as { current_market_id: string | null } | null)
+        ?.current_market_id ?? null;
+    if (currentId === marketId) {
+      await service.from("live_rooms").update({
+        phase: "waiting_for_next_market",
+        current_market_id: null,
+      }).eq("id", rid);
+    }
   }
   await finalizeDecisionAudit(service, marketId, {
     anomalyFlags: ["refund", reason],
@@ -507,20 +593,37 @@ async function settleMarketWithWinner(
     .eq("id", marketId)
     .maybeSingle();
   if (market) {
+    const rid = (market as { room_id: string }).room_id;
     await service.from("live_room_events").insert({
-      room_id: (market as { room_id: string }).room_id,
+      room_id: rid,
       market_id: marketId,
       event_type: "market_settled",
       payload: { winningOptionId, reason },
     });
-    await service
+    /**
+     * Same rationale as `refundMarket` — only knock the room back to
+     * `waiting_for_next_market` when the freshly-settled market is still the
+     * one displayed in the viewer popup. Background sweeps for orphan
+     * locked markets must not clear the active card.
+     */
+    const { data: roomNow } = await service
       .from("live_rooms")
-      .update({
-        phase: "waiting_for_next_market",
-        current_market_id: null,
-        last_event_at: new Date().toISOString(),
-      })
-      .eq("id", (market as { room_id: string }).room_id);
+      .select("current_market_id")
+      .eq("id", rid)
+      .maybeSingle();
+    const currentId =
+      (roomNow as { current_market_id: string | null } | null)
+        ?.current_market_id ?? null;
+    if (currentId === marketId) {
+      await service
+        .from("live_rooms")
+        .update({
+          phase: "waiting_for_next_market",
+          current_market_id: null,
+          last_event_at: new Date().toISOString(),
+        })
+        .eq("id", rid);
+    }
   }
 
   await finalizeDecisionAudit(service, marketId, { anomalyFlags: [], operatorIntervention: false });

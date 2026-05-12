@@ -2,10 +2,21 @@
 
 import { unstable_noStore } from "next/cache";
 import { createServiceClient } from "@/lib/supabase/server";
-import { buildCityGrid500 } from "@/lib/live/grid/cityGrid500";
+import {
+  buildCityGrid500,
+  cellIdForPosition,
+  enumerateGridCells,
+  gridCellCenter,
+  parseGridOptionId,
+  type CityGridSpecCompact,
+} from "@/lib/live/grid/cityGrid500";
 import { fetchCityViewportFromGoogle } from "@/lib/live/grid/googleCityViewport";
 import { Safety, type LiveMarketOption, type TransportMode } from "@bettok/live";
-import { MIN_MS_BETWEEN_SYSTEM_MARKETS } from "@/lib/live/liveBetMinOpenMs";
+import {
+  BET_OPEN_WINDOW_MS,
+  ZONE_BET_CENTER_RADIUS_M,
+} from "@/lib/live/betting/betWindowConstants";
+import { metersBetween } from "@/lib/live/routing/geometry";
 
 /**
  * Opens a system market whose options are 500 m × 500 m grid cells over the
@@ -66,54 +77,82 @@ export async function openCityGridMarketForRoom(roomId: string) {
     (recent as { normalized_lng: number | null }).normalized_lng ??
     (recent as { raw_lng: number }).raw_lng;
 
+  /**
+   * Reuse the most recent grid spec for this room so the cell boundaries stay
+   * stable between markets — otherwise the inner-100-m circle that gates
+   * `next_zone` would shift every time the geocode rebuilt the viewport, and
+   * the driver could "leave the circle" without actually moving.
+   */
+  let spec: CityGridSpecCompact | null = null;
   {
-    const { data: prevMkt } = await service
+    const { data: prevGrid } = await service
       .from("live_betting_markets")
-      .select("opens_at")
+      .select("city_grid_spec")
       .eq("room_id", roomId)
+      .eq("market_type", "city_grid")
+      .not("city_grid_spec", "is", null)
       .order("opens_at", { ascending: false })
       .limit(1)
       .maybeSingle();
-    if (prevMkt) {
-      const nowMs = Date.now();
-      const prevOpensMs = Date.parse((prevMkt as { opens_at: string }).opens_at);
-      if (
-        Number.isFinite(prevOpensMs) &&
-        nowMs - prevOpensMs < MIN_MS_BETWEEN_SYSTEM_MARKETS
-      ) {
-        return { error: "Spacing: previous market too recent" };
-      }
+    spec = (prevGrid as { city_grid_spec: CityGridSpecCompact | null } | null)
+      ?.city_grid_spec ?? null;
+  }
+
+  if (!spec) {
+    const key =
+      process.env.GOOGLE_MAPS_API_KEY ||
+      process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ||
+      "";
+    if (!key) {
+      return { error: "City grid: missing Google API key" };
+    }
+
+    const vp = await fetchCityViewportFromGoogle(lat, lng, key);
+    if (!vp.ok) {
+      return { error: `City grid: geocode ${vp.status}` };
+    }
+
+    const { viewport } = vp;
+    const built = buildCityGrid500(
+      viewport.swLat,
+      viewport.swLng,
+      viewport.neLat,
+      viewport.neLng,
+      viewport.cityLabel,
+      500,
+      12000,
+    );
+    if ("error" in built) {
+      return { error: `City grid: ${built.error}` };
+    }
+    spec = built.spec;
+  }
+
+  /**
+   * Inner-circle gate — `next_zone` only opens while the driver is within
+   * `ZONE_BET_CENTER_RADIUS_M` of their current cell center. Otherwise the
+   * bet-card popup would advertise picking a square while the driver is
+   * already standing next to an edge about to cross out of it (which is the
+   * exact case the user flagged as broken).
+   */
+  const currentCellId = cellIdForPosition(spec, lat, lng);
+  if (!currentCellId) {
+    return { error: "Zone gate: driver outside grid bounds" };
+  }
+  {
+    const parsed = parseGridOptionId(currentCellId);
+    if (!parsed) return { error: "Zone gate: bad cell id" };
+    const center = gridCellCenter(spec, parsed.row, parsed.col);
+    const dist = metersBetween({ lat, lng }, center);
+    if (dist > ZONE_BET_CENTER_RADIUS_M) {
+      return {
+        error: `next_zone: ${Math.round(dist)} m from cell center > ${ZONE_BET_CENTER_RADIUS_M} m`,
+      };
     }
   }
 
-  const key =
-    process.env.GOOGLE_MAPS_API_KEY ||
-    process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ||
-    "";
-  if (!key) {
-    return { error: "City grid: missing Google API key" };
-  }
-
-  const vp = await fetchCityViewportFromGoogle(lat, lng, key);
-  if (!vp.ok) {
-    return { error: `City grid: geocode ${vp.status}` };
-  }
-
-  const { viewport } = vp;
-  const built = buildCityGrid500(
-    viewport.swLat,
-    viewport.swLng,
-    viewport.neLat,
-    viewport.neLng,
-    viewport.cityLabel,
-    500,
-    12000,
-  );
-  if ("error" in built) {
-    return { error: `City grid: ${built.error}` };
-  }
-
-  const { spec, cells } = built;
+  /** Enumerate cells from spec — fresh build path's `cells` list is no longer used. */
+  const cells = enumerateGridCells(spec);
   const options: LiveMarketOption[] = cells.map((c, i) => ({
     id: c.id,
     label: c.label,
@@ -128,19 +167,15 @@ export async function openCityGridMarketForRoom(roomId: string) {
   const now = new Date();
   const opensAt = now;
   /**
-   * `locks_at` is the betting window — users have 8 s to pick a square.
-   * `reveal_at` is a *safety timeout* for the settle phase. The grid market
-   * is only meant to resolve once the driver actually crosses into a
-   * different cell (the tick uses `lock_evidence_json.selectedOptionId` as
-   * the starting cell and watches GPS). Up to `reveal_at` we keep waiting.
-   * If GPS stalls or the driver loops back without crossing, we fall back to
-   * resolving with whatever cell they're in at the timeout so the room
-   * doesn't sit on a stale locked market forever.
+   * 7-second bet window (product rule: "every bet stays on screen 7 seconds
+   * or until viewer bets, whichever sooner"). After the window closes the
+   * tick force-locks the market and immediately rotates to the next bet.
+   * Settlement waits for an actual cell crossing — `reveal_at` is just a
+   * generous safety timeout so a stuck driver does not hold the market
+   * locked forever.
    */
-  const lockMs = 8_000;
-  const revealMs = 90_000;
-  const locksAt = new Date(now.getTime() + lockMs);
-  const revealAt = new Date(now.getTime() + revealMs);
+  const locksAt = new Date(now.getTime() + BET_OPEN_WINDOW_MS);
+  const revealAt = new Date(now.getTime() + 10 * 60_000);
 
   const { data: market, error: marketError } = await service
     .from("live_betting_markets")

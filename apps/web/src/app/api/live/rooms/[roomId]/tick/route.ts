@@ -1,36 +1,40 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
-import { openSystemMarketForRoom } from "@/actions/live-markets";
 import { openCityGridMarketForRoom } from "@/actions/live-city-grid-market";
 import {
   openEngineMarketForRoom,
   shouldSettleEngineMarket,
 } from "@/actions/live-engine-market";
+import { openNextTurnMarketForRoom } from "@/actions/live-next-turn-market";
 import { lockMarket, revealAndSettleMarket } from "@/actions/live-settlement";
-import { LIVE_BET_LOCK_DISTANCE_M } from "@/lib/live/liveBetLockDistance";
-import { liveBetRelaxServer } from "@/lib/live/liveBetRelax";
-import { MIN_MARKET_OPEN_MS_BEFORE_LOCK } from "@/lib/live/liveBetMinOpenMs";
-import { metersBetween } from "@/lib/live/routing/geometry";
 import { isEngineMarketType } from "@/lib/live/betting/engineMarketOptions";
-import { computeDriverRouteInstruction } from "@/lib/live/routing/computeDriverRouteInstruction";
 import {
   cellIdForPosition,
-  distanceToCurrentCellEdgeMeters,
   type CityGridSpecCompact,
 } from "@/lib/live/grid/cityGrid500";
 
 /**
- * Stateless tick worker for a single room. Designed to be called every few
- * seconds by a scheduler / cron / client poll. Advances room state:
- *   - waiting_for_next_market → tries to open a system market
- *   - market_open: lock when vehicle within LIVE_BET_LOCK_DISTANCE_M of the
- *     turn point, OR when the safety-timeout `locks_at` passes.
- *   - market_locked past reveal_at → reveal+settle
+ * Per-room state machine driver.
  *
- * Idempotent: state machine guards each transition.
+ * Rotation (today): only 3 bet types are offered to viewers —
+ *   1. `next_turn`   — left / straight / right at the upcoming pin
+ *   2. `next_zone`   — pick a grid square the driver enters next (city_grid)
+ *   3. `zone_exit_time` — how long before they leave the current zone
+ *
+ * Each market lives 7 s as the visible / bettable market (`opens_at` →
+ * `locks_at`). When `locks_at` passes we force-lock and **immediately move
+ * the room back to `waiting_for_next_market`** so the very next tick opens
+ * another bet. The previously-locked market keeps existing in the DB and is
+ * settled in the background once its natural per-type event fires
+ * (cell crossing for `next_zone`, zone exit for `zone_exit_time`, pin pass
+ * for `next_turn`).
+ *
+ * Idempotent: state-machine guards every transition.
  */
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+const ROTATION_TYPES = ["next_turn", "next_zone", "zone_exit_time"] as const;
 
 export async function POST(
   _req: NextRequest,
@@ -38,6 +42,13 @@ export async function POST(
 ) {
   const { roomId } = await ctx.params;
   const service = await createServiceClient();
+
+  /**
+   * Try to settle every still-locked market in this room on every tick —
+   * decoupled from the rotation so the next bet can open immediately when
+   * the previous one's 7 s window expires.
+   */
+  const settleNotes = await sweepPendingSettlements(service, roomId);
 
   const { data: room } = await service
     .from("live_rooms")
@@ -47,305 +58,318 @@ export async function POST(
   if (!room) return NextResponse.json({ error: "not_found" }, { status: 404 });
 
   const phase = (room as { phase: string }).phase;
-  const marketId = (room as { current_market_id: string | null }).current_market_id;
+  const marketId =
+    (room as { current_market_id: string | null }).current_market_id;
 
-  if (phase === "waiting_for_next_market") {
-    /**
-     * Throttle grid markets so the engine rotation (7 bet types) drives
-     * most cycles. Grid markets now wait for an actual cell crossing to
-     * settle accurately, which means each one can hold the room for tens of
-     * seconds. Letting them fire every other market collapses viewer
-     * variety back to grid-only. Open a grid round only when none of the
-     * last 4 markets in this room were grid — engine fills the rest.
-     */
-    const { data: recentRows } = await service
+  if (phase === "market_open" && marketId) {
+    const { data: market } = await service
       .from("live_betting_markets")
-      .select("market_type")
-      .eq("room_id", roomId)
-      .order("opens_at", { ascending: false })
-      .limit(4);
-    const recentTypes = (recentRows ?? []).map(
-      (r) => (r as { market_type?: string }).market_type ?? "",
-    );
-    const hasRecentGrid = recentTypes.includes("city_grid");
-    const tryGridFirst = !hasRecentGrid;
-    let cityGridSkippedReason: string | null = null;
-
-    if (tryGridFirst) {
-      const grid = await openCityGridMarketForRoom(roomId);
-      if ("marketId" in grid && grid.marketId) {
-        return NextResponse.json({
-          action: "try_open_city_grid",
-          marketId: grid.marketId,
-        });
+      .select("id, status, opens_at, locks_at, market_type")
+      .eq("id", marketId)
+      .maybeSingle();
+    if (market) {
+      const status = (market as { status: string }).status;
+      const locksAtMs = new Date(
+        (market as { locks_at: string }).locks_at,
+      ).getTime();
+      const nowMs = Date.now();
+      if (status === "open" && nowMs >= locksAtMs) {
+        // Lock the current market and immediately drop the room back to
+        // `waiting_for_next_market` so the *next* tick opens a new bet card.
+        // We do NOT wait for settlement here — that happens asynchronously
+        // via `sweepPendingSettlements` once the natural event fires.
+        await lockMarket(marketId);
+        await service
+          .from("live_rooms")
+          .update({
+            phase: "waiting_for_next_market",
+            current_market_id: null,
+            last_event_at: new Date().toISOString(),
+          })
+          .eq("id", roomId);
+        // Fall through to the "waiting" branch below so the same tick can
+        // also open the next market without a 1.5 s round-trip wait.
       }
-      if ("error" in grid) cityGridSkippedReason = grid.error ?? null;
     }
+  }
 
-    const eng = await openEngineMarketForRoom(roomId);
-    if ("marketId" in eng && eng.marketId) {
-      return NextResponse.json({
-        action: "try_open_engine_market",
-        cityGridSkippedReason,
-        ...eng,
-      });
-    }
+  // Re-read phase after the possible transition above.
+  const { data: room2 } = await service
+    .from("live_rooms")
+    .select("phase")
+    .eq("id", roomId)
+    .maybeSingle();
+  const phaseNow = (room2 as { phase: string } | null)?.phase ?? phase;
 
-    if (!tryGridFirst) {
-      // Engine path was unavailable for some reason — fall back to grid even
-      // if one ran recently so the room never sits empty.
-      const grid2 = await openCityGridMarketForRoom(roomId);
-      if ("marketId" in grid2 && grid2.marketId) {
-        return NextResponse.json({
-          action: "try_open_city_grid",
-          marketId: grid2.marketId,
-        });
-      }
-      if ("error" in grid2) cityGridSkippedReason = grid2.error ?? null;
-    }
-
-    const r = await openSystemMarketForRoom(roomId);
+  if (phaseNow === "waiting_for_next_market") {
+    const opened = await openNextRotationMarket(service, roomId);
     return NextResponse.json({
-      action: "try_open_market",
-      cityGridSkippedReason,
-      engineSkippedReason: "error" in eng ? eng.error : null,
-      ...r,
+      action: opened.action,
+      ...(opened.detail ?? {}),
+      settled: settleNotes,
     });
   }
 
-  if ((phase === "market_open" || phase === "market_locked") && marketId) {
-    const { data: market } = await service
-      .from("live_betting_markets")
-      .select(
-        "id, status, opens_at, locks_at, reveal_at, turn_point_lat, turn_point_lng, live_session_id, market_type, city_grid_spec, lock_evidence_json",
-      )
-      .eq("id", marketId)
-      .maybeSingle();
-    if (!market) return NextResponse.json({ action: "no_market" });
+  /**
+   * Legacy `market_locked` phase — old markets created before this rewrite
+   * may still be here. Force them through settlement so the room can move.
+   */
+  if (phaseNow === "market_locked" && marketId) {
+    const r = await revealAndSettleMarket(marketId);
+    return NextResponse.json({
+      action: "legacy_locked_settle",
+      ...r,
+      settled: settleNotes,
+    });
+  }
 
-    const now = Date.now();
-    const opensAtStr = (market as { opens_at: string }).opens_at;
-    const opensAtMs = Date.parse(opensAtStr);
-    const locksAtStr = (market as { locks_at: string }).locks_at;
-    const locksAt = new Date(locksAtStr).getTime();
-    const revealAt = new Date((market as { reveal_at: string }).reveal_at).getTime();
-    const minLockEligibleAt =
-      Number.isFinite(opensAtMs) ? opensAtMs + MIN_MARKET_OPEN_MS_BEFORE_LOCK : 0;
-    const marketAgeOkForLock =
-      !Number.isFinite(opensAtMs) || now >= minLockEligibleAt;
-    const status = (market as { status: string }).status;
-    const marketType = (market as { market_type: string | null }).market_type ?? "";
+  return NextResponse.json({
+    action: "noop",
+    phase: phaseNow,
+    settled: settleNotes,
+  });
+}
 
-    if (status === "open") {
-      // Per-bet lock thresholds:
-      // - next_turn (turn-point markets): <=70 m to turn
-      // - time_vs_google: <=160 m to next pin
-      // - next_zone (city_grid): <=60 m to current-cell edge
-      let distanceLocked = false;
-      let distanceReason: "turn_100m" | "pin_220m" | "zone_edge_100m" | null = null;
-      const turnLat = (market as { turn_point_lat: number | null }).turn_point_lat;
-      const turnLng = (market as { turn_point_lng: number | null }).turn_point_lng;
-      const sessionId = (market as { live_session_id: string | null }).live_session_id;
-      if (marketAgeOkForLock && !liveBetRelaxServer() && sessionId) {
-        const { data: latestGps } = await service
-          .from("live_route_snapshots")
-          .select("normalized_lat,normalized_lng,raw_lat,raw_lng")
-          .eq("live_session_id", sessionId)
-          .order("recorded_at", { ascending: false })
-          .limit(1)
-          .maybeSingle();
-        if (latestGps) {
-          const gps = latestGps as {
-            normalized_lat: number | null;
-            normalized_lng: number | null;
-            raw_lat: number;
-            raw_lng: number;
-          };
-          const lat = gps.normalized_lat ?? gps.raw_lat;
-          const lng = gps.normalized_lng ?? gps.raw_lng;
+/**
+ * Pick the next bet type to offer based on per-type eligibility and the
+ * most-recent rotation history, then open it. Returns the action label that
+ * the tick sends back to the viewer for debugging.
+ */
+async function openNextRotationMarket(
+  service: Awaited<ReturnType<typeof createServiceClient>>,
+  roomId: string,
+): Promise<{ action: string; detail?: Record<string, unknown> }> {
+  /**
+   * Round-robin: walk the rotation list starting from one after whichever
+   * type was opened most recently in this room. Each opener has its own
+   * eligibility gate (pin distance for `next_turn`, ≤100 m from cell center
+   * for the two zone bets) and returns `{ error }` when not ready. We try
+   * every type in order before giving up so the room never sits idle when
+   * any bet is offerable.
+   */
+  const { data: recent } = await service
+    .from("live_betting_markets")
+    .select("market_type")
+    .eq("room_id", roomId)
+    .order("opens_at", { ascending: false })
+    .limit(1);
+  const lastType =
+    ((recent ?? [])[0] as { market_type?: string } | undefined)?.market_type ??
+    null;
+  const startIdx = lastType
+    ? Math.max(0, ROTATION_TYPES.indexOf(lastType as (typeof ROTATION_TYPES)[number]))
+    : -1;
 
-          if (marketType === "time_vs_google") {
-            const drv = await computeDriverRouteInstruction(roomId);
-            const pinDist = drv.instruction?.pins?.[0]?.distanceMeters ?? null;
-            if (pinDist != null && pinDist <= 160) {
-              distanceLocked = true;
-              distanceReason = "pin_220m";
-            }
-          } else if (marketType === "city_grid") {
-            const gridSpec = (market as { city_grid_spec: CityGridSpecCompact | null })
-              .city_grid_spec;
-            if (gridSpec) {
-              const edgeM = distanceToCurrentCellEdgeMeters(gridSpec, lat, lng);
-              if (edgeM != null && edgeM <= 60) {
-                distanceLocked = true;
-                distanceReason = "zone_edge_100m";
-              }
-            }
-          } else if (turnLat != null && turnLng != null) {
-            const dist = metersBetween({ lat, lng }, { lat: turnLat, lng: turnLng });
-            if (dist <= 70) {
-              distanceLocked = true;
-              distanceReason = "turn_100m";
-            }
-          }
-        }
-      }
-      /**
-       * Hard upper-bound: nothing stays in `market_open` beyond ~13 s past
-       * `opens_at`. Even if `locks_at` or the distance check don't fire we
-       * force-lock so the cycle rolls and a new bet appears.
-       */
-      const HARD_OPEN_CAP_MS = 13_000;
-      const overOpenCap =
-        Number.isFinite(opensAtMs) && now - opensAtMs >= HARD_OPEN_CAP_MS;
-      // Include city_grid so short `locks_at` (5s) can lock after min-open; edge
-      // distance still locks earlier when the driver leaves the cell.
-      const timeoutApplies = true;
-      if (
-        marketAgeOkForLock &&
-        (distanceLocked || (timeoutApplies && now >= locksAt) || overOpenCap)
-      ) {
-        const r = await lockMarket(marketId);
-        return NextResponse.json({
-          action: "lock",
-          reason: distanceLocked
-            ? (distanceReason ?? "distance")
-            : overOpenCap
-              ? "hard_cap"
-              : "timeout",
-          ...r,
-        });
-      }
+  const reasons: Array<{ type: string; reason: string }> = [];
+  for (let step = 1; step <= ROTATION_TYPES.length; step += 1) {
+    const idx = (startIdx + step + ROTATION_TYPES.length) % ROTATION_TYPES.length;
+    const type = ROTATION_TYPES[idx]!;
+    const res = await openByType(type, roomId);
+    if ("marketId" in res && res.marketId) {
+      return {
+        action: `opened_${type}`,
+        detail: { marketId: res.marketId, attempts: reasons },
+      };
     }
-    if (status === "locked") {
-      /**
-       * Hard upper-bound: most market types must not stay in `market_locked`
-       * beyond ~3 s past `locks_at`. `city_grid` is the exception — its
-       * settlement is tied to the driver actually crossing into a new cell,
-       * so its `reveal_at` is much further out and we DO NOT apply this cap.
-       */
-      const HARD_LOCK_CAP_MS = 3_000;
-      const lockedTooLong =
-        Number.isFinite(locksAt) && now - locksAt >= HARD_LOCK_CAP_MS;
-      if (isEngineMarketType(marketType)) {
-        const settle = await shouldSettleEngineMarket(service, {
-          marketId,
-          marketType,
-          locksAt: locksAtStr,
-          liveSessionId: (market as { live_session_id: string | null }).live_session_id,
-          roomId,
-        });
-        if (settle || lockedTooLong) {
-          const r = await revealAndSettleMarket(marketId);
-          return NextResponse.json({
-            action: "engine_event_reveal",
-            marketType,
-            reason: settle ? "event" : "hard_cap",
-            ...r,
-          });
-        }
-        return NextResponse.json({ action: "engine_waiting", marketType, phase });
+    if ("error" in res) reasons.push({ type, reason: res.error ?? "?" });
+  }
+  return { action: "no_eligible_bet", detail: { attempts: reasons } };
+}
+
+async function openByType(
+  type: (typeof ROTATION_TYPES)[number],
+  roomId: string,
+) {
+  switch (type) {
+    case "next_turn":
+      return openNextTurnMarketForRoom(roomId);
+    case "next_zone":
+      return openCityGridMarketForRoom(roomId);
+    case "zone_exit_time":
+      return openEngineMarketForRoom(roomId);
+  }
+}
+
+/**
+ * Iterate every still-locked market in this room and settle the ones whose
+ * natural event has fired. Each market type has its own resolution:
+ *
+ *   - `next_zone` (city_grid)    → driver entered a different cell
+ *   - `zone_exit_time` (engine)  → driver left the captured zone
+ *   - `next_turn`                → driver committed past the pin
+ *                                  (handled by RouteState path matching
+ *                                   inside `revealAndSettleMarket`)
+ *
+ * Any market whose `reveal_at` has elapsed is force-settled as a fallback so
+ * orphan rows don't pile up forever.
+ */
+async function sweepPendingSettlements(
+  service: Awaited<ReturnType<typeof createServiceClient>>,
+  roomId: string,
+): Promise<Array<{ marketId: string; reason: string }>> {
+  const { data: locked } = await service
+    .from("live_betting_markets")
+    .select(
+      "id, status, opens_at, locks_at, reveal_at, market_type, city_grid_spec, lock_evidence_json, live_session_id, turn_point_lat, turn_point_lng",
+    )
+    .eq("room_id", roomId)
+    .eq("status", "locked")
+    .limit(20);
+
+  const notes: Array<{ marketId: string; reason: string }> = [];
+  const nowMs = Date.now();
+
+  for (const row of locked ?? []) {
+    const mid = (row as { id: string }).id;
+    const marketType = (row as { market_type: string }).market_type;
+    const locksAtStr = (row as { locks_at: string }).locks_at;
+    const revealAtMs = new Date((row as { reveal_at: string }).reveal_at).getTime();
+    const sessionId = (row as { live_session_id: string | null })
+      .live_session_id;
+    const opensAtStr = (row as { opens_at: string }).opens_at;
+
+    if (Number.isFinite(revealAtMs) && nowMs >= revealAtMs) {
+      await revealAndSettleMarket(mid);
+      notes.push({ marketId: mid, reason: "reveal_timeout" });
+      continue;
+    }
+
+    if (marketType === "city_grid") {
+      const crossed = await driverCrossedCell(service, {
+        row,
+        sessionId,
+        opensAtStr,
+      });
+      if (crossed) {
+        await revealAndSettleMarket(mid);
+        notes.push({ marketId: mid, reason: "cell_crossed" });
       }
-      if (marketType === "city_grid") {
-        /**
-         * Wait until the driver actually enters a different grid cell, then
-         * reveal — the winning option is whatever cell they're in at that
-         * moment (resolved in `revealAndSettleMarket`). We pulled the
-         * "starting" cell out of `lock_evidence_json.selectedOptionId`,
-         * which `lockMarket` records as the cell the driver was sitting in
-         * the instant betting closed. Falling back to the GPS-at-open
-         * snapshot keeps this robust if evidence is missing for any reason.
-         */
-        const gridSpec = (market as { city_grid_spec: CityGridSpecCompact | null })
-          .city_grid_spec;
-        const sessionId = (market as { live_session_id: string | null })
-          .live_session_id;
-        let crossed = false;
-        if (gridSpec && sessionId) {
-          const lockEvidence = (market as {
-            lock_evidence_json: { selectedOptionId?: string } | null;
-          }).lock_evidence_json;
-          let startCell: string | null =
-            lockEvidence?.selectedOptionId ?? null;
+      continue;
+    }
 
-          if (!startCell) {
-            const { data: openGps } = await service
-              .from("live_route_snapshots")
-              .select(
-                "normalized_lat,normalized_lng,raw_lat,raw_lng",
-              )
-              .eq("live_session_id", sessionId)
-              .lte("recorded_at", opensAtStr)
-              .order("recorded_at", { ascending: false })
-              .limit(1)
-              .maybeSingle();
-            if (openGps) {
-              const g = openGps as {
-                normalized_lat: number | null;
-                normalized_lng: number | null;
-                raw_lat: number;
-                raw_lng: number;
-              };
-              startCell = cellIdForPosition(
-                gridSpec,
-                g.normalized_lat ?? g.raw_lat,
-                g.normalized_lng ?? g.raw_lng,
-              );
-            }
-          }
-
-          if (startCell) {
-            const { data: latestGps } = await service
-              .from("live_route_snapshots")
-              .select(
-                "normalized_lat,normalized_lng,raw_lat,raw_lng",
-              )
-              .eq("live_session_id", sessionId)
-              .order("recorded_at", { ascending: false })
-              .limit(1)
-              .maybeSingle();
-            if (latestGps) {
-              const g = latestGps as {
-                normalized_lat: number | null;
-                normalized_lng: number | null;
-                raw_lat: number;
-                raw_lng: number;
-              };
-              const currentCell = cellIdForPosition(
-                gridSpec,
-                g.normalized_lat ?? g.raw_lat,
-                g.normalized_lng ?? g.raw_lng,
-              );
-              if (currentCell && currentCell !== startCell) crossed = true;
-            }
-          }
-        }
-
-        if (crossed) {
-          const r = await revealAndSettleMarket(marketId);
-          return NextResponse.json({
-            action: "grid_cell_crossed_reveal",
-            ...r,
-          });
-        }
-        if (now >= revealAt) {
-          const r = await revealAndSettleMarket(marketId);
-          return NextResponse.json({
-            action: "grid_timeout_reveal",
-            ...r,
-          });
-        }
-        return NextResponse.json({
-          action: "grid_awaiting_cell_cross",
-          phase,
-        });
+    if (marketType === "next_turn") {
+      const passed = await driverPassedPin(service, {
+        row,
+        sessionId,
+      });
+      if (passed) {
+        await revealAndSettleMarket(mid);
+        notes.push({ marketId: mid, reason: "pin_passed" });
       }
-      if (now >= revealAt || lockedTooLong) {
-        const r = await revealAndSettleMarket(marketId);
-        return NextResponse.json({ action: "reveal", ...r });
+      continue;
+    }
+
+    if (isEngineMarketType(marketType)) {
+      const settle = await shouldSettleEngineMarket(service, {
+        marketId: mid,
+        marketType,
+        locksAt: locksAtStr,
+        liveSessionId: sessionId,
+        roomId,
+      });
+      if (settle) {
+        await revealAndSettleMarket(mid);
+        notes.push({ marketId: mid, reason: `engine_${marketType}` });
       }
     }
   }
 
-  return NextResponse.json({ action: "noop", phase });
+  return notes;
+}
+
+async function driverCrossedCell(
+  service: Awaited<ReturnType<typeof createServiceClient>>,
+  args: {
+    row: unknown;
+    sessionId: string | null;
+    opensAtStr: string;
+  },
+): Promise<boolean> {
+  const gridSpec = (args.row as { city_grid_spec: CityGridSpecCompact | null })
+    .city_grid_spec;
+  if (!gridSpec || !args.sessionId) return false;
+
+  const lockEvidence = (
+    args.row as { lock_evidence_json: { selectedOptionId?: string } | null }
+  ).lock_evidence_json;
+  let startCell: string | null = lockEvidence?.selectedOptionId ?? null;
+
+  if (!startCell) {
+    const { data: openGps } = await service
+      .from("live_route_snapshots")
+      .select("normalized_lat,normalized_lng,raw_lat,raw_lng")
+      .eq("live_session_id", args.sessionId)
+      .lte("recorded_at", args.opensAtStr)
+      .order("recorded_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (openGps) {
+      const g = openGps as {
+        normalized_lat: number | null;
+        normalized_lng: number | null;
+        raw_lat: number;
+        raw_lng: number;
+      };
+      startCell = cellIdForPosition(
+        gridSpec,
+        g.normalized_lat ?? g.raw_lat,
+        g.normalized_lng ?? g.raw_lng,
+      );
+    }
+  }
+  if (!startCell) return false;
+
+  const { data: latest } = await service
+    .from("live_route_snapshots")
+    .select("normalized_lat,normalized_lng,raw_lat,raw_lng")
+    .eq("live_session_id", args.sessionId)
+    .order("recorded_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (!latest) return false;
+  const g = latest as {
+    normalized_lat: number | null;
+    normalized_lng: number | null;
+    raw_lat: number;
+    raw_lng: number;
+  };
+  const currentCell = cellIdForPosition(
+    gridSpec,
+    g.normalized_lat ?? g.raw_lat,
+    g.normalized_lng ?? g.raw_lng,
+  );
+  return Boolean(currentCell && currentCell !== startCell);
+}
+
+async function driverPassedPin(
+  service: Awaited<ReturnType<typeof createServiceClient>>,
+  args: { row: unknown; sessionId: string | null },
+): Promise<boolean> {
+  if (!args.sessionId) return false;
+  const turnLat = (args.row as { turn_point_lat: number | null }).turn_point_lat;
+  const turnLng = (args.row as { turn_point_lng: number | null }).turn_point_lng;
+  if (turnLat == null || turnLng == null) return false;
+
+  const { data: latest } = await service
+    .from("live_route_snapshots")
+    .select("normalized_lat,normalized_lng,raw_lat,raw_lng")
+    .eq("live_session_id", args.sessionId)
+    .order("recorded_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (!latest) return false;
+  const g = latest as {
+    normalized_lat: number | null;
+    normalized_lng: number | null;
+    raw_lat: number;
+    raw_lng: number;
+  };
+  const lat = g.normalized_lat ?? g.raw_lat;
+  const lng = g.normalized_lng ?? g.raw_lng;
+  const dLat = (lat - turnLat) * 111_320;
+  const dLng =
+    (lng - turnLng) * 111_320 * Math.cos((turnLat * Math.PI) / 180);
+  const dist = Math.hypot(dLat, dLng);
+  // Within ~15 m of the pin is "passed" for settlement purposes.
+  return dist <= 15;
 }
