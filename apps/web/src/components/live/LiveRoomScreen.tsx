@@ -1474,13 +1474,27 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             viewerZoomRuleKey={`${mapBetTypeForCamera ?? "none"}:${currentMarket?.id ?? "nomarket"}`}
             onZoneSelect={(id) => {
               /**
-               * Tapping a cell on the map is now informational only — the
-               * actual bet lives in the unified bottom sheet (N/E/S/W).
-               * Keep the selection so the map highlights what the viewer
-               * tapped.
+               * For a live `city_grid` (`next_zone`) market, tapping a cell
+               * IS the bet — fire `placeBet` immediately if a bet hasn't
+               * already been placed. Outside of `next_zone` we just keep
+               * the selection so the map can highlight it.
                */
               setSelectedZoneId(id);
               if (id) setSelectedCheckpointId(null);
+              if (
+                id &&
+                currentMarket?.marketType === "city_grid" &&
+                !sheetBettingClosed &&
+                !placingOptionId &&
+                !viewerHasBetOnCurrentMarket
+              ) {
+                void placeBet(id).then((result) => {
+                  if (result?.ok) {
+                    setSelectedZoneId(null);
+                    setMapSheetError(null);
+                  }
+                });
+              }
             }}
             onCheckpointSelect={(id) => {
               setSelectedCheckpointId(id);
@@ -1678,17 +1692,23 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             viewerCurrentBetHeadline ??
             sheetBetHeadline
           }
-          selectionDetail={null}
+          selectionDetail={
+            currentMarket.marketType === "city_grid"
+              ? selectedZone
+                ? `Selected · ${selectedZone.name}`
+                : "Tap a square on the map"
+              : null
+          }
           marketOptions={sheetMarketOptions}
           selectedOptionId={selectedMapOptionId}
           onSelectOption={(id) => {
             /**
-             * Unified one-touch bet: a tap on any option commits the bet
-             * immediately. No "Place bet" confirmation step — the user
-             * explicitly asked that every bet feel the same and take one
-             * touch.
+             * Non-grid markets: tapping any option commits the bet
+             * immediately. `city_grid` selection happens via the map
+             * (`onZoneSelect` above) and ignores this path.
              */
             setSelectedMapOptionId(id);
+            if (currentMarket.marketType === "city_grid") return;
             if (
               sheetBettingClosed ||
               placingOptionId ||
@@ -1730,7 +1750,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               setMapSheetError(null);
             }
           }}
-          oneTapOptionBet
+          gridMode={currentMarket.marketType === "city_grid"}
+          oneTapOptionBet={currentMarket.marketType !== "city_grid"}
         />
       ) : null}
     </div>

@@ -106,11 +106,15 @@ function liveFeedRowFromActiveRoomRow(r: Record<string, unknown>): LiveFeedRow {
           locksAt: (r.current_market_locks_at as string) ?? "",
           revealAt: (r.current_market_reveal_at as string) ?? "",
           /**
-           * Always ship `option_set` for every market type. `city_grid` used to
-           * send `[]` so the map could drive cell picks — the unified bet card
-           * now needs N/E/S/W (or any future option_set) from the DB.
+           * `city_grid` shows the cell picker on the map and validates option
+           * ids server-side against `cityGridSpec` — no need to ship hundreds
+           * of cells over the wire. Other market types ship their bounded
+           * `option_set` so the bottom sheet can render buttons.
            */
-          options: marketOptions,
+          options:
+            (r.current_market_type as string) === "city_grid"
+              ? []
+              : marketOptions,
           participantCount: (r.current_market_participants as number) ?? 0,
           turnPointLat: (r.current_market_turn_point_lat as number | null) ?? null,
           turnPointLng: (r.current_market_turn_point_lng as number | null) ?? null,

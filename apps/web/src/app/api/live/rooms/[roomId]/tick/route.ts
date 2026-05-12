@@ -88,15 +88,27 @@ export async function POST(
       const shouldLockNow =
         status === "open" && (nowMs >= locksAtMs || !isActiveRotationType);
       if (shouldLockNow) {
-        await lockMarket(marketId);
-        await service
-          .from("live_rooms")
-          .update({
-            phase: "waiting_for_next_market",
-            current_market_id: null,
-            last_event_at: new Date().toISOString(),
-          })
-          .eq("id", roomId);
+        const lockResult = await lockMarket(marketId);
+        /**
+         * Race-safety: multiple viewers POST `/tick` concurrently. Only the
+         * tick that actually transitioned the market (open → locked) clears
+         * `current_market_id`. Losers see `{ error: "Market not open" }`
+         * and must not blindly clear the pointer, or they will erase the
+         * **next** market a winning tick has already opened — which is what
+         * was causing the bet card to flash on screen for a split second.
+         */
+        if ("commitHash" in lockResult) {
+          await service
+            .from("live_rooms")
+            .update({
+              phase: "waiting_for_next_market",
+              current_market_id: null,
+              last_event_at: new Date().toISOString(),
+            })
+            .eq("id", roomId)
+            // Extra guard: only clear when we're still the current market.
+            .eq("current_market_id", marketId);
+        }
         // Fall through to the "waiting" branch below so the same tick can
         // also open the next market without a 1.5 s round-trip wait.
       }

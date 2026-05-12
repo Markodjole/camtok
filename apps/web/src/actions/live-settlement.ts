@@ -394,10 +394,11 @@ export async function revealAndSettleMarket(marketId: string) {
 
   if (marketType === "city_grid" && gridSpec) {
     /**
-     * `next_zone` now ships 4 cardinal options (N / E / S / W). Read the
-     * start cell from the market subtitle, the current cell from the latest
-     * GPS, and resolve direction from the (row, col) delta. Driver still
-     * sitting in the start cell when `reveal_at` finally hits → refund.
+     * `next_zone`: winning option is the cell the driver is in **right
+     * now**, as long as it differs from the start cell captured at open
+     * time. Driver still sitting in the start cell when settlement runs →
+     * refund (we only call this from the tick once the driver actually
+     * crossed out, but `reveal_at` timeout can still hit it stuck inside).
      */
     const liveSessionId = (market as { live_session_id: string })
       .live_session_id;
@@ -412,11 +413,7 @@ export async function revealAndSettleMarket(marketId: string) {
       startRow = typeof meta.startRow === "number" ? meta.startRow : null;
       startCol = typeof meta.startCol === "number" ? meta.startCol : null;
     } catch {
-      // ignore parse failures — fall through to refund below.
-    }
-    if (startRow == null || startCol == null) {
-      await refundMarket(marketId, "city_grid_no_start_cell");
-      return { status: "ambiguous", reason: "city_grid_no_start_cell" };
+      // ignore parse failures — start-cell fallback handled below.
     }
 
     const { data: latestGps } = await service
@@ -448,27 +445,16 @@ export async function revealAndSettleMarket(marketId: string) {
       await refundMarket(marketId, "city_grid_bad_cell_id");
       return { status: "ambiguous", reason: "city_grid_bad_cell_id" };
     }
-    const dRow = curr.row - startRow;
-    const dCol = curr.col - startCol;
-    if (dRow === 0 && dCol === 0) {
+    if (
+      startRow != null &&
+      startCol != null &&
+      curr.row === startRow &&
+      curr.col === startCol
+    ) {
       await refundMarket(marketId, "city_grid_still_in_zone");
       return { status: "ambiguous", reason: "city_grid_still_in_zone" };
     }
-    /**
-     * Dominant axis wins. Latitude rows: north = larger row, south = smaller.
-     * Longitude cols: east = larger col, west = smaller.
-     */
-    let winningOption: "north" | "east" | "south" | "west";
-    if (Math.abs(dRow) >= Math.abs(dCol)) {
-      winningOption = dRow > 0 ? "north" : "south";
-    } else {
-      winningOption = dCol > 0 ? "east" : "west";
-    }
-    return await settleMarketWithWinner(
-      marketId,
-      winningOption,
-      "gps_zone_exit_direction",
-    );
+    return await settleMarketWithWinner(marketId, currCellId, "gps_cell_enter");
   }
 
   const { data: decision } = await service

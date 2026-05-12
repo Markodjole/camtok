@@ -4,6 +4,7 @@ import { unstable_noStore } from "next/cache";
 import { createServiceClient } from "@/lib/supabase/server";
 import {
   cellIdForPosition,
+  enumerateGridCells,
   gridCellCenter,
   parseGridOptionId,
 } from "@/lib/live/grid/cityGrid500";
@@ -16,22 +17,19 @@ import {
 import { metersBetween } from "@/lib/live/routing/geometry";
 
 /**
- * `next_zone`: bet on the CARDINAL DIRECTION (N / E / S / W) the driver
- * leaves their current 500 m grid cell. Renders in the same one-touch
- * `MapSelectionBottomSheet` as the other two bets so every market looks and
- * behaves identically.
+ * `next_zone`: viewer taps a 500 m grid cell on the map to bet that the
+ * driver will enter it next. The sheet renders headline + countdown only;
+ * the map drives option selection.
  *
  * Gates:
  *   - Driver must be within `ZONE_BET_CENTER_RADIUS_M` (100 m) of the
  *     current cell center.
  *   - Do not reopen if a `next_zone` market was already created while the
- *     driver was in this same cell — the user explicitly asked that this
- *     bet fires once per zone, not repeatedly inside it.
+ *     driver was in this same cell.
  *
  * Settlement (in `live-settlement.ts`):
- *   - When the driver crosses into a different cell, derive the dominant
- *     cardinal direction from the row/column delta and pay out the matching
- *     option.
+ *   - The first cell the driver enters that is **not** the start cell wins.
+ *   - Sitting in the start cell when `reveal_at` finally fires → refund.
  */
 export async function openCityGridMarketForRoom(roomId: string) {
   unstable_noStore();
@@ -137,18 +135,24 @@ export async function openCityGridMarketForRoom(roomId: string) {
   }
 
   /**
-   * 4 cardinal directions. The viewer taps one option in the same bottom
-   * sheet used by the other two bet types. Order is fixed N → E → S → W so
-   * the rendered row is always the same.
+   * Enumerate every cell in the spec as an option (`grid:rR:cC`). The
+   * viewer picks by tapping a polygon on the map; the bottom sheet just
+   * shows the headline + countdown (`gridMode` on the client).
    */
-  const options: LiveMarketOption[] = [
-    { id: "north", label: "North", shortLabel: "North", displayOrder: 0 },
-    { id: "east", label: "East", shortLabel: "East", displayOrder: 1 },
-    { id: "south", label: "South", shortLabel: "South", displayOrder: 2 },
-    { id: "west", label: "West", shortLabel: "West", displayOrder: 3 },
-  ];
+  const cells = enumerateGridCells(spec);
+  const options: LiveMarketOption[] = cells.map((c, i) => ({
+    id: c.id,
+    label: c.label,
+    shortLabel: c.label,
+    displayOrder: i,
+  }));
 
-  const title = `Which way does ${characterName} leave this zone?`;
+  const title = `Which square will ${characterName} enter first?`;
+  /**
+   * Subtitle carries metadata used by settlement and the tick's
+   * `driverCrossedCell` check — start cell coordinates + a `cellKey` used
+   * by the dupe guard above.
+   */
   const subtitle = JSON.stringify({
     cellKey,
     startRow: parsed.row,
