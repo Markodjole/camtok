@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { SkillFeedbackData } from "./SkillFeedbackCard";
+import { viewerLiveLog, viewerLiveWarn } from "@/lib/live/viewerLiveConsole";
 
 type TKind = "info" | "ok" | "bad";
 type TItem = { id: string; text: string; kind: TKind };
@@ -58,7 +59,10 @@ export function LiveEventToasts({
         const res = await fetch(`/api/live/rooms/${roomId}/activity`, {
           cache: "no-store",
         });
-        if (!res.ok) return;
+        if (!res.ok) {
+          viewerLiveWarn("activity_http", { status: res.status, roomId });
+          return;
+        }
         const j = (await res.json()) as {
           events: Array<{
             id: string;
@@ -73,6 +77,14 @@ export function LiveEventToasts({
           myOpenBetMarketIds: j.myOpenBetMarketIds ?? [],
         });
 
+        viewerLiveLog("activity_poll", {
+          roomId,
+          role,
+          eventCount: j.events?.length ?? 0,
+          settlementRows: j.mySettlements?.length ?? 0,
+          myOpenBetMarketIds: j.myOpenBetMarketIds ?? [],
+        });
+
         if (firstBoot.current) {
           for (const e of j.events ?? []) seenEvent.current.add(e.id);
           for (const s of j.mySettlements ?? []) {
@@ -84,6 +96,12 @@ export function LiveEventToasts({
 
         for (const e of j.events ?? []) {
           if (seenEvent.current.has(e.id)) continue;
+          viewerLiveLog("room_event_new", {
+            id: e.id,
+            event_type: e.event_type,
+            payload: e.payload,
+            role,
+          });
           if (e.event_type === "bet_placed" && role === "streamer") {
             const stake = Number(e.payload.stakeAmount ?? 0);
             const oid = (e.payload.optionId ?? "") as string;
@@ -98,6 +116,15 @@ export function LiveEventToasts({
             const k = `${s.market_id}|${s.settled_at}`;
             if (seenSettle.current.has(k)) continue;
             seenSettle.current.add(k);
+            viewerLiveLog("settlement_detected", {
+              marketId: s.market_id,
+              title: s.title,
+              won: s.won,
+              myOptionId: s.my_option_id,
+              winningOptionId: s.winning_option_id,
+              stakeAmount: s.stake_amount,
+              payoutAmount: s.payout_amount,
+            });
             onSettlement({
               marketId: s.market_id,
               title: s.title,
@@ -110,8 +137,8 @@ export function LiveEventToasts({
             });
           }
         }
-      } catch {
-        /* transient */
+      } catch (err) {
+        viewerLiveWarn("activity_poll_error", String(err));
       }
     };
     void run();

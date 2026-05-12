@@ -22,6 +22,7 @@ import {
   VIEWER_BET_MIN_DISPLAY_MS,
 } from "@/lib/live/liveBetMinOpenMs";
 import { liveBetRelaxClient } from "@/lib/live/liveBetRelax";
+import { viewerLiveLog, viewerLiveWarn } from "@/lib/live/viewerLiveConsole";
 import { metersBetween, squareWgs84BoundsFromCenter } from "@/lib/live/routing/geometry";
 import { LiveVideoPlayer } from "./LiveVideoPlayer";
 import { LiveDecisionStatusRibbon } from "./LiveDecisionStatusRibbon";
@@ -177,6 +178,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const centerFlashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pulseCenterMoney = useCallback(
     (kind: "stake" | "win" | "loss", amount: number, target?: string | null) => {
+      viewerLiveLog("center_money_flash", { kind, amount, target: target ?? null });
       if (centerFlashTimerRef.current) clearTimeout(centerFlashTimerRef.current);
       setCenterMoneyFlash({ kind, amount, target: target ?? null });
       const ms = kind === "stake" ? 1_800 : 2_600;
@@ -445,6 +447,13 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     (data: SkillFeedbackData) => {
       const myOpt = data.options.find((o) => o.id === data.myOptionId) ?? null;
       const targetLabel = myOpt?.shortLabel ?? myOpt?.label ?? null;
+      viewerLiveLog("settlement_feedback", {
+        won: data.won,
+        myOptionId: data.myOptionId,
+        targetLabel,
+        payoutAmount: data.payoutAmount,
+        stakeAmount: data.stakeAmount,
+      });
       if (data.won) {
         pulseCenterMoney("win", data.payoutAmount, targetLabel);
       } else {
@@ -456,10 +465,41 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
   const onViewerRoomActivity = useCallback(
     (summary: { myOpenBetMarketIds: string[] }) => {
+      viewerLiveLog("room_activity", { myOpenBetMarketIds: summary.myOpenBetMarketIds });
       setMyOpenBetMarketIds(new Set(summary.myOpenBetMarketIds));
     },
     [],
   );
+
+  const lastRoomDebugSigRef = useRef("");
+  useEffect(() => {
+    const sig = JSON.stringify({
+      phase: room.phase,
+      mid: room.currentMarket?.id ?? null,
+      mtype: room.currentMarket?.marketType ?? null,
+      locksAt: room.currentMarket?.locksAt ?? null,
+      opensAt: room.currentMarket?.opensAt ?? null,
+      participants: room.participantCount,
+      viewers: room.viewerCount,
+    });
+    if (sig === lastRoomDebugSigRef.current) return;
+    lastRoomDebugSigRef.current = sig;
+    viewerLiveLog("room_state_change", {
+      roomId: room.roomId,
+      phase: room.phase,
+      currentMarketId: room.currentMarket?.id ?? null,
+      marketType: room.currentMarket?.marketType ?? null,
+      title: room.currentMarket?.title ?? null,
+      opensAt: room.currentMarket?.opensAt ?? null,
+      locksAt: room.currentMarket?.locksAt ?? null,
+      revealAt: room.currentMarket?.revealAt ?? null,
+      optionCount: room.currentMarket?.options?.length ?? 0,
+      optionIds: room.currentMarket?.options?.map((o) => o.id) ?? [],
+      regionLabel: room.regionLabel,
+      participantCount: room.participantCount,
+      viewerCount: room.viewerCount,
+    });
+  }, [room]);
 
   useEffect(() => {
     /**
@@ -470,21 +510,37 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
      */
     const id = setInterval(async () => {
       try {
-        const [stateRes] = await Promise.all([
+        const [stateRes, tickRes] = await Promise.all([
           fetch(`/api/live/rooms/${initialRoom.roomId}/state`, {
             cache: "no-store",
           }),
           fetch(`/api/live/rooms/${initialRoom.roomId}/tick`, {
             method: "POST",
             cache: "no-store",
-          }).catch(() => undefined),
+          }).catch((err) => {
+            viewerLiveWarn("tick_fetch_failed", String(err));
+            return null;
+          }),
         ]);
+        if (tickRes) {
+          if (tickRes.ok) {
+            const tickJson = (await tickRes.json().catch(() => null)) as Record<
+              string,
+              unknown
+            > | null;
+            viewerLiveLog("tick_response", tickJson);
+          } else {
+            viewerLiveWarn("tick_http_error", { status: tickRes.status });
+          }
+        }
         if (stateRes.ok) {
           const json = (await stateRes.json()) as { room: LiveFeedRow | null };
           if (json.room) setRoom(json.room);
+        } else {
+          viewerLiveWarn("state_http_error", { status: stateRes.status });
         }
-      } catch {
-        /* transient */
+      } catch (e) {
+        viewerLiveWarn("viewer_poll_error", String(e));
       }
     }, 1500);
     return () => clearInterval(id);
@@ -532,6 +588,13 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     if (!room.currentMarket) return;
     if (placingOptionId) return;
     const market = room.currentMarket;
+    viewerLiveLog("place_bet_request", {
+      roomId: room.roomId,
+      marketId: market.id,
+      marketType: market.marketType,
+      optionId,
+      stakeAmount: lastStakeAmount,
+    });
     setError(null);
     setMapSheetError(null);
     setPlacingOptionId(optionId);
@@ -562,10 +625,22 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         setLastBetMarketId(market.id);
         setLastBetOptionLabel(pickedLabel);
         setMyOpenBetMarketIds((prev) => new Set(prev).add(market.id));
+        viewerLiveLog("place_bet_ok", {
+          marketId: market.id,
+          optionId,
+          pickedLabel,
+          stakeAmount: lastStakeAmount,
+        });
         return { ok: true as const };
       } else {
         const j = (await res.json().catch(() => ({}))) as { error?: string };
         const message = j.error ?? "Bet failed";
+        viewerLiveWarn("place_bet_failed", {
+          status: res.status,
+          message,
+          marketId: market.id,
+          optionId,
+        });
         setError(message);
         setMapSheetError(message);
         return { ok: false as const, error: message };
@@ -877,6 +952,13 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         return nextPinDistanceM != null && nextPinDistanceM <= 160;
       }
       if (viewerBetOfferType === "next_zone") {
+        /**
+         * Legacy map-pick `next_zone` locked the sheet when the driver hugged
+         * a cell edge. Today's `city_grid` market is cardinal N/E/S/W from
+         * the bottom sheet — keep the client unlocked for the full 7 s
+         * window; the server still enforces gates.
+         */
+        if (currentMarket?.marketType === "city_grid") return false;
         const last = routePoints[routePoints.length - 1];
         if (!last || !cityGridSpec) return false;
         const edgeM = distanceToCurrentCellEdgeMeters(cityGridSpec, last.lat, last.lng);
@@ -1058,8 +1140,11 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
    * whether the round is `next_turn`, `next_zone`, or `zone_exit_time`.
    * The old joystick + grid-map-tap surfaces are gone.
    */
+  /**
+   * Bet card overlays video or map — do not require `mapExpanded`, or viewers
+   * who stay on the camera fullscreen never see a market.
+   */
   const showUnifiedBetSheet =
-    mapExpanded &&
     showLiveBets &&
     currentMarket != null &&
     !viewerHasBetOnCurrentMarket &&
@@ -1609,6 +1694,12 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               placingOptionId ||
               viewerHasBetOnCurrentMarket
             ) {
+              viewerLiveLog("place_bet_skipped", {
+                optionId: id,
+                sheetBettingClosed,
+                placingOptionId: !!placingOptionId,
+                viewerHasBetOnCurrentMarket,
+              });
               return;
             }
             void placeBet(id).then((result) => {

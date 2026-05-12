@@ -60,8 +60,28 @@ export type LiveFeedRow = {
   drivingRouteStyle: DrivingRouteStyle;
 };
 
+type CurrentMarketOptions = NonNullable<
+  LiveFeedRow["currentMarket"]
+>["options"];
+
+/** `option_set` from `live_betting_markets` (JSON array or string in some clients). */
+function parseCurrentMarketOptions(r: Record<string, unknown>): CurrentMarketOptions {
+  const raw = r.current_market_options;
+  let v: unknown = raw;
+  if (typeof raw === "string") {
+    try {
+      v = JSON.parse(raw) as unknown;
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(v)) return [];
+  return v as CurrentMarketOptions;
+}
+
 /** Map one `active_live_rooms` row — shared by feed list and single-room detail. */
 function liveFeedRowFromActiveRoomRow(r: Record<string, unknown>): LiveFeedRow {
+  const marketOptions = parseCurrentMarketOptions(r);
   return {
     roomId: r.room_id as string,
     liveSessionId: r.live_session_id as string,
@@ -85,14 +105,12 @@ function liveFeedRowFromActiveRoomRow(r: Record<string, unknown>): LiveFeedRow {
           opensAt: (r.current_market_opens_at as string) ?? "",
           locksAt: (r.current_market_locks_at as string) ?? "",
           revealAt: (r.current_market_reveal_at as string) ?? "",
-          options:
-            (r.current_market_type as string) === "city_grid"
-              ? []
-              : (((r.current_market_options as LiveFeedRow["currentMarket"] extends null
-                  ? never
-                  : NonNullable<LiveFeedRow["currentMarket"]>["options"]) ?? []) as NonNullable<
-                  LiveFeedRow["currentMarket"]
-                >["options"]),
+          /**
+           * Always ship `option_set` for every market type. `city_grid` used to
+           * send `[]` so the map could drive cell picks — the unified bet card
+           * now needs N/E/S/W (or any future option_set) from the DB.
+           */
+          options: marketOptions,
           participantCount: (r.current_market_participants as number) ?? 0,
           turnPointLat: (r.current_market_turn_point_lat as number | null) ?? null,
           turnPointLng: (r.current_market_turn_point_lng as number | null) ?? null,

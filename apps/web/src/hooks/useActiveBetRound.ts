@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { RoundPlanV2 } from "@bettok/live";
+import { viewerLiveLog, viewerLiveWarn } from "@/lib/live/viewerLiveConsole";
 
 export type ActiveBettingRoundClient = {
   roundPlan: RoundPlanV2 | null;
@@ -28,10 +29,16 @@ export function useActiveBetRound(roomId: string | undefined, intervalMs = 4000)
         });
         if (!r.ok) {
           if (!cancelled) setError(r.status === 404 ? "not_found" : "request_failed");
+          viewerLiveWarn("active_round_http", { status: r.status });
           return;
         }
         const j = (await r.json()) as ActiveBettingRoundClient;
         if (!cancelled) {
+          viewerLiveLog("active_round_poll", {
+            roundPlanType: j.roundPlan?.type ?? null,
+            eligibleTypes: (j.eligibleRoundPlans ?? []).map((p) => p.type),
+            driverRouteReason: j.driverRouteReason,
+          });
           setData({
             roundPlan: j.roundPlan,
             eligibleRoundPlans: j.eligibleRoundPlans ?? [],
@@ -41,6 +48,7 @@ export function useActiveBetRound(roomId: string | undefined, intervalMs = 4000)
         }
       } catch {
         if (!cancelled) setError("network");
+        viewerLiveWarn("active_round_network", "fetch failed");
       }
     };
     void tick();
