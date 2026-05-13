@@ -40,9 +40,10 @@ export async function openEngineMarketForRoom(
 
   const service = await createServiceClient();
 
+  // region_label lives on character_live_sessions, not live_rooms.
   const { data: room } = await service
     .from("live_rooms")
-    .select("id, live_session_id, phase, region_label")
+    .select("id, live_session_id, phase")
     .eq("id", roomId)
     .maybeSingle();
   if (!room) return { error: "Room not found" };
@@ -51,7 +52,13 @@ export async function openEngineMarketForRoom(
   }
 
   const sessionId = (room as { live_session_id: string }).live_session_id;
-  const capturedZone = (room as { region_label: string | null }).region_label ?? null;
+
+  const { data: sessionRow } = await service
+    .from("character_live_sessions")
+    .select("region_label")
+    .eq("id", sessionId)
+    .maybeSingle();
+  const capturedZone = (sessionRow as { region_label: string | null } | null)?.region_label ?? null;
 
   const ctx = await loadGridCenterContext(service, sessionId, roomId);
   if (!ctx.ok) return { error: ctx.error };
@@ -214,6 +221,7 @@ export async function shouldSettleEngineMarket(
   {
     marketId,
     marketType,
+    liveSessionId,
     roomId,
   }: {
     marketId: string;
@@ -225,17 +233,21 @@ export async function shouldSettleEngineMarket(
 ): Promise<boolean> {
   if (marketType !== "zone_exit_time") return false;
 
-  const [marketRow, roomRow] = await Promise.all([
+  // region_label lives on character_live_sessions, not live_rooms.
+  // liveSessionId is passed in from the sweep caller.
+  const [marketRow, sessionRow] = await Promise.all([
     service
       .from("live_betting_markets")
       .select("subtitle")
       .eq("id", marketId)
       .maybeSingle(),
-    service
-      .from("live_rooms")
-      .select("region_label")
-      .eq("id", roomId)
-      .maybeSingle(),
+    liveSessionId
+      ? service
+          .from("character_live_sessions")
+          .select("region_label")
+          .eq("id", liveSessionId)
+          .maybeSingle()
+      : Promise.resolve({ data: null }),
   ]);
   let capturedZone: string | null = null;
   try {
@@ -247,7 +259,7 @@ export async function shouldSettleEngineMarket(
     // ignore parse errors
   }
   const currentZone =
-    (roomRow.data as { region_label: string | null } | null)?.region_label ?? null;
+    (sessionRow.data as { region_label: string | null } | null)?.region_label ?? null;
   if (!capturedZone) return false;
   return currentZone !== capturedZone;
 }
