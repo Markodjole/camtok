@@ -234,7 +234,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
    *  betting math). */
   const cityGridSpec = useMemo(
     () =>
-      currentMarket?.marketType === "city_grid"
+      currentMarket?.marketType === "city_grid" ||
+      currentMarket?.marketType === "zone_exit_time"
         ? (currentMarket.cityGridSpec as CityGridSpecCompact | null | undefined)
         : null,
     [currentMarket?.marketType, currentMarket?.cityGridSpec],
@@ -243,7 +244,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
    *  while an engine market is the active round. */
   useEffect(() => {
     if (
-      currentMarket?.marketType === "city_grid" &&
+      (currentMarket?.marketType === "city_grid" ||
+        currentMarket?.marketType === "zone_exit_time") &&
       currentMarket.cityGridSpec
     ) {
       setLatestCityGridSpec(

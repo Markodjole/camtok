@@ -246,6 +246,18 @@ async function openFromQueueOrTriggers(
 ): Promise<{ action: string; detail?: Record<string, unknown> }> {
   const now = Date.now();
 
+  // Re-read the phase just before opening to guard against concurrent ticks
+  // that may have already opened a market in the milliseconds since this tick
+  // read "waiting_for_next_market".
+  const { data: latestRoom } = await service
+    .from("live_rooms")
+    .select("phase")
+    .eq("id", roomId)
+    .maybeSingle();
+  if ((latestRoom as { phase: string } | null)?.phase !== "waiting_for_next_market") {
+    return { action: "already_opening", detail: { phase: (latestRoom as { phase: string } | null)?.phase } };
+  }
+
   // Clear the queue on the room as we're about to consume it.
   await service
     .from("live_rooms")

@@ -118,8 +118,11 @@ function liveFeedRowFromActiveRoomRow(r: Record<string, unknown>): LiveFeedRow {
           participantCount: (r.current_market_participants as number) ?? 0,
           turnPointLat: (r.current_market_turn_point_lat as number | null) ?? null,
           turnPointLng: (r.current_market_turn_point_lng as number | null) ?? null,
+          // zone_exit_time also stores the grid spec so the map can show
+          // zone boundaries during that market type.
           cityGridSpec:
-            (r.current_market_type as string) === "city_grid"
+            (r.current_market_type as string) === "city_grid" ||
+            (r.current_market_type as string) === "zone_exit_time"
               ? ((r.current_market_city_grid_spec as CityGridSpecCompact | null) ?? null)
               : null,
         }
