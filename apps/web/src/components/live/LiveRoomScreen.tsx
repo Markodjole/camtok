@@ -498,11 +498,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             viewerLiveLog("tick_response", tickJson);
           } else {
             viewerLiveWarn("tick_http_error", { status: tickRes.status });
-            if (tickRes.status === 404) {
-              stopped.current = true;
-              clearInterval(id);
-              return;
-            }
+            // Do NOT stop polling on tick errors — the tick may fail transiently
+            // (e.g. schema-cache lag, cold start). Only the state endpoint 404
+            // is authoritative proof that the room is gone.
           }
         }
 

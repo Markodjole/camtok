@@ -80,11 +80,16 @@ export async function POST(
 
   const settleNotes = await sweepPendingSettlements(service, roomId);
 
-  const { data: room } = await service
+  // Select only long-standing columns here so a schema-cache miss on
+  // queued_triggers (newly added column) never causes a phantom 404.
+  const { data: room, error: roomErr } = await service
     .from("live_rooms")
-    .select("id, phase, current_market_id, live_session_id, region_label, queued_triggers")
+    .select("id, phase, current_market_id, live_session_id, region_label")
     .eq("id", roomId)
     .maybeSingle();
+  if (roomErr) {
+    console.error("[tick] room select error", roomErr);
+  }
   if (!room) return NextResponse.json({ error: "not_found" }, { status: 404 });
 
   const phase = (room as { phase: string }).phase;
@@ -121,15 +126,28 @@ export async function POST(
     }
   }
 
-  // ─── 2. Re-read phase ──────────────────────────────────────────────────────
+  // ─── 2. Re-read phase + queue ──────────────────────────────────────────────
+  // queued_triggers is a recently added column; guard against schema-cache lag
+  // by reading phase (safe) and queue (may fail) in two separate tolerant reads.
   const { data: room2 } = await service
     .from("live_rooms")
-    .select("phase, queued_triggers")
+    .select("phase")
     .eq("id", roomId)
     .maybeSingle();
   const phaseNow = (room2 as { phase: string } | null)?.phase ?? phase;
-  const rawQueue = (room2 as { queued_triggers: unknown } | null)?.queued_triggers;
-  const currentQueue: QueuedTrigger[] = Array.isArray(rawQueue) ? (rawQueue as QueuedTrigger[]) : [];
+
+  let currentQueue: QueuedTrigger[] = [];
+  try {
+    const { data: queueRow } = await service
+      .from("live_rooms")
+      .select("queued_triggers")
+      .eq("id", roomId)
+      .maybeSingle();
+    const rawQueue = (queueRow as { queued_triggers: unknown } | null)?.queued_triggers;
+    if (Array.isArray(rawQueue)) currentQueue = rawQueue as QueuedTrigger[];
+  } catch {
+    // queued_triggers column not yet visible via PostgREST — proceed with empty queue
+  }
 
   // ─── 3. Detect triggers and update queue ──────────────────────────────────
   const sessionId = (room as { live_session_id: string }).live_session_id;
