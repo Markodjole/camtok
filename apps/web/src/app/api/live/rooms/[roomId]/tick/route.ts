@@ -245,6 +245,8 @@ async function openFromQueueOrTriggers(
     .update({ queued_triggers: [] })
     .eq("id", roomId);
 
+  const openerErrors: Array<{ trigger: string; error: string }> = [];
+
   // Priority order: next_turn > next_zone > zone_exit_time phases.
   const prioritySorted = [...queue]
     .filter((t) => now - t.queuedAt < QUEUE_EXPIRY_MS)
@@ -258,6 +260,7 @@ async function openFromQueueOrTriggers(
         detail: { marketId: res.marketId, trigger },
       };
     }
+    openerErrors.push({ trigger: triggerKey(trigger), error: (res as { error?: string }).error ?? "unknown" });
   }
 
   // No queue hit — try fresh triggers in priority order.
@@ -270,9 +273,18 @@ async function openFromQueueOrTriggers(
         detail: { marketId: res.marketId },
       };
     }
+    openerErrors.push({ trigger: freshTriggerKey(ft), error: (res as { error?: string }).error ?? "unknown" });
   }
 
-  return { action: "no_eligible_bet", detail: { queueSize: queue.length, freshCount: fresh.length } };
+  // Log errors so they appear in Vercel function logs.
+  if (openerErrors.length) {
+    console.warn("[tick] all openers failed", JSON.stringify(openerErrors));
+  }
+
+  return {
+    action: "no_eligible_bet",
+    detail: { queueSize: queue.length, freshCount: fresh.length, openerErrors },
+  };
 }
 
 function triggerPriority(t: QueuedTrigger): number {
