@@ -5,9 +5,13 @@
 
 import type { BetTypeV2 } from "./types";
 
-/** Offer next_turn when distance to decision pin is within this band (m). */
-export const TURN_BET_OFFER_MAX_M = 200;
-export const TURN_BET_OFFER_MIN_M = 150;
+/**
+ * Offer next_turn when distance to decision pin is within this band (m).
+ * Must match NEXT_TURN_PIN_MIN_M / NEXT_TURN_PIN_MAX_M in betWindowConstants.ts
+ * so the ribbon pill and the actual market popup are in sync (120 m ± 30 m).
+ */
+export const TURN_BET_OFFER_MAX_M = 150;
+export const TURN_BET_OFFER_MIN_M = 90;
 
 /** In-zone bets fire after entering a zone. */
 export const ZONE_MIDDLE_FRACTION = 0.4;
