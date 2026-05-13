@@ -80,17 +80,26 @@ export async function POST(
 
   const settleNotes = await sweepPendingSettlements(service, roomId);
 
-  // Select only long-standing columns here so a schema-cache miss on
-  // queued_triggers (newly added column) never causes a phantom 404.
+  // region_label lives on character_live_sessions, not live_rooms.
+  // Select only columns that actually exist on live_rooms.
   const { data: room, error: roomErr } = await service
     .from("live_rooms")
-    .select("id, phase, current_market_id, live_session_id, region_label")
+    .select("id, phase, current_market_id, live_session_id")
     .eq("id", roomId)
     .maybeSingle();
   if (roomErr) {
     console.error("[tick] room select error", roomErr);
   }
   if (!room) return NextResponse.json({ error: "not_found" }, { status: 404 });
+
+  // Fetch region_label from the live session (needed for zone_exit_time capturedZone).
+  const sessionId = (room as { live_session_id: string }).live_session_id;
+  const { data: sessionRow } = await service
+    .from("character_live_sessions")
+    .select("region_label")
+    .eq("id", sessionId)
+    .maybeSingle();
+  const capturedZone = (sessionRow as { region_label: string | null } | null)?.region_label ?? null;
 
   const phase = (room as { phase: string }).phase;
   const marketId = (room as { current_market_id: string | null }).current_market_id;
@@ -150,8 +159,7 @@ export async function POST(
   }
 
   // ─── 3. Detect triggers and update queue ──────────────────────────────────
-  const sessionId = (room as { live_session_id: string }).live_session_id;
-  const capturedZone = (room as { region_label: string | null }).region_label ?? null;
+  // sessionId and capturedZone are resolved above from room + sessionRow.
   const freshTriggers = await detectEligibleTriggers(service, roomId, sessionId, capturedZone);
 
   if (phaseNow === "market_open") {
