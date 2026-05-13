@@ -1,6 +1,6 @@
 /**
- * Betting Engine V2 — domain types (Cursor guide §14–23).
- * Parallel to existing `LiveMarketType` / DB rows; map at integration boundaries.
+ * Betting Engine V2 — domain types.
+ * Active bet types: next_turn, next_zone, zone_exit_time.
  */
 
 export type RoundKind = "shared_event" | "personal_snapshot";
@@ -13,17 +13,10 @@ export type RoundState =
   | "resolved"
   | "voided";
 
-/** MVP set first; expand per guide §22. */
 export type BetTypeV2 =
   | "next_turn"
-  | "time_vs_google"
-  | "zone_exit_time"
-  | "zone_duration"
   | "next_zone"
-  | "turns_before_zone_exit"
-  | "stop_count"
-  | "turn_count_to_pin"
-  | "eta_drift";
+  | "zone_exit_time";
 
 export type VoidReasonV2 =
   | "gps_uncertain"

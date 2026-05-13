@@ -7,9 +7,9 @@ describe("BettingEngineV2 selectBestRound", () => {
   it("prefers next_turn when in distance window with branches", () => {
     const plan = selectBestRound(
       {
-        distanceToTurnMeters: 120,
+        distanceToTurnMeters: 175,
         nextPinHasValidBranches: true,
-        canBuildTimeVsGoogleRound: true,
+        canBuildNextZoneRound: true,
       },
       { mvpOnly: true },
     );
@@ -20,57 +20,51 @@ describe("BettingEngineV2 selectBestRound", () => {
   it("does not offer next_turn without valid branches", () => {
     expect(
       canBuildNextTurnRound({
-        distanceToTurnMeters: 100,
+        distanceToTurnMeters: 175,
         nextPinHasValidBranches: false,
       }),
     ).toBe(false);
   });
 
-  it("lists all eligible MVP plans in priority order", () => {
+  it("lists eligible plans in priority order (no turn window)", () => {
     const snap = {
-      distanceToTurnMeters: 120,
-      nextPinHasValidBranches: true,
-      canBuildTimeVsGoogleRound: true,
-      canBuildTurnCountRound: true,
-      canBuildEtaDriftRound: true,
+      distanceToTurnMeters: 300,
+      canBuildNextZoneRound: true,
+      canBuildZoneExitRound: true,
     };
     const plans = listEligibleRounds(snap, { mvpOnly: true });
-    expect(plans.map((p) => p.type)).toEqual(["next_turn", "time_vs_google"]);
-    expect(selectBestRound(snap, { mvpOnly: true })?.type).toBe("next_turn");
+    expect(plans.map((p) => p.type)).toEqual(["next_zone", "zone_exit_time"]);
+    expect(selectBestRound(snap, { mvpOnly: true })?.type).toBe("next_zone");
   });
 
-  it("falls through to time_vs_google when no turn window (MVP)", () => {
+  it("falls through to next_zone when no turn window", () => {
     const plan = selectBestRound(
       {
         distanceToTurnMeters: 300,
-        canBuildTimeVsGoogleRound: true,
-        canBuildEtaDriftRound: true,
+        canBuildNextZoneRound: true,
       },
       { mvpOnly: true },
     );
-    expect(plan?.type).toBe("time_vs_google");
+    expect(plan?.type).toBe("next_zone");
   });
 
-  it("respects mvpOnly for non-mvp types", () => {
-    const full = selectBestRound(
+  it("falls through to zone_exit_time when next_zone unavailable", () => {
+    const plan = selectBestRound(
       {
-        distanceToTurnMeters: 400,
-        canBuildNextZoneRound: true,
-        canBuildTimeVsGoogleRound: true,
-      },
-      { mvpOnly: false },
-    );
-    expect(full?.type).toBe("next_zone");
-
-    const mvp = selectBestRound(
-      {
-        distanceToTurnMeters: 400,
-        canBuildNextZoneRound: true,
-        canBuildTimeVsGoogleRound: true,
+        distanceToTurnMeters: 300,
+        canBuildZoneExitRound: true,
       },
       { mvpOnly: true },
     );
-    expect(mvp?.type).toBe("time_vs_google");
+    expect(plan?.type).toBe("zone_exit_time");
+  });
+
+  it("returns null when no eligible rounds", () => {
+    const plan = selectBestRound(
+      { distanceToTurnMeters: 300 },
+      { mvpOnly: true },
+    );
+    expect(plan).toBeNull();
   });
 });
 
@@ -93,8 +87,8 @@ describe("shouldReplaceRound", () => {
   it("does not replace same plan type", () => {
     expect(
       shouldReplaceRound({
-        current: baseRound("time_vs_google"),
-        nextPlan: { type: "time_vs_google", priority: 70, kind: "personal_snapshot" },
+        current: baseRound("zone_exit_time"),
+        nextPlan: { type: "zone_exit_time", priority: 75, kind: "personal_snapshot" },
         userHasResolvingPersonalBet: false,
         sharedTurnLocked: false,
       }),
@@ -104,7 +98,7 @@ describe("shouldReplaceRound", () => {
   it("replaces lower priority with next_turn", () => {
     expect(
       shouldReplaceRound({
-        current: baseRound("eta_drift"),
+        current: baseRound("zone_exit_time"),
         nextPlan: { type: "next_turn", priority: 100, kind: "shared_event" },
         userHasResolvingPersonalBet: false,
         sharedTurnLocked: false,
@@ -113,7 +107,7 @@ describe("shouldReplaceRound", () => {
   });
 
   it("blocks replace when user personal bet resolving", () => {
-    const r = baseRound("time_vs_google");
+    const r = baseRound("zone_exit_time");
     r.state = "resolving";
     expect(
       shouldReplaceRound({

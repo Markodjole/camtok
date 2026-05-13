@@ -7,16 +7,8 @@ export type EngineMarketOption = {
   displayOrder: number;
 };
 
-/** Market types that are engine-driven provisional bets (no real GPS-resolved outcome yet). */
-export const ENGINE_BET_TYPES = new Set<string>([
-  "time_vs_google",
-  "stop_count",
-  "turn_count_to_pin",
-  "turns_before_zone_exit",
-  "zone_exit_time",
-  "zone_duration",
-  "eta_drift",
-]);
+/** Market types that are engine-driven (outcome resolved via telemetry). */
+export const ENGINE_BET_TYPES = new Set<string>(["zone_exit_time"]);
 
 export function isEngineMarketType(marketType: string): boolean {
   return ENGINE_BET_TYPES.has(marketType);
@@ -43,7 +35,7 @@ export function sheetOptionsForDisplayBet(
   return provisionalOptionsForBetType(displayBetType);
 }
 
-/** Placeholder options when no matching market row exists — reads like real stakes. */
+/** Placeholder options when no matching market row exists. */
 export function provisionalOptionsForBetType(type: BetTypeV2): EngineMarketOption[] {
   switch (type) {
     case "next_turn":
@@ -82,66 +74,6 @@ export function provisionalOptionsForBetType(type: BetTypeV2): EngineMarketOptio
           displayOrder: 1,
         },
       ];
-    case "time_vs_google":
-      return [
-        {
-          id: "faster_google",
-          label: "Beat Google ETA to the next pin",
-          shortLabel: "Beat ETA",
-          displayOrder: 0,
-        },
-        {
-          id: "slower_google",
-          label: "Slower than Google ETA to the next pin",
-          shortLabel: "Slower",
-          displayOrder: 1,
-        },
-      ];
-    case "stop_count":
-      return [
-        {
-          id: "stops_low",
-          label: "At most one full stop (lights / traffic)",
-          shortLabel: "0–1 stops",
-          displayOrder: 0,
-        },
-        {
-          id: "stops_high",
-          label: "Two or more full stops before leaving zone",
-          shortLabel: "2+ stops",
-          displayOrder: 1,
-        },
-      ];
-    case "turn_count_to_pin":
-      return [
-        {
-          id: "turns_few",
-          label: "One or two turns before the next pin",
-          shortLabel: "1–2 turns",
-          displayOrder: 0,
-        },
-        {
-          id: "turns_many",
-          label: "Three or more turns before the next pin",
-          shortLabel: "3+ turns",
-          displayOrder: 1,
-        },
-      ];
-    case "turns_before_zone_exit":
-      return [
-        {
-          id: "zone_turns_few",
-          label: "At most one turn before exiting this zone",
-          shortLabel: "0–1 turns",
-          displayOrder: 0,
-        },
-        {
-          id: "zone_turns_many",
-          label: "Two or more turns before exiting this zone",
-          shortLabel: "2+ turns",
-          displayOrder: 1,
-        },
-      ];
     case "zone_exit_time":
       return [
         {
@@ -154,36 +86,6 @@ export function provisionalOptionsForBetType(type: BetTypeV2): EngineMarketOptio
           id: "exit_slow",
           label: "Still in zone after 90 seconds",
           shortLabel: "90 s+",
-          displayOrder: 1,
-        },
-      ];
-    case "zone_duration":
-      return [
-        {
-          id: "dur_short",
-          label: "In this zone less than 2 minutes total",
-          shortLabel: "< 2 min",
-          displayOrder: 0,
-        },
-        {
-          id: "dur_long",
-          label: "Stays in this zone 2 minutes or longer",
-          shortLabel: "2 min+",
-          displayOrder: 1,
-        },
-      ];
-    case "eta_drift":
-      return [
-        {
-          id: "eta_early",
-          label: "Arrives noticeably ahead of live ETA",
-          shortLabel: "Ahead",
-          displayOrder: 0,
-        },
-        {
-          id: "eta_late",
-          label: "Arrives behind the live ETA window",
-          shortLabel: "Behind",
           displayOrder: 1,
         },
       ];

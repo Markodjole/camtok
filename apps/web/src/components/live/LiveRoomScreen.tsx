@@ -71,24 +71,13 @@ type MapCheckpoint = {
 
 function isViewerZoneEngineType(t: BetTypeV2 | null | undefined): boolean {
   if (!t) return false;
-  return (
-    t === "next_zone" ||
-    t === "zone_exit_time" ||
-    t === "zone_duration" ||
-    t === "turns_before_zone_exit" ||
-    t === "stop_count"
-  );
+  return t === "next_zone" || t === "zone_exit_time";
 }
 
 /** At most once per zone visit; `next_turn` + `time_vs_google` are excluded (repeatable). */
 const ZONE_BET_ONCE_ORDER: BetTypeV2[] = [
   "next_zone",
   "zone_exit_time",
-  "zone_duration",
-  "stop_count",
-  "turns_before_zone_exit",
-  "turn_count_to_pin",
-  "eta_drift",
 ];
 const ZONE_BET_ONCE_SET = new Set<BetTypeV2>(ZONE_BET_ONCE_ORDER);
 
@@ -287,22 +276,15 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     setZoneConsumedBetTypes(new Set());
   }, [zoneSessionKey]);
 
-  /** Head pin id — when it changes, prefer one `time_vs_google` offer (repeatable per pin). */
-  const lastPinHeadIdRef = useRef<string | null>(null);
-  const pendingNewPinTimeBetRef = useRef(false);
   const prevZoneSessionKeyRef = useRef<string | null>(null);
   useEffect(() => {
     if (prevZoneSessionKeyRef.current === zoneSessionKey) return;
     prevZoneSessionKeyRef.current = zoneSessionKey;
-    lastPinHeadIdRef.current = null;
-    pendingNewPinTimeBetRef.current = true;
   }, [zoneSessionKey]);
 
   const effectiveEngineType: BetTypeV2 | null = useMemo(() => {
     if (viewerEnginePillType != null) return viewerEnginePillType;
-    // Match the live system market so ribbon/camera follow the bet viewers can
-    // actually play — avoids getting stuck on time_vs_google in the UI while
-    // the server rotates types.
+    // Match the live system market type when it's an engine-driven bet.
     if (
       currentMarket?.marketType &&
       isEngineMarketType(currentMarket.marketType)
@@ -310,13 +292,6 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       return currentMarket.marketType as BetTypeV2;
     }
     if (!eligibleTypes.length) return null;
-
-    const pinHeadRaw = driverPins?.[0]?.id;
-    const pinHeadKey = pinHeadRaw != null ? String(pinHeadRaw) : null;
-    if (pinHeadKey !== lastPinHeadIdRef.current) {
-      lastPinHeadIdRef.current = pinHeadKey;
-      pendingNewPinTimeBetRef.current = true;
-    }
 
     const nextPinDist = driverPins?.[0]?.distanceMeters ?? null;
     const inTurnWindow = nextPinDist != null && nextPinDist <= 200 && nextPinDist >= 150;
@@ -326,34 +301,19 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       return null;
     };
 
-    // 1) Next turn — moment window; repeatable whenever eligible.
+    // 1) next_turn — only within the distance window.
     if (inTurnWindow) {
       const turnBet = pick("next_turn");
       if (turnBet) return turnBet;
     }
 
-    // 2) In zone: one slot per bet type until consumed (after min display time), `next_zone` first.
+    // 2) In zone: one slot per bet type until consumed, next_zone first.
     if (clientInZone) {
       for (const betType of ZONE_BET_ONCE_ORDER) {
         if (!eligibleTypes.includes(betType)) continue;
         if (zoneConsumedBetTypes.has(betType)) continue;
         return betType;
       }
-    }
-
-    // 3) Beat Google — once per new head pin (can repeat in zone across pins).
-    if (pendingNewPinTimeBetRef.current) {
-      const timeBet = pick("time_vs_google");
-      if (timeBet) {
-        pendingNewPinTimeBetRef.current = false;
-        return timeBet;
-      }
-    }
-
-    // 4) Fallback — time vs google when routing has a pin.
-    if ((driverPins?.length ?? 0) > 0) {
-      const timeBet = pick("time_vs_google");
-      if (timeBet) return timeBet;
     }
 
     const rotated = eligibleTypes[rotationIdx % eligibleTypes.length] ?? null;
@@ -719,16 +679,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
   const zoneEngineBetActive = (() => {
     const t = effectiveEngineType;
-    if (!t || !zoneMarketActive) {
-      return false;
-    }
-    return (
-      t === "next_zone" ||
-      t === "zone_exit_time" ||
-      t === "zone_duration" ||
-      t === "turns_before_zone_exit" ||
-      t === "stop_count"
-    );
+    if (!t || !zoneMarketActive) return false;
+    return t === "next_zone" || t === "zone_exit_time";
   })();
 
   /** Show zones whenever we know the grid — live bet or not — plus when the
@@ -800,15 +752,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     switch (mapBetTypeForCamera) {
       case "next_turn":
         return ZOOM_TIER_TIGHT_M;
-      case "time_vs_google":
-      case "turn_count_to_pin":
-      case "eta_drift":
-        return ZOOM_TIER_MID_M;
       case "next_zone":
-      case "stop_count":
-      case "turns_before_zone_exit":
       case "zone_exit_time":
-      case "zone_duration":
         return ZOOM_TIER_WIDE_M;
       default:
         return ZOOM_TIER_MID_M;
@@ -864,30 +809,21 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       }
 
       const pickZone = mapBetTypeForCamera === "next_zone";
-      const zoneWhole =
-        mapBetTypeForCamera === "turns_before_zone_exit" ||
-        mapBetTypeForCamera === "stop_count";
-      // Keep framing consistent with the width target for every active bet type.
       const framingM = Math.max(320, viewerTargetWidthMeters ?? 320);
 
       return {
         bounds: squareWgs84BoundsFromCenter(centerLat, centerLng, framingM),
-        // Lower floor ≈ one extra zoom-out step so adjacent cells stay visible.
-        minZoom: pickZone ? 14.5 : zoneWhole ? 15.0 : 15.5,
+        minZoom: pickZone ? 14.5 : 15.5,
       };
     }
 
-    // Non–city_grid markets: still frame by active bet type so the map matches the ribbon /
-    // bottom sheet (engine `stop_count` etc. has no `cityGridSpec` but uses the same labels).
+    // Non–city_grid markets: frame by active bet type.
     if (mapBetTypeForCamera != null && routeLast) {
       const pickZone = mapBetTypeForCamera === "next_zone";
-      const zoneWhole =
-        mapBetTypeForCamera === "turns_before_zone_exit" ||
-        mapBetTypeForCamera === "stop_count";
       const framingM = Math.max(320, viewerTargetWidthMeters ?? 320);
       return {
         bounds: squareWgs84BoundsFromCenter(routeLast.lat, routeLast.lng, framingM),
-        minZoom: pickZone ? 14.5 : zoneWhole ? 15.0 : 15.5,
+        minZoom: pickZone ? 14.5 : 15.5,
       };
     }
 
@@ -938,7 +874,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
   // Per-bet lock rules (client-side mirror of server rules):
   // - next_turn: lock at <= 70m to next pin (looser, keeps market open longer)
-  // - time_vs_google: lock at <= 160m to next pin
+  // - next_turn: lock at <= 70m to next pin
   // - next_zone: lock when within 60m of current cell edge (near another zone)
   const nextPinDistanceM = driverPins?.[0]?.distanceMeters ?? null;
   const isDistanceLocked =
@@ -948,16 +884,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       if (viewerBetOfferType === "next_turn") {
         return nextPinDistanceM != null && nextPinDistanceM <= 70;
       }
-      if (viewerBetOfferType === "time_vs_google") {
-        return nextPinDistanceM != null && nextPinDistanceM <= 160;
-      }
       if (viewerBetOfferType === "next_zone") {
-        /**
-         * Legacy map-pick `next_zone` locked the sheet when the driver hugged
-         * a cell edge. Today's `city_grid` market is cardinal N/E/S/W from
-         * the bottom sheet — keep the client unlocked for the full 7 s
-         * window; the server still enforces gates.
-         */
         if (currentMarket?.marketType === "city_grid") return false;
         const last = routePoints[routePoints.length - 1];
         if (!last || !cityGridSpec) return false;

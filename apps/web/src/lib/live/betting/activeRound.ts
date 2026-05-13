@@ -27,7 +27,7 @@ export type ActiveBettingRoundResponse =
       };
       selectionSnapshot: LiveRoundSelectionSnapshot;
       roundPlan: RoundPlanV2 | null;
-      /** Every MVP plan that currently passes gates (for chips / previews). */
+      /** Every plan that currently passes gates (for chips / previews). */
       eligibleRoundPlans: RoundPlanV2[];
       driverRouteReason: string | null;
       userBet: LiveBetRowPublic | null;
@@ -73,12 +73,6 @@ export async function getActiveBettingRoundPayload(
   }
   const inZone = Boolean(room.regionLabel) || inGridCell;
 
-  // next_turn: 200 m → 150 m window (gate enforced in canBuildNextTurnRound)
-  // next_zone: city_grid only — driver in zone AND within 150 m of cell center
-  // turns_before_zone_exit / zone_exit_time: fires immediately on zone entry
-  // time_vs_google ("time to next pin"): only when routing has a visible pin
-  // stop_count: broad fallback whenever speed data is present
-
   // Compute distance to current grid cell center (city_grid markets only).
   let distToZoneCenterM: number | null = null;
   if (last && mkt?.marketType === "city_grid" && mkt.cityGridSpec) {
@@ -96,8 +90,6 @@ export async function getActiveBettingRoundPayload(
     }
   }
 
-  // Offer pick-zone whenever we have a named region. With an open city_grid market,
-  // still allow anywhere in/near the cell (distance null or within ~600 m of cell center).
   const canNextZone =
     inZone &&
     (mkt?.marketType !== "city_grid" ||
@@ -106,43 +98,16 @@ export async function getActiveBettingRoundPayload(
 
   const snapshot: LiveRoundSelectionSnapshot = {
     distanceToTurnMeters: distanceToTurnM,
-    nextPinHasValidBranches: (firstPinBranches ?? 0) >= 2,
+    nextPinHasValidBranches: (firstPinBranches ?? 0) >= 2 || hasPins,
     nextPinId:
       instruction?.pins[0] != null ? String(instruction.pins[0]!.id) : null,
     isInOrNearZone: inZone,
     canBuildNextZoneRound: canNextZone,
     canBuildZoneExitRound: inZone && Boolean(mkt),
-    canBuildZoneDurationRound: inZone && Boolean(mkt),
-    // "time to next pin" — keep broad so market rotation can use it often.
-    canBuildTimeVsGoogleRound: hasPins || Boolean(room.destination),
-    // stop_count: make broadly available (demo mode).
-    canBuildStopCountRound: true,
-    // turn_count: also keep broad so all bet types appear in minutes.
-    canBuildTurnCountRound: hasPins || true,
-    canBuildTurnsBeforeZoneExitRound: inZone,
-    canBuildEtaDriftRound: Boolean(room.destination) || hasPins,
   };
 
-  const roundPlanRaw = BettingEngineV2.selectBestRound(snapshot, {
-    mvpOnly: true,
-  });
-  const eligibleRoundPlansRaw = BettingEngineV2.listEligibleRounds(snapshot, {
-    mvpOnly: true,
-  });
-  /**
-   * Today's product only ships 3 bet types: `next_turn`, `next_zone`, and
-   * `zone_exit_time`. The betting engine still computes eligibility for the
-   * full MVP list, so the viewer ribbon used to show pills for bets we no
-   * longer open (ETA vs Google, Stops this zone, …). Drop everything else
-   * before it leaves the server so no stale headline can render on the
-   * viewer.
-   */
-  const ACTIVE_TYPES = new Set(["next_turn", "next_zone", "zone_exit_time"]);
-  const eligibleRoundPlans = eligibleRoundPlansRaw.filter((p) =>
-    ACTIVE_TYPES.has(p.type),
-  );
-  const roundPlan =
-    roundPlanRaw && ACTIVE_TYPES.has(roundPlanRaw.type) ? roundPlanRaw : null;
+  const roundPlan = BettingEngineV2.selectBestRound(snapshot, { mvpOnly: true });
+  const eligibleRoundPlans = BettingEngineV2.listEligibleRounds(snapshot, { mvpOnly: true });
 
   let userBet: LiveBetRowPublic | null = null;
   if (userId && mkt) {

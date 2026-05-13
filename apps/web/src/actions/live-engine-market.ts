@@ -4,7 +4,6 @@ import { unstable_noStore } from "next/cache";
 import { createServiceClient } from "@/lib/supabase/server";
 import type { BetTypeV2 } from "@bettok/live";
 import {
-  ENGINE_BET_TYPES,
   provisionalOptionsForBetType,
 } from "@/lib/live/betting/engineMarketOptions";
 import { engineBetHeadline } from "@/lib/live/betting/betTypeV2Label";
@@ -55,11 +54,8 @@ export async function openEngineMarketForRoom(roomId: string) {
   const sessionId = (room as { live_session_id: string }).live_session_id;
   const capturedZone = (room as { region_label: string | null }).region_label ?? null;
 
-  const candidates = ENGINE_ROTATION_ORDER.filter((t) => ENGINE_BET_TYPES.has(t));
-  if (!candidates.length) return { error: "No engine candidate" };
-  // Single-type rotation today — `zone_exit_time` is the only enabled engine
-  // bet. Picking with modulo so adding more types later just works.
-  const betType: BetTypeV2 = candidates[0]!;
+  if (!ENGINE_ROTATION_ORDER.length) return { error: "No engine candidate" };
+  const betType: BetTypeV2 = ENGINE_ROTATION_ORDER[0]!;
 
   /**
    * Zone-bet gating: only open when the driver is sitting close to the
@@ -152,138 +148,51 @@ export async function openEngineMarketForRoom(roomId: string) {
 }
 
 /**
- * Checks whether an engine market's natural settlement condition has been met.
- *
- * Each bet type is tied to a real-world event:
- *   - zone_exit_time / turns_before_zone_exit → driver left the captured zone
- *   - turn_count_to_pin                       → a new turn (decision node) was created after lock
- *   - time_vs_google                          → a new turn market opened after lock (driver reached next pin)
- *   - stop_count                              → driver traveled ≥ 400 m from their lock position
- *
- * Falls back to settling after 4 minutes of being locked if none of the
- * natural conditions fire (e.g. GPS data gap).
+ * Checks whether a zone_exit_time market's settlement condition has been met.
+ * Settles when the driver has left the zone captured at market open.
  */
 export async function shouldSettleEngineMarket(
   service: Awaited<ReturnType<typeof createServiceClient>>,
   {
     marketId,
     marketType,
-    locksAt,
-    liveSessionId,
     roomId,
   }: {
     marketId: string;
     marketType: string;
-    locksAt: string;
-    liveSessionId: string | null;
+    locksAt?: string;
+    liveSessionId?: string | null;
     roomId: string;
   },
 ): Promise<boolean> {
-  /**
-   * Wait for the natural per-type event before settling — the tick now opens
-   * the next bet card the moment the previous one locks, so settlement no
-   * longer races the rotation. The 1-second fast-path that used to live here
-   * caused `zone_exit_time` to resolve before the driver had a chance to
-   * leave the zone (the exact bug the user flagged).
-   */
+  if (marketType !== "zone_exit_time") return false;
 
-  switch (marketType) {
-    case "zone_exit_time":
-    case "turns_before_zone_exit": {
-      // Settle when driver has left the zone they were in when the market opened.
-      const [marketRow, roomRow] = await Promise.all([
-        service
-          .from("live_betting_markets")
-          .select("subtitle")
-          .eq("id", marketId)
-          .maybeSingle(),
-        service
-          .from("live_rooms")
-          .select("region_label")
-          .eq("id", roomId)
-          .maybeSingle(),
-      ]);
-      let capturedZone: string | null = null;
-      try {
-        const meta = JSON.parse(
-          (marketRow.data as { subtitle: string | null } | null)?.subtitle ?? "{}",
-        ) as { capturedZone?: string | null };
-        capturedZone = meta.capturedZone ?? null;
-      } catch {
-        // ignore parse errors
-      }
-      const currentZone =
-        (roomRow.data as { region_label: string | null } | null)?.region_label ?? null;
-      // If we never had a zone, fall through to the 4-min fallback above.
-      if (!capturedZone) return false;
-      return currentZone !== capturedZone;
-    }
-
-    case "turn_count_to_pin": {
-      // Settle when a new route_decision_node was created after the market locked —
-      // meaning the driver reached and made a turn.
-      if (!liveSessionId) return false;
-      const { data: node } = await service
-        .from("route_decision_nodes")
-        .select("id")
-        .eq("live_session_id", liveSessionId)
-        .gt("created_at", locksAt)
-        .limit(1)
-        .maybeSingle();
-      return !!node;
-    }
-
-    case "time_vs_google": {
-      // Settle when a new system (non-engine) market opened after lock, indicating
-      // the driver navigated past the next pin / decision point.
-      const engineTypes = Array.from(ENGINE_BET_TYPES);
-      const { data: newMarket } = await service
-        .from("live_betting_markets")
-        .select("id")
-        .eq("room_id", roomId)
-        .neq("id", marketId)
-        .not("market_type", "in", `(${engineTypes.join(",")})`)
-        .gt("opens_at", locksAt)
-        .limit(1)
-        .maybeSingle();
-      return !!newMarket;
-    }
-
-    case "stop_count": {
-      // Settle when driver has traveled ≥ 400 m from their lock-time position,
-      // giving enough road time to count stops over a meaningful segment.
-      if (!liveSessionId) return false;
-      const { data: snapshots } = await service
-        .from("live_route_snapshots")
-        .select("normalized_lat,normalized_lng,raw_lat,raw_lng")
-        .eq("live_session_id", liveSessionId)
-        .gte("recorded_at", locksAt)
-        .order("recorded_at", { ascending: true })
-        .limit(60);
-      if (!snapshots || snapshots.length < 2) return false;
-      const first = snapshots[0] as {
-        normalized_lat: number | null;
-        normalized_lng: number | null;
-        raw_lat: number;
-        raw_lng: number;
-      };
-      const last = snapshots[snapshots.length - 1] as typeof first;
-      const dist = metersBetween(
-        {
-          lat: first.normalized_lat ?? first.raw_lat,
-          lng: first.normalized_lng ?? first.raw_lng,
-        },
-        {
-          lat: last.normalized_lat ?? last.raw_lat,
-          lng: last.normalized_lng ?? last.raw_lng,
-        },
-      );
-      return dist >= 400;
-    }
-
-    default:
-      return false;
+  // Settle when driver has left the zone they were in when the market opened.
+  const [marketRow, roomRow] = await Promise.all([
+    service
+      .from("live_betting_markets")
+      .select("subtitle")
+      .eq("id", marketId)
+      .maybeSingle(),
+    service
+      .from("live_rooms")
+      .select("region_label")
+      .eq("id", roomId)
+      .maybeSingle(),
+  ]);
+  let capturedZone: string | null = null;
+  try {
+    const meta = JSON.parse(
+      (marketRow.data as { subtitle: string | null } | null)?.subtitle ?? "{}",
+    ) as { capturedZone?: string | null };
+    capturedZone = meta.capturedZone ?? null;
+  } catch {
+    // ignore parse errors
   }
+  const currentZone =
+    (roomRow.data as { region_label: string | null } | null)?.region_label ?? null;
+  if (!capturedZone) return false;
+  return currentZone !== capturedZone;
 }
 
 /**

@@ -3,40 +3,26 @@ import type { BetTypeV2 } from "./types";
 export type { BetTypeV2 };
 
 /**
- * Minimal live snapshot for *pure* round selection (no I/O).
- * Populate from room state + route service + zones in adapters.
+ * Minimal live snapshot for pure round selection (no I/O).
+ * Only flags needed for the 3 active bet types.
  */
 export type LiveRoundSelectionSnapshot = {
   distanceToTurnMeters?: number | null;
   nextPinHasValidBranches?: boolean;
   nextPinId?: string | null;
-  /** Driver inside or near a known analytics/HR zone */
+  /** Driver inside or near a known zone */
   isInOrNearZone?: boolean;
-  /** Next-zone question is resolvable with 2–3 clear candidates */
+  /** next_zone: driver in zone with clear adjacent cells */
   canBuildNextZoneRound?: boolean;
+  /** zone_exit_time: driver is in zone */
   canBuildZoneExitRound?: boolean;
-  canBuildZoneDurationRound?: boolean;
-  /** Google (or primary routing) ETA to next pin available */
-  canBuildTimeVsGoogleRound?: boolean;
-  canBuildStopCountRound?: boolean;
-  canBuildTurnCountRound?: boolean;
-  canBuildTurnsBeforeZoneExitRound?: boolean;
-  canBuildEtaDriftRound?: boolean;
 };
 
-/**
- * Which bet types are allowed in current MVP (guide §22).
- */
+/** The only 3 active bet types. */
 export const MVP_BET_TYPES_V2: ReadonlySet<BetTypeV2> = new Set([
   "next_turn",
   "next_zone",
-  "turns_before_zone_exit",
-  "stop_count",
   "zone_exit_time",
-  "zone_duration",
-  "time_vs_google",
-  "turn_count_to_pin",
-  "eta_drift",
 ]);
 
 export function isMvpBetType(type: BetTypeV2): boolean {
