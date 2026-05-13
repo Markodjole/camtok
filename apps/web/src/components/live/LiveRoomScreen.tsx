@@ -467,8 +467,14 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
      * endpoint is idempotent (phase guards prevent double transitions) and
      * driving it from viewers means the bet cycle keeps rolling even when the
      * streamer's tab is backgrounded and its setInterval is throttled.
+     *
+     * Stop condition: if either endpoint returns 404 the room no longer
+     * exists (deleted or session ended). Clear the interval immediately so
+     * the client stops hammering a dead room with requests.
      */
+    const stopped = { current: false };
     const id = setInterval(async () => {
+      if (stopped.current) return;
       try {
         const [stateRes, tickRes] = await Promise.all([
           fetch(`/api/live/rooms/${initialRoom.roomId}/state`, {
@@ -482,6 +488,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             return null;
           }),
         ]);
+
         if (tickRes) {
           if (tickRes.ok) {
             const tickJson = (await tickRes.json().catch(() => null)) as Record<
@@ -491,19 +498,32 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             viewerLiveLog("tick_response", tickJson);
           } else {
             viewerLiveWarn("tick_http_error", { status: tickRes.status });
+            if (tickRes.status === 404) {
+              stopped.current = true;
+              clearInterval(id);
+              return;
+            }
           }
         }
+
         if (stateRes.ok) {
           const json = (await stateRes.json()) as { room: LiveFeedRow | null };
           if (json.room) setRoom(json.room);
         } else {
           viewerLiveWarn("state_http_error", { status: stateRes.status });
+          if (stateRes.status === 404) {
+            stopped.current = true;
+            clearInterval(id);
+          }
         }
       } catch (e) {
         viewerLiveWarn("viewer_poll_error", String(e));
       }
     }, 1500);
-    return () => clearInterval(id);
+    return () => {
+      stopped.current = true;
+      clearInterval(id);
+    };
   }, [initialRoom.roomId]);
 
   useEffect(() => {
