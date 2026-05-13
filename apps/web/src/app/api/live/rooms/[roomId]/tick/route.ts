@@ -185,6 +185,13 @@ export async function POST(
 
   if (phaseNow === "market_locked" && marketId) {
     const r = await revealAndSettleMarket(marketId);
+    // If settle failed (market not locked yet or already settled), unstick the room.
+    if ("error" in r) {
+      await service
+        .from("live_rooms")
+        .update({ phase: "waiting_for_next_market", current_market_id: null, last_event_at: new Date().toISOString() })
+        .eq("id", roomId);
+    }
     return NextResponse.json({ action: "legacy_locked_settle", ...r, settled: settleNotes });
   }
 
@@ -303,7 +310,11 @@ function freshPriority(t: FreshTrigger): number {
 }
 
 async function openQueuedTrigger(trigger: QueuedTrigger, roomId: string) {
-  if (trigger.type === "next_turn") return openNextTurnMarketForRoom(roomId);
+  if (trigger.type === "next_turn") {
+    // Pass the queued pin so the opener can skip the lower-bound distance
+    // check — the window was already validated when the trigger was queued.
+    return openNextTurnMarketForRoom(roomId, { queuedPinId: trigger.pinId });
+  }
   if (trigger.type === "next_zone") return openCityGridMarketForRoom(roomId);
   return openEngineMarketForRoom(roomId, { phase: trigger.phase });
 }

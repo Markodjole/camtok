@@ -18,7 +18,16 @@ import {
  *   next pin (nominally 120 m ± 30 m = 90–150 m). Fires once per pin
  *   (per-pin dupe guard).
  */
-export async function openNextTurnMarketForRoom(roomId: string) {
+/**
+ * @param opts.queuedPinId  When the trigger was pre-validated in the queue,
+ *   pass the pin OSM node id so we skip the 90 m lower-bound check — the
+ *   driver may have moved closer since the trigger was queued but hasn't
+ *   passed the intersection yet.
+ */
+export async function openNextTurnMarketForRoom(
+  roomId: string,
+  opts?: { queuedPinId?: number },
+) {
   unstable_noStore();
   const service = await createServiceClient();
 
@@ -59,7 +68,16 @@ export async function openNextTurnMarketForRoom(roomId: string) {
     return { error: "next_turn: no pin distance" };
   }
 
-  if (dist < NEXT_TURN_PIN_MIN_M || dist > NEXT_TURN_PIN_MAX_M) {
+  const isQueuedPin = opts?.queuedPinId != null && opts.queuedPinId === pin.id;
+  if (isQueuedPin) {
+    // Queued trigger: window was already validated. Only reject if the driver
+    // has fully passed the pin (dist ≤ 0) or moved past the upper bound.
+    if (dist <= 0 || dist > NEXT_TURN_PIN_MAX_M) {
+      return {
+        error: `next_turn: queued pin ${Math.round(dist)} m — driver already passed or too far`,
+      };
+    }
+  } else if (dist < NEXT_TURN_PIN_MIN_M || dist > NEXT_TURN_PIN_MAX_M) {
     return {
       error: `next_turn: pin ${Math.round(dist)} m (need ${NEXT_TURN_PIN_MIN_M}–${NEXT_TURN_PIN_MAX_M} m)`,
     };

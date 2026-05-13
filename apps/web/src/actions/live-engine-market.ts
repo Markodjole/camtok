@@ -75,6 +75,30 @@ export async function openEngineMarketForRoom(
     };
   }
 
+  // If the phase is already fired (race condition — a concurrent tick already opened it),
+  // look for an existing open market for this phase and recover by pointing the room to it.
+  if (firedPhases.has(candidatePhase)) {
+    const { data: existing } = await service
+      .from("live_betting_markets")
+      .select("id, status")
+      .eq("live_session_id", sessionId)
+      .eq("market_type", "zone_exit_time")
+      .eq("status", "open")
+      .order("opens_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (existing && (existing as { id: string; status: string }).status === "open") {
+      const existingId = (existing as { id: string }).id;
+      await service
+        .from("live_rooms")
+        .update({ phase: "market_open", current_market_id: existingId, last_event_at: new Date().toISOString() })
+        .eq("id", roomId)
+        .eq("phase", "waiting_for_next_market");
+      return { marketId: existingId, betType: "zone_exit_time" as const, triggerPhase: candidatePhase };
+    }
+    return { error: `zone_exit_time: phase "${candidatePhase}" already fired for this cell` };
+  }
+
   // Verify the requested phase's gate condition is still met.
   const gateErr = checkPhaseGate(candidatePhase, distanceM, firedPhases);
   if (gateErr) return { error: gateErr };
