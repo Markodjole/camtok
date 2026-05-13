@@ -8,6 +8,7 @@ import {
   gridCellCenter,
   parseGridOptionId,
 } from "@/lib/live/grid/cityGrid500";
+import { getOrBuildGridSpecForRoom } from "@/lib/live/grid/gridSpecForRoom";
 
 export type LiveBetRowPublic = {
   id: string;
@@ -66,35 +67,29 @@ export async function getActiveBettingRoundPayload(
   const firstPinBranches = planning?.meaningfulBranchesPerPin[0];
   const hasPins = (instruction?.pins?.length ?? 0) > 0;
 
+  // Build (or reuse) the grid spec so zone detection works from the very first
+  // tick — previously this only checked inGridCell when a city_grid market was
+  // already open, meaning the first zone bet could never fire.
+  const svc = await createServiceClient();
+  const gridSpecRes = await getOrBuildGridSpecForRoom(svc, roomId, room.liveSessionId);
   let inGridCell = false;
-  if (last && mkt?.marketType === "city_grid" && mkt.cityGridSpec) {
-    const spec = mkt.cityGridSpec;
-    inGridCell = Boolean(cellIdForPosition(spec, last.lat, last.lng));
-  }
-  const inZone = Boolean(room.regionLabel) || inGridCell;
-
-  // Compute distance to current grid cell center (city_grid markets only).
   let distToZoneCenterM: number | null = null;
-  if (last && mkt?.marketType === "city_grid" && mkt.cityGridSpec) {
-    const spec = mkt.cityGridSpec;
+  if (last && gridSpecRes.ok) {
+    const spec = gridSpecRes.spec;
     const cellId = cellIdForPosition(spec, last.lat, last.lng);
     if (cellId) {
+      inGridCell = true;
       const p = parseGridOptionId(cellId);
       if (p) {
         const center = gridCellCenter(spec, p.row, p.col);
-        distToZoneCenterM = metersBetween(
-          { lat: last.lat, lng: last.lng },
-          center,
-        );
+        distToZoneCenterM = metersBetween({ lat: last.lat, lng: last.lng }, center);
       }
     }
   }
 
-  const canNextZone =
-    inZone &&
-    (mkt?.marketType !== "city_grid" ||
-      distToZoneCenterM == null ||
-      distToZoneCenterM < 600);
+  const inZone = Boolean(room.regionLabel) || inGridCell;
+
+  const canNextZone = inZone && (distToZoneCenterM == null || distToZoneCenterM < 600);
 
   const snapshot: LiveRoundSelectionSnapshot = {
     distanceToTurnMeters: distanceToTurnM,
@@ -103,7 +98,8 @@ export async function getActiveBettingRoundPayload(
       instruction?.pins[0] != null ? String(instruction.pins[0]!.id) : null,
     isInOrNearZone: inZone,
     canBuildNextZoneRound: canNextZone,
-    canBuildZoneExitRound: inZone && Boolean(mkt),
+    // zone_exit_time fires whenever driver is in a zone — no open market required.
+    canBuildZoneExitRound: inZone,
   };
 
   const roundPlan = BettingEngineV2.selectBestRound(snapshot, { mvpOnly: true });
@@ -111,7 +107,6 @@ export async function getActiveBettingRoundPayload(
 
   let userBet: LiveBetRowPublic | null = null;
   if (userId && mkt) {
-    const svc = await createServiceClient();
     const { data } = await svc
       .from("live_bets")
       .select(
