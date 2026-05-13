@@ -9,6 +9,7 @@ import {
   NEXT_TURN_PIN_MAX_M,
   NEXT_TURN_PIN_MIN_M,
 } from "@/lib/live/betting/betWindowConstants";
+import { computeEqualOdds } from "@/lib/live/betting/marketOdds";
 
 /**
  * `next_turn`: Left / Straight / Right bet at the next blue pin.
@@ -118,6 +119,9 @@ export async function openNextTurnMarketForRoom(
     { id: "right", label: "Right", shortLabel: "Right", displayOrder: 2 },
   ];
 
+  // Equal odds for the 3-way directional bet (5 % margin → 2.86 each).
+  const odds = computeEqualOdds(options);
+
   const now = new Date();
   const locksAt = new Date(now.getTime() + BET_OPEN_WINDOW_MS);
   const revealAt = new Date(now.getTime() + 60_000);
@@ -133,6 +137,7 @@ export async function openNextTurnMarketForRoom(
       subtitle: JSON.stringify({ pinKey, pinId: pin.id, openDistanceM: dist }),
       market_type: "next_turn",
       option_set: options,
+      odds: odds as unknown as Record<string, unknown>,
       opens_at: now.toISOString(),
       locks_at: locksAt.toISOString(),
       reveal_at: revealAt.toISOString(),

@@ -5,6 +5,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import type { CityGridSpecCompact } from "@/lib/live/grid/cityGrid500";
 import type { DrivingRouteStyle } from "@/lib/live/routing/drivingRouteStyle";
 import { normalizeDrivingRouteStyle } from "@/lib/live/routing/drivingRouteStyle";
+import type { MarketOdds } from "@/lib/live/betting/marketOdds";
 
 export type RoutePoint = {
   lat: number;
@@ -46,6 +47,11 @@ export type LiveFeedRow = {
     turnPointLng: number | null;
     /** Present when `marketType === "city_grid"` — compact grid spec (no per-cell list on the wire). */
     cityGridSpec: CityGridSpecCompact | null;
+    /**
+     * Decimal odds computed at market-open time (equal probability with 5 % margin).
+     * Shape: { format: "decimal", margin: 0.05, lines: { optionId: 2.86 } }
+     */
+    odds: MarketOdds | null;
   } | null;
   sessionStartedAt: string;
   lastHeartbeatAt: string | null;
@@ -125,6 +131,7 @@ function liveFeedRowFromActiveRoomRow(r: Record<string, unknown>): LiveFeedRow {
             (r.current_market_type as string) === "zone_exit_time"
               ? ((r.current_market_city_grid_spec as CityGridSpecCompact | null) ?? null)
               : null,
+          odds: (r.current_market_odds as MarketOdds | null) ?? null,
         }
       : null,
     sessionStartedAt: r.session_started_at as string,

@@ -15,6 +15,7 @@ import {
   NEXT_ZONE_TRIGGER_M,
 } from "@/lib/live/betting/betWindowConstants";
 import { metersBetween } from "@/lib/live/routing/geometry";
+import { computeEqualOdds } from "@/lib/live/betting/marketOdds";
 
 /**
  * `next_zone`: viewer taps a 500 m grid cell on the map to bet which square
@@ -135,6 +136,9 @@ export async function openCityGridMarketForRoom(roomId: string) {
     cityLabel: spec.cityLabel ?? null,
   });
 
+  // Equal-probability odds across all grid cells (5 % margin).
+  const odds = computeEqualOdds(options);
+
   const now = new Date();
   const locksAt = new Date(now.getTime() + BET_OPEN_WINDOW_MS);
   const revealAt = new Date(now.getTime() + 10 * 60_000);
@@ -151,6 +155,7 @@ export async function openCityGridMarketForRoom(roomId: string) {
       market_type: "city_grid",
       option_set: options,
       city_grid_spec: spec as unknown as Record<string, unknown>,
+      odds: odds as unknown as Record<string, unknown>,
       opens_at: now.toISOString(),
       locks_at: locksAt.toISOString(),
       reveal_at: revealAt.toISOString(),

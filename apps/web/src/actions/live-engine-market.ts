@@ -5,6 +5,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import type { BetTypeV2 } from "@bettok/live";
 import { provisionalOptionsForBetType } from "@/lib/live/betting/engineMarketOptions";
 import { metersBetween } from "@/lib/live/routing/geometry";
+import { computeEqualOdds } from "@/lib/live/betting/marketOdds";
 import {
   BET_OPEN_WINDOW_MS,
   ZONE_EXIT_CENTER_TRIGGER_M,
@@ -107,6 +108,9 @@ export async function openEngineMarketForRoom(
   const options = provisionalOptionsForBetType(betType);
   if (!options.length) return { error: "No options for zone_exit_time" };
 
+  // Equal odds for the 3-way time-bucket bet (5 % margin → 2.86 each).
+  const odds = computeEqualOdds(options);
+
   const title =
     candidatePhase === "entry"
       ? "How long until driver leaves this zone?"
@@ -129,6 +133,7 @@ export async function openEngineMarketForRoom(
       market_type: betType,
       option_set: options,
       city_grid_spec: spec as unknown as Record<string, unknown>,
+      odds: odds as unknown as Record<string, unknown>,
       opens_at: now.toISOString(),
       locks_at: locksAt.toISOString(),
       reveal_at: revealAt.toISOString(),

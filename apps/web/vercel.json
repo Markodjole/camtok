@@ -2,5 +2,12 @@
   "framework": "nextjs",
   "installCommand": "(cd ../.. && pnpm install)",
   "buildCommand": "cd ../.. && node apps/web/scripts/copy-ffmpeg.mjs && pnpm exec turbo build --filter=@bettok/web",
-  "outputDirectory": ".next"
+  "outputDirectory": ".next",
+  "crons": [
+    {
+      "path": "/api/cron/live-tick",
+      "schedule": "* * * * *"
+    }
+  ]
 }
+

@@ -465,46 +465,20 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
   useEffect(() => {
     /**
-     * Every viewer also POSTs /tick alongside the state pull. The tick
-     * endpoint is idempotent (phase guards prevent double transitions) and
-     * driving it from viewers means the bet cycle keeps rolling even when the
-     * streamer's tab is backgrounded and its setInterval is throttled.
+     * Clients only poll /state (read-only).  All room mutations now happen
+     * in the server-side cron at /api/cron/live-tick which runs at ~1 Hz
+     * and owns the CAS lock — no viewer can race another.
      *
-     * Stop condition: if either endpoint returns 404 the room no longer
-     * exists (deleted or session ended). Clear the interval immediately so
-     * the client stops hammering a dead room with requests.
+     * Stop condition: /state returning 404 means the room is gone.
      */
     const stopped = { current: false };
     const id = setInterval(async () => {
       if (stopped.current) return;
       try {
-        const [stateRes, tickRes] = await Promise.all([
-          fetch(`/api/live/rooms/${initialRoom.roomId}/state`, {
-            cache: "no-store",
-          }),
-          fetch(`/api/live/rooms/${initialRoom.roomId}/tick`, {
-            method: "POST",
-            cache: "no-store",
-          }).catch((err) => {
-            viewerLiveWarn("tick_fetch_failed", String(err));
-            return null;
-          }),
-        ]);
-
-        if (tickRes) {
-          if (tickRes.ok) {
-            const tickJson = (await tickRes.json().catch(() => null)) as Record<
-              string,
-              unknown
-            > | null;
-            viewerLiveLog("tick_response", tickJson);
-          } else {
-            viewerLiveWarn("tick_http_error", { status: tickRes.status });
-            // Do NOT stop polling on tick errors — the tick may fail transiently
-            // (e.g. schema-cache lag, cold start). Only the state endpoint 404
-            // is authoritative proof that the room is gone.
-          }
-        }
+        const stateRes = await fetch(
+          `/api/live/rooms/${initialRoom.roomId}/state`,
+          { cache: "no-store" },
+        );
 
         if (stateRes.ok) {
           const json = (await stateRes.json()) as { room: LiveFeedRow | null };
