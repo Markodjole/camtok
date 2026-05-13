@@ -273,15 +273,34 @@ function ensureAnchors(
  * Rebuild ordered queue from previous pin ids, keeping positions stable until
  * the vehicle passes each pin (road-ahead distance or straight-line fallback).
  */
+/**
+ * Returns true when `anchor` is in the rearward hemisphere of the vehicle.
+ * We use a dot-product between the forward heading vector and the
+ * vehicle→anchor vector; negative means behind.
+ */
+function isAnchorBehindVehicle(
+  vehicle: LatLng,
+  anchor: PinAnchor,
+  headingDeg: number,
+): boolean {
+  const rad = (headingDeg * Math.PI) / 180;
+  const fwdX = Math.sin(rad); // east component
+  const fwdY = Math.cos(rad); // north component
+  const dx = anchor.lng - vehicle.lng;
+  const dy = anchor.lat - vehicle.lat;
+  return fwdX * dx + fwdY * dy < 0;
+}
+
 function resolveCommittedQueue(params: {
   polyline: LatLng[];
   vehicle: LatLng;
+  heading: number | null;
   prevPinIds: number[];
   anchors: Record<number, PinAnchor>;
   candidates: RoutePinCandidate[];
   spacing: { minSpacingM: number; maxSpacingM: number };
 }): { queue: RoutePinCandidate[]; anchors: Record<number, PinAnchor> } {
-  const { polyline, vehicle, prevPinIds, anchors, candidates, spacing } = params;
+  const { polyline, vehicle, heading, prevPinIds, anchors, candidates, spacing } = params;
   const candById = new Map(candidates.map((c) => [c.id, c] as const));
   const vProj = projectOntoPolyline(polyline, vehicle);
   const vehCum = vProj
@@ -295,6 +314,13 @@ function resolveCommittedQueue(params: {
       anchors[id] ??
       (fromCand ? { lat: fromCand.lat, lng: fromCand.lng } : null);
     if (!anchor) continue;
+
+    // Drop any pin that is physically behind the vehicle — this catches the
+    // case where the driver turned away from the pin's road and the anchor
+    // is now in the rearward half of the driver's view.
+    if (heading != null && isAnchorBehindVehicle(vehicle, anchor, heading)) {
+      continue;
+    }
 
     let pinCum: number;
     let meta: Pick<
@@ -338,8 +364,8 @@ function resolveCommittedQueue(params: {
 
   const queue =
     surviving.length === 0
-      ? buildFreshQueue(candidates, spacing)
-      : topUpQueue(surviving, candidates, spacing);
+      ? buildFreshQueue(candidates, vehCum, spacing)
+      : topUpQueue(surviving, candidates, vehCum, spacing);
 
   const nextAnchors = ensureAnchors(queue, anchors);
   return { queue, anchors: nextAnchors };
@@ -347,17 +373,19 @@ function resolveCommittedQueue(params: {
 
 /**
  * From the ordered candidate list, pick a fresh queue of up to N pins where
- * each pin sits 200–400 m of road distance past the previous (or past the
- * vehicle for the first pin).
+ * each pin sits minSpacingM–maxSpacingM of road distance past the previous,
+ * or past the VEHICLE's current polyline position for the first pin.
+ * Using vehCum (not 0) ensures no pin behind the vehicle is ever selected.
  */
 function buildFreshQueue(
   candidates: RoutePinCandidate[],
+  vehCum: number,
   spacing: { minSpacingM: number; maxSpacingM: number },
 ): RoutePinCandidate[] {
   const queue: RoutePinCandidate[] = [];
   let cursor = 0;
   while (queue.length < TARGET_PIN_COUNT) {
-    const baseM = queue.length === 0 ? 0 : queue[queue.length - 1]!.cumulativeM;
+    const baseM = queue.length === 0 ? vehCum : queue[queue.length - 1]!.cumulativeM;
     const next = candidates.find(
       (c) =>
         c.cumulativeM - baseM >= spacing.minSpacingM &&
@@ -374,16 +402,18 @@ function buildFreshQueue(
 
 /**
  * Top-up logic: given the surviving previous pins, append new pins from the
- * candidate list keeping the 200–400 m road-distance spacing rule.
+ * candidate list keeping the spacing rule. vehCum is the fallback base so
+ * top-up on an empty surviving list also starts from the vehicle.
  */
 function topUpQueue(
   surviving: RoutePinCandidate[],
   candidates: RoutePinCandidate[],
+  vehCum: number,
   spacing: { minSpacingM: number; maxSpacingM: number },
 ): RoutePinCandidate[] {
   const queue = surviving.slice();
   while (queue.length < TARGET_PIN_COUNT) {
-    const baseM = queue.length === 0 ? 0 : queue[queue.length - 1]!.cumulativeM;
+    const baseM = queue.length === 0 ? vehCum : queue[queue.length - 1]!.cumulativeM;
     const next = candidates.find(
       (c) =>
         c.cumulativeM - baseM >= spacing.minSpacingM &&
@@ -536,6 +566,7 @@ export async function computeDriverRouteInstruction(
   const { queue, anchors } = resolveCommittedQueue({
     polyline,
     vehicle: position,
+    heading,
     prevPinIds: prev?.pinIds ?? [],
     anchors: prev?.anchors ?? {},
     candidates,
