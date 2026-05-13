@@ -12,7 +12,7 @@
  * client + server (`liveBetRelaxServer` / `liveBetRelaxClient`) so every bet
  * stays placeable while product rules are iterated.
  */
-export const LIVE_BET_UNLOCK_ALL_TEMP = true;
+export const LIVE_BET_UNLOCK_ALL_TEMP = false;
 
 export function liveBetRelaxServer(): boolean {
   if (LIVE_BET_UNLOCK_ALL_TEMP) return true;

@@ -3,14 +3,12 @@
 import { unstable_noStore } from "next/cache";
 import { createServiceClient } from "@/lib/supabase/server";
 import type { BetTypeV2 } from "@bettok/live";
-import {
-  provisionalOptionsForBetType,
-} from "@/lib/live/betting/engineMarketOptions";
-import { engineBetHeadline } from "@/lib/live/betting/betTypeV2Label";
+import { provisionalOptionsForBetType } from "@/lib/live/betting/engineMarketOptions";
 import { metersBetween } from "@/lib/live/routing/geometry";
 import {
   BET_OPEN_WINDOW_MS,
-  ZONE_BET_CENTER_RADIUS_M,
+  ZONE_EXIT_CENTER_TRIGGER_M,
+  ZONE_EXIT_OUTER_TRIGGER_MIN_M,
 } from "@/lib/live/betting/betWindowConstants";
 import {
   cellIdForPosition,
@@ -19,23 +17,25 @@ import {
   type CityGridSpecCompact,
 } from "@/lib/live/grid/cityGrid500";
 import { getOrBuildGridSpecForRoom } from "@/lib/live/grid/gridSpecForRoom";
-import { liveBetRelaxServer } from "@/lib/live/liveBetRelax";
+
+export type ZoneExitPhase = "entry" | "center_70m" | "exit_outer";
 
 /**
- * Active engine rotation. Other engine types still live in
- * `engineMarketOptions.ts` for future enablement, but only `zone_exit_time`
- * is offered today — the other six need real outcome wiring and are off until
- * that ships.
+ * `zone_exit_time`: fires up to 3× per zone, in phase order:
+ *
+ *  "entry"      – immediately when driver is inside the cell (any distance)
+ *  "center_70m" – when driver is within ZONE_EXIT_CENTER_TRIGGER_M (70 m) of center
+ *  "exit_outer" – when driver moves back past ZONE_EXIT_OUTER_TRIGGER_MIN_M (100 m)
+ *                 AFTER "center_70m" has already fired (was close, now moving out)
+ *
+ * Each phase fires at most once per cell per live session. The tick worker
+ * may pass `phase` directly (from the trigger queue) or omit it to let
+ * this function detect which phase is currently eligible.
  */
-const ENGINE_ROTATION_ORDER: BetTypeV2[] = ["zone_exit_time"];
-
-/**
- * Opens a provisional engine-bet market for the given room.
- * Picks the best eligible engine round plan from the betting engine,
- * creates a `live_betting_markets` row with provisional options, and
- * advances the room to `market_open`.
- */
-export async function openEngineMarketForRoom(roomId: string) {
+export async function openEngineMarketForRoom(
+  roomId: string,
+  opts?: { phase?: ZoneExitPhase },
+) {
   unstable_noStore();
 
   const service = await createServiceClient();
@@ -46,56 +46,46 @@ export async function openEngineMarketForRoom(roomId: string) {
     .eq("id", roomId)
     .maybeSingle();
   if (!room) return { error: "Room not found" };
-  const phaseStr = (room as { phase: string }).phase;
-  if (phaseStr !== "waiting_for_next_market") {
+  if ((room as { phase: string }).phase !== "waiting_for_next_market") {
     return { error: "Room not in waiting phase" };
   }
 
   const sessionId = (room as { live_session_id: string }).live_session_id;
   const capturedZone = (room as { region_label: string | null }).region_label ?? null;
 
-  if (!ENGINE_ROTATION_ORDER.length) return { error: "No engine candidate" };
-  const betType: BetTypeV2 = ENGINE_ROTATION_ORDER[0]!;
+  const ctx = await loadGridCenterContext(service, sessionId, roomId);
+  if (!ctx.ok) return { error: ctx.error };
+  const { distanceM, cellKey, spec } = ctx;
 
-  /**
-   * Zone-bet gating: only open when the driver is sitting close to the
-   * center of their current grid cell (≤ ZONE_BET_CENTER_RADIUS_M = 100 m).
-   * The radius check is bypassed in relax / dev mode so the rotation
-   * always has a card to show; we still require the grid spec + GPS.
-   */
-  const relax = liveBetRelaxServer();
-  let engineGridSpec: CityGridSpecCompact | null = null;
-  if (betType === "zone_exit_time") {
-    const ctx = await loadGridCenterContext(service, sessionId, roomId);
-    if (!ctx.ok) return { error: ctx.error };
-    if (!relax && ctx.distanceM > ZONE_BET_CENTER_RADIUS_M) {
-      return {
-        error: `zone_exit_time: ${Math.round(ctx.distanceM)} m from cell center > ${ZONE_BET_CENTER_RADIUS_M} m`,
-      };
-    }
-    engineGridSpec = ctx.spec;
+  // Which phases have already fired for this cell in this session?
+  const firedPhases = await loadFiredPhases(service, sessionId, cellKey);
+
+  // Determine which phase to open — either the requested one or the next eligible.
+  const candidatePhase = opts?.phase ?? pickEligiblePhase(distanceM, firedPhases);
+  if (!candidatePhase) {
+    return {
+      error: `zone_exit_time: no eligible phase (dist=${Math.round(distanceM)} m, fired=${[...firedPhases].join(",")})`,
+    };
   }
 
-  const options = provisionalOptionsForBetType(
-    betType as Parameters<typeof provisionalOptionsForBetType>[0],
-  );
-  if (!options.length) return { error: "No provisional options for this bet type" };
+  // Verify the requested phase's gate condition is still met.
+  const gateErr = checkPhaseGate(candidatePhase, distanceM, firedPhases);
+  if (gateErr) return { error: gateErr };
 
-  const title = engineBetHeadline(betType as Parameters<typeof engineBetHeadline>[0]);
-  /**
-   * Fixed 7-second open window. The tick force-locks the market when this
-   * timestamp passes (or earlier if the viewer commits a bet). Settlement
-   * is decoupled — `shouldSettleEngineMarket` watches the natural event
-   * (e.g. driver leaves the captured zone for `zone_exit_time`) and the
-   * grid market's parallel cell-cross detector handles `next_zone`.
-   */
+  const betType: BetTypeV2 = "zone_exit_time";
+  const options = provisionalOptionsForBetType(betType);
+  if (!options.length) return { error: "No options for zone_exit_time" };
+
+  const title =
+    candidatePhase === "entry"
+      ? "How long until driver leaves this zone?"
+      : candidatePhase === "center_70m"
+        ? "Driver near zone centre — how soon do they exit?"
+        : "Driver heading out — will they leave the zone soon?";
+
   const now = new Date();
-  const locksAtMs = now.getTime() + BET_OPEN_WINDOW_MS;
-  const locksAt = new Date(locksAtMs);
-  // `reveal_at` is just the lifecycle safety timeout for settlement — keep
-  // it generous (5 minutes) so the bet doesn't refund itself before the
-  // driver actually leaves the zone.
-  const revealAt = new Date(locksAtMs + 5 * 60_000);
+  const locksAt = new Date(now.getTime() + BET_OPEN_WINDOW_MS);
+  const revealAt = new Date(now.getTime() + 5 * 60_000);
 
   const { data: market, error: marketError } = await service
     .from("live_betting_markets")
@@ -104,16 +94,10 @@ export async function openEngineMarketForRoom(roomId: string) {
       live_session_id: sessionId,
       source: "system_generated",
       title,
-      subtitle: JSON.stringify({ capturedZone }),
+      subtitle: JSON.stringify({ capturedZone, cellKey, triggerPhase: candidatePhase }),
       market_type: betType,
       option_set: options,
-      /**
-       * Persist the resolved grid spec on this row so subsequent zone bets
-       * (either type) reuse it without round-tripping Google again.
-       */
-      city_grid_spec: engineGridSpec
-        ? (engineGridSpec as unknown as Record<string, unknown>)
-        : null,
+      city_grid_spec: spec as unknown as Record<string, unknown>,
       opens_at: now.toISOString(),
       locks_at: locksAt.toISOString(),
       reveal_at: revealAt.toISOString(),
@@ -141,11 +125,85 @@ export async function openEngineMarketForRoom(roomId: string) {
     room_id: roomId,
     market_id: market.id,
     event_type: "market_open",
-    payload: { title, optionCount: options.length, betType },
+    payload: { title, optionCount: options.length, betType, triggerPhase: candidatePhase, cellKey },
   });
 
-  return { marketId: market.id as string, betType };
+  return { marketId: market.id as string, betType, triggerPhase: candidatePhase };
 }
+
+// ─── Phase helpers ────────────────────────────────────────────────────────────
+
+function pickEligiblePhase(
+  distM: number,
+  firedPhases: Set<ZoneExitPhase>,
+): ZoneExitPhase | null {
+  // Entry: fires as soon as driver is in zone (distM exists = they're in cell)
+  if (!firedPhases.has("entry")) return "entry";
+  // Center: fires when within 70 m of center
+  if (!firedPhases.has("center_70m") && distM <= ZONE_EXIT_CENTER_TRIGGER_M) {
+    return "center_70m";
+  }
+  // Exit_outer: fires when driver moves back outward past 100 m, after being at center
+  if (
+    !firedPhases.has("exit_outer") &&
+    firedPhases.has("center_70m") &&
+    distM >= ZONE_EXIT_OUTER_TRIGGER_MIN_M
+  ) {
+    return "exit_outer";
+  }
+  return null;
+}
+
+function checkPhaseGate(
+  phase: ZoneExitPhase,
+  distM: number,
+  firedPhases: Set<ZoneExitPhase>,
+): string | null {
+  if (firedPhases.has(phase)) {
+    return `zone_exit_time: phase "${phase}" already fired for this cell`;
+  }
+  if (phase === "center_70m" && distM > ZONE_EXIT_CENTER_TRIGGER_M) {
+    return `zone_exit_time(center_70m): ${Math.round(distM)} m > ${ZONE_EXIT_CENTER_TRIGGER_M} m`;
+  }
+  if (phase === "exit_outer") {
+    if (!firedPhases.has("center_70m")) {
+      return `zone_exit_time(exit_outer): center_70m phase not yet fired`;
+    }
+    if (distM < ZONE_EXIT_OUTER_TRIGGER_MIN_M) {
+      return `zone_exit_time(exit_outer): ${Math.round(distM)} m < ${ZONE_EXIT_OUTER_TRIGGER_MIN_M} m`;
+    }
+  }
+  return null;
+}
+
+/** Query which zone_exit_time phases have already fired for this cell in this session. */
+async function loadFiredPhases(
+  service: Awaited<ReturnType<typeof createServiceClient>>,
+  liveSessionId: string,
+  cellKey: string,
+): Promise<Set<ZoneExitPhase>> {
+  const { data } = await service
+    .from("live_betting_markets")
+    .select("subtitle")
+    .eq("live_session_id", liveSessionId)
+    .eq("market_type", "zone_exit_time");
+  const fired = new Set<ZoneExitPhase>();
+  for (const row of data ?? []) {
+    try {
+      const meta = JSON.parse(
+        (row as { subtitle: string | null }).subtitle ?? "{}",
+      ) as { cellKey?: string; triggerPhase?: string };
+      if (meta.cellKey === cellKey && meta.triggerPhase) {
+        fired.add(meta.triggerPhase as ZoneExitPhase);
+      }
+    } catch {
+      // ignore parse errors
+    }
+  }
+  return fired;
+}
+
+// ─── Settlement ───────────────────────────────────────────────────────────────
 
 /**
  * Checks whether a zone_exit_time market's settlement condition has been met.
@@ -167,7 +225,6 @@ export async function shouldSettleEngineMarket(
 ): Promise<boolean> {
   if (marketType !== "zone_exit_time") return false;
 
-  // Settle when driver has left the zone they were in when the market opened.
   const [marketRow, roomRow] = await Promise.all([
     service
       .from("live_betting_markets")
@@ -195,18 +252,14 @@ export async function shouldSettleEngineMarket(
   return currentZone !== capturedZone;
 }
 
-/**
- * Resolve the driver's distance from the center of their current grid cell.
- * Returns `{ ok: false, error }` whenever any prerequisite is missing
- * (no GPS, no recent `city_grid` market to source `cityGridSpec` from,
- * driver outside the grid bounds) so callers can skip cleanly.
- */
+// ─── Grid center helper ───────────────────────────────────────────────────────
+
 async function loadGridCenterContext(
   service: Awaited<ReturnType<typeof createServiceClient>>,
   liveSessionId: string,
   roomId: string,
 ): Promise<
-  | { ok: true; distanceM: number; cellId: string; spec: CityGridSpecCompact }
+  | { ok: true; distanceM: number; cellId: string; cellKey: string; spec: CityGridSpecCompact }
   | { ok: false; error: string }
 > {
   const { data: latestGps } = await service
@@ -227,13 +280,6 @@ async function loadGridCenterContext(
   const lat = g.normalized_lat ?? g.raw_lat;
   const lng = g.normalized_lng ?? g.raw_lng;
 
-  /**
-   * Resolve the grid spec via the shared helper — reuses the spec from the
-   * most recent `city_grid` market or builds one on the fly from Google.
-   * Without this fallback `zone_exit_time` could not open before the very
-   * first `next_zone` had opened (chicken-and-egg) and the user reported
-   * the bet never showing.
-   */
   const specRes = await getOrBuildGridSpecForRoom(service, roomId, liveSessionId);
   if (!specRes.ok) return { ok: false, error: specRes.error };
   const spec = specRes.spec;
@@ -246,5 +292,6 @@ async function loadGridCenterContext(
 
   const center = gridCellCenter(spec, parsed.row, parsed.col);
   const distanceM = metersBetween({ lat, lng }, center);
-  return { ok: true, distanceM, cellId, spec };
+  const cellKey = `cell:r${parsed.row}:c${parsed.col}`;
+  return { ok: true, distanceM, cellId, cellKey, spec };
 }

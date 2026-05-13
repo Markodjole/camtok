@@ -12,25 +12,18 @@ import { getOrBuildGridSpecForRoom } from "@/lib/live/grid/gridSpecForRoom";
 import { Safety, type LiveMarketOption, type TransportMode } from "@bettok/live";
 import {
   BET_OPEN_WINDOW_MS,
-  ZONE_BET_CENTER_RADIUS_M,
+  NEXT_ZONE_TRIGGER_M,
 } from "@/lib/live/betting/betWindowConstants";
 import { metersBetween } from "@/lib/live/routing/geometry";
-import { liveBetRelaxServer } from "@/lib/live/liveBetRelax";
 
 /**
- * `next_zone`: viewer taps a 500 m grid cell on the map to bet that the
- * driver will enter it next. The sheet renders headline + countdown only;
- * the map drives option selection.
+ * `next_zone`: viewer taps a 500 m grid cell on the map to bet which square
+ * the driver enters next.
  *
- * Gates:
- *   - Driver must be within `ZONE_BET_CENTER_RADIUS_M` (100 m) of the
- *     current cell center.
- *   - Do not reopen if a `next_zone` market was already created while the
- *     driver was in this same cell.
- *
- * Settlement (in `live-settlement.ts`):
- *   - The first cell the driver enters that is **not** the start cell wins.
- *   - Sitting in the start cell when `reveal_at` finally fires → refund.
+ * Trigger rule (the only gate):
+ *   Driver must be within NEXT_ZONE_TRIGGER_M (100 m) of the current cell
+ *   center. This fires at most once per zone cell visit (dupe guard checks
+ *   the last 30 markets for this room).
  */
 export async function openCityGridMarketForRoom(roomId: string) {
   unstable_noStore();
@@ -53,8 +46,7 @@ export async function openCityGridMarketForRoom(roomId: string) {
     .eq("id", sessionId)
     .maybeSingle();
   if (!sessionRow) return { error: "Session not found" };
-  const transportMode = (sessionRow as { transport_mode: TransportMode })
-    .transport_mode;
+  const transportMode = (sessionRow as { transport_mode: TransportMode }).transport_mode;
   const characterId = (sessionRow as { character_id: string }).character_id;
 
   const policy = Safety.policyFor(transportMode);
@@ -67,8 +59,7 @@ export async function openCityGridMarketForRoom(roomId: string) {
     .select("name")
     .eq("id", characterId)
     .maybeSingle();
-  const characterName =
-    (characterRow as { name: string } | null)?.name ?? "character";
+  const characterName = (characterRow as { name: string } | null)?.name ?? "character";
 
   const { data: latestGps } = await service
     .from("live_route_snapshots")
@@ -92,62 +83,42 @@ export async function openCityGridMarketForRoom(roomId: string) {
   const spec = specRes.spec;
 
   const currentCellId = cellIdForPosition(spec, lat, lng);
-  if (!currentCellId) {
-    return { error: "Zone gate: driver outside grid bounds" };
-  }
+  if (!currentCellId) return { error: "next_zone: driver outside grid bounds" };
   const parsed = parseGridOptionId(currentCellId);
-  if (!parsed) return { error: "Zone gate: bad cell id" };
+  if (!parsed) return { error: "next_zone: bad cell id" };
 
-  /**
-   * Spatial gate: only open while the driver is within
-   * `ZONE_BET_CENTER_RADIUS_M` of the current cell center. Bypassed in dev
-   * (`LIVE_BET_UNLOCK_ALL_TEMP`) so a market always opens — the user was
-   * never seeing any popup because real-world driving is rarely inside
-   * such a tight inner circle.
-   */
-  const relax = liveBetRelaxServer();
   const center = gridCellCenter(spec, parsed.row, parsed.col);
   const dist = metersBetween({ lat, lng }, center);
-  if (!relax && dist > ZONE_BET_CENTER_RADIUS_M) {
+  if (dist > NEXT_ZONE_TRIGGER_M) {
     return {
-      error: `next_zone: ${Math.round(dist)} m from cell center > ${ZONE_BET_CENTER_RADIUS_M} m`,
+      error: `next_zone: ${Math.round(dist)} m from cell center > ${NEXT_ZONE_TRIGGER_M} m`,
     };
   }
 
-  /**
-   * Dupe guard: skip if a `next_zone` market for THIS cell already exists
-   * in the recent room history. Disabled in relax mode so the rotation
-   * never starves — every tick can open a fresh bet card.
-   */
   const cellKey = `cell:r${parsed.row}:c${parsed.col}`;
-  if (!relax) {
-    const { data: prior } = await service
-      .from("live_betting_markets")
-      .select("subtitle")
-      .eq("room_id", roomId)
-      .eq("market_type", "city_grid")
-      .order("opens_at", { ascending: false })
-      .limit(8);
-    const dupe = (prior ?? []).some((row) => {
-      try {
-        const meta = JSON.parse(
-          (row as { subtitle: string | null }).subtitle ?? "{}",
-        ) as { cellKey?: string };
-        return meta.cellKey === cellKey;
-      } catch {
-        return false;
-      }
-    });
-    if (dupe) {
-      return { error: `next_zone: cell ${cellKey} already bet` };
+
+  // Once-per-cell dupe guard: check the last 30 city_grid markets for this room.
+  const { data: prior } = await service
+    .from("live_betting_markets")
+    .select("subtitle")
+    .eq("room_id", roomId)
+    .eq("market_type", "city_grid")
+    .order("opens_at", { ascending: false })
+    .limit(30);
+  const alreadyFired = (prior ?? []).some((row) => {
+    try {
+      const meta = JSON.parse(
+        (row as { subtitle: string | null }).subtitle ?? "{}",
+      ) as { cellKey?: string };
+      return meta.cellKey === cellKey;
+    } catch {
+      return false;
     }
+  });
+  if (alreadyFired) {
+    return { error: `next_zone: cell ${cellKey} already bet in this visit` };
   }
 
-  /**
-   * Enumerate every cell in the spec as an option (`grid:rR:cC`). The
-   * viewer picks by tapping a polygon on the map; the bottom sheet just
-   * shows the headline + countdown (`gridMode` on the client).
-   */
   const cells = enumerateGridCells(spec);
   const options: LiveMarketOption[] = cells.map((c, i) => ({
     id: c.id,
@@ -157,11 +128,6 @@ export async function openCityGridMarketForRoom(roomId: string) {
   }));
 
   const title = `Which square will ${characterName} enter first?`;
-  /**
-   * Subtitle carries metadata used by settlement and the tick's
-   * `driverCrossedCell` check — start cell coordinates + a `cellKey` used
-   * by the dupe guard above.
-   */
   const subtitle = JSON.stringify({
     cellKey,
     startRow: parsed.row,
@@ -171,11 +137,6 @@ export async function openCityGridMarketForRoom(roomId: string) {
 
   const now = new Date();
   const locksAt = new Date(now.getTime() + BET_OPEN_WINDOW_MS);
-  /**
-   * `reveal_at` is just a safety timeout — the tick settles the market the
-   * moment the driver enters a different cell (see `driverCrossedCell`).
-   * Keep it generous so a stuck driver doesn't refund the bet by accident.
-   */
   const revealAt = new Date(now.getTime() + 10 * 60_000);
 
   const { data: market, error: marketError } = await service
@@ -216,12 +177,7 @@ export async function openCityGridMarketForRoom(roomId: string) {
     room_id: roomId,
     market_id: market.id,
     event_type: "market_open",
-    payload: {
-      title,
-      optionCount: options.length,
-      marketKind: "city_grid",
-      cellKey,
-    },
+    payload: { title, optionCount: options.length, marketKind: "city_grid", cellKey },
   });
 
   return { marketId: market.id as string };

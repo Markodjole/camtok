@@ -9,18 +9,14 @@ import {
   NEXT_TURN_PIN_MAX_M,
   NEXT_TURN_PIN_MIN_M,
 } from "@/lib/live/betting/betWindowConstants";
-import { liveBetRelaxServer } from "@/lib/live/liveBetRelax";
 
 /**
- * Open a directional "Left / Straight / Right" market gated on the **next
- * blue pin distance** — only when the driver is `NEXT_TURN_PIN_MIN_M ≤ d ≤
- * NEXT_TURN_PIN_MAX_M` from the pin (~150 m ±20 m).
+ * `next_turn`: Left / Straight / Right bet at the next blue pin.
  *
- * One market per pin per room: as soon as a market for the same pin id has
- * been opened we skip until the driver moves on to the next pin.
- *
- * Settlement is handled by `revealAndSettleMarket` in `live-settlement.ts`,
- * which compares the committed GPS path against the option directions.
+ * Trigger rule (the only gate):
+ *   Driver must be within [NEXT_TURN_PIN_MIN_M, NEXT_TURN_PIN_MAX_M] of the
+ *   next pin (nominally 120 m ± 30 m = 90–150 m). Fires once per pin
+ *   (per-pin dupe guard).
  */
 export async function openNextTurnMarketForRoom(roomId: string) {
   unstable_noStore();
@@ -43,8 +39,7 @@ export async function openNextTurnMarketForRoom(roomId: string) {
     .eq("id", sessionId)
     .maybeSingle();
   if (!sessionRow) return { error: "Session not found" };
-  const transportMode = (sessionRow as { transport_mode: TransportMode })
-    .transport_mode;
+  const transportMode = (sessionRow as { transport_mode: TransportMode }).transport_mode;
   const characterId = (sessionRow as { character_id: string }).character_id;
 
   const policy = Safety.policyFor(transportMode);
@@ -54,48 +49,42 @@ export async function openNextTurnMarketForRoom(roomId: string) {
 
   const drv = await computeDriverRouteInstruction(roomId);
   if (!drv.instruction || drv.instruction.pins.length === 0) {
-    return { error: `next_turn: no pin (${drv.instruction ? "empty" : drv.reason})` };
+    return {
+      error: `next_turn: no pin (${drv.instruction ? "empty" : drv.reason})`,
+    };
   }
   const pin = drv.instruction.pins[0]!;
   const dist = pin.distanceMeters;
   if (!Number.isFinite(dist)) {
     return { error: "next_turn: no pin distance" };
   }
-  /**
-   * Hard gate at 150 m ±20 m. We open exactly once while the driver is
-   * inside the window — the per-pin lookup below prevents reopen on the
-   * same pin if they hover. Both gates are bypassed in relax / dev mode so
-   * the bet card actually shows up at any pin distance.
-   */
-  const relax = liveBetRelaxServer();
-  if (!relax && (dist < NEXT_TURN_PIN_MIN_M || dist > NEXT_TURN_PIN_MAX_M)) {
+
+  if (dist < NEXT_TURN_PIN_MIN_M || dist > NEXT_TURN_PIN_MAX_M) {
     return {
-      error: `next_turn: pin ${Math.round(dist)} m (need ${NEXT_TURN_PIN_MIN_M}\u2013${NEXT_TURN_PIN_MAX_M} m)`,
+      error: `next_turn: pin ${Math.round(dist)} m (need ${NEXT_TURN_PIN_MIN_M}–${NEXT_TURN_PIN_MAX_M} m)`,
     };
   }
 
   const pinKey = `pin:${pin.id}`;
-  if (!relax) {
-    const { data: prior } = await service
-      .from("live_betting_markets")
-      .select("id, subtitle")
-      .eq("room_id", roomId)
-      .eq("market_type", "next_turn")
-      .order("opens_at", { ascending: false })
-      .limit(8);
-    const dupe = (prior ?? []).some((row) => {
-      try {
-        const meta = JSON.parse(
-          (row as { subtitle: string | null }).subtitle ?? "{}",
-        ) as { pinKey?: string };
-        return meta.pinKey === pinKey;
-      } catch {
-        return false;
-      }
-    });
-    if (dupe) {
-      return { error: `next_turn: pin ${pin.id} already bet` };
+  const { data: prior } = await service
+    .from("live_betting_markets")
+    .select("id, subtitle")
+    .eq("room_id", roomId)
+    .eq("market_type", "next_turn")
+    .order("opens_at", { ascending: false })
+    .limit(20);
+  const alreadyFired = (prior ?? []).some((row) => {
+    try {
+      const meta = JSON.parse(
+        (row as { subtitle: string | null }).subtitle ?? "{}",
+      ) as { pinKey?: string };
+      return meta.pinKey === pinKey;
+    } catch {
+      return false;
     }
+  });
+  if (alreadyFired) {
+    return { error: `next_turn: pin ${pin.id} already bet` };
   }
 
   const { data: characterRow } = await service
@@ -103,8 +92,7 @@ export async function openNextTurnMarketForRoom(roomId: string) {
     .select("name")
     .eq("id", characterId)
     .maybeSingle();
-  const characterName =
-    (characterRow as { name: string } | null)?.name ?? "character";
+  const characterName = (characterRow as { name: string } | null)?.name ?? "character";
 
   const options: LiveMarketOption[] = [
     { id: "left", label: "Left", shortLabel: "Left", displayOrder: 0 },
@@ -114,12 +102,6 @@ export async function openNextTurnMarketForRoom(roomId: string) {
 
   const now = new Date();
   const locksAt = new Date(now.getTime() + BET_OPEN_WINDOW_MS);
-  /**
-   * The driver typically reaches the pin within ~10 s once they're at 150 m
-   * (depending on speed). Leave a generous reveal window so the path-based
-   * settlement (`RouteState.revealFromMovement`) has enough committed GPS
-   * to decide left/straight/right.
-   */
   const revealAt = new Date(now.getTime() + 60_000);
 
   const { data: market, error: marketError } = await service
