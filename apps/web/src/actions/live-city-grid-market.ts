@@ -15,6 +15,7 @@ import {
   ZONE_BET_CENTER_RADIUS_M,
 } from "@/lib/live/betting/betWindowConstants";
 import { metersBetween } from "@/lib/live/routing/geometry";
+import { liveBetRelaxServer } from "@/lib/live/liveBetRelax";
 
 /**
  * `next_zone`: viewer taps a 500 m grid cell on the map to bet that the
@@ -97,21 +98,29 @@ export async function openCityGridMarketForRoom(roomId: string) {
   const parsed = parseGridOptionId(currentCellId);
   if (!parsed) return { error: "Zone gate: bad cell id" };
 
+  /**
+   * Spatial gate: only open while the driver is within
+   * `ZONE_BET_CENTER_RADIUS_M` of the current cell center. Bypassed in dev
+   * (`LIVE_BET_UNLOCK_ALL_TEMP`) so a market always opens — the user was
+   * never seeing any popup because real-world driving is rarely inside
+   * such a tight inner circle.
+   */
+  const relax = liveBetRelaxServer();
   const center = gridCellCenter(spec, parsed.row, parsed.col);
   const dist = metersBetween({ lat, lng }, center);
-  if (dist > ZONE_BET_CENTER_RADIUS_M) {
+  if (!relax && dist > ZONE_BET_CENTER_RADIUS_M) {
     return {
       error: `next_zone: ${Math.round(dist)} m from cell center > ${ZONE_BET_CENTER_RADIUS_M} m`,
     };
   }
 
   /**
-   * Dupe guard: skip if a `next_zone` market for THIS cell already exists in
-   * the recent room history. The driver has to physically enter a new cell
-   * before this bet returns to the rotation.
+   * Dupe guard: skip if a `next_zone` market for THIS cell already exists
+   * in the recent room history. Disabled in relax mode so the rotation
+   * never starves — every tick can open a fresh bet card.
    */
   const cellKey = `cell:r${parsed.row}:c${parsed.col}`;
-  {
+  if (!relax) {
     const { data: prior } = await service
       .from("live_betting_markets")
       .select("subtitle")

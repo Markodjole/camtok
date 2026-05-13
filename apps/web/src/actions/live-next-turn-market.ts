@@ -9,6 +9,7 @@ import {
   NEXT_TURN_PIN_MAX_M,
   NEXT_TURN_PIN_MIN_M,
 } from "@/lib/live/betting/betWindowConstants";
+import { liveBetRelaxServer } from "@/lib/live/liveBetRelax";
 
 /**
  * Open a directional "Left / Straight / Right" market gated on the **next
@@ -63,17 +64,18 @@ export async function openNextTurnMarketForRoom(roomId: string) {
   /**
    * Hard gate at 150 m ±20 m. We open exactly once while the driver is
    * inside the window — the per-pin lookup below prevents reopen on the
-   * same pin if they hover.
+   * same pin if they hover. Both gates are bypassed in relax / dev mode so
+   * the bet card actually shows up at any pin distance.
    */
-  if (dist < NEXT_TURN_PIN_MIN_M || dist > NEXT_TURN_PIN_MAX_M) {
+  const relax = liveBetRelaxServer();
+  if (!relax && (dist < NEXT_TURN_PIN_MIN_M || dist > NEXT_TURN_PIN_MAX_M)) {
     return {
       error: `next_turn: pin ${Math.round(dist)} m (need ${NEXT_TURN_PIN_MIN_M}\u2013${NEXT_TURN_PIN_MAX_M} m)`,
     };
   }
 
   const pinKey = `pin:${pin.id}`;
-  /** Skip if this pin already had a `next_turn` market opened for it. */
-  {
+  if (!relax) {
     const { data: prior } = await service
       .from("live_betting_markets")
       .select("id, subtitle")

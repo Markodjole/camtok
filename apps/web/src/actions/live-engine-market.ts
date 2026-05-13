@@ -20,6 +20,7 @@ import {
   type CityGridSpecCompact,
 } from "@/lib/live/grid/cityGrid500";
 import { getOrBuildGridSpecForRoom } from "@/lib/live/grid/gridSpecForRoom";
+import { liveBetRelaxServer } from "@/lib/live/liveBetRelax";
 
 /**
  * Active engine rotation. Other engine types still live in
@@ -63,14 +64,15 @@ export async function openEngineMarketForRoom(roomId: string) {
   /**
    * Zone-bet gating: only open when the driver is sitting close to the
    * center of their current grid cell (≤ ZONE_BET_CENTER_RADIUS_M = 100 m).
-   * Outside that radius the user's "show the zone bets while inside the
-   * inner circle" rule fails and we skip without erroring loudly.
+   * The radius check is bypassed in relax / dev mode so the rotation
+   * always has a card to show; we still require the grid spec + GPS.
    */
+  const relax = liveBetRelaxServer();
   let engineGridSpec: CityGridSpecCompact | null = null;
   if (betType === "zone_exit_time") {
     const ctx = await loadGridCenterContext(service, sessionId, roomId);
     if (!ctx.ok) return { error: ctx.error };
-    if (ctx.distanceM > ZONE_BET_CENTER_RADIUS_M) {
+    if (!relax && ctx.distanceM > ZONE_BET_CENTER_RADIUS_M) {
       return {
         error: `zone_exit_time: ${Math.round(ctx.distanceM)} m from cell center > ${ZONE_BET_CENTER_RADIUS_M} m`,
       };
