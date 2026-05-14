@@ -783,9 +783,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
    *    WIDE was 2200 m — viewer asked to bring this in so adjacent cells stay
    *    big enough to tap accurately.
    */
-  const ZOOM_TIER_TIGHT_M = 320;
-  const ZOOM_TIER_MID_M = 850;
-  const ZOOM_TIER_WIDE_M = 1350;
+  const ZOOM_TIER_TIGHT_M = 420;
+  const ZOOM_TIER_MID_M = 750;
+  const ZOOM_TIER_WIDE_M = 1050;
   const viewerTargetWidthMeters = (() => {
     switch (mapBetTypeForCamera) {
       case "next_turn":
