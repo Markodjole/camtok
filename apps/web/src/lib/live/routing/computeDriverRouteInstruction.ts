@@ -460,12 +460,34 @@ async function resolvePlanningPolyline(params: {
   if (destination) {
     const cached = PLANNING_ROUTE_CACHE.get(roomId);
     const driverBucket = planningBucket(driver);
-    const cacheValid =
-      cached &&
+
+    // Base cache checks: same destination, same position bucket, not expired.
+    let cacheValid =
+      cached != null &&
       Math.abs(cached.destLat - destination.lat) < 1e-6 &&
       Math.abs(cached.destLng - destination.lng) < 1e-6 &&
       cached.driverBucket === driverBucket &&
       Date.now() - cached.fetchedAtMs < PLANNING_ROUTE_TTL_MS;
+
+    // Heading check: if the driver has turned significantly away from the
+    // cached route's direction at their position, bust the cache immediately
+    // so pins re-appear on the road the driver is actually travelling.
+    if (cacheValid && cached) {
+      const proj = projectOntoPolyline(cached.polyline, driver);
+      if (proj) {
+        const seg = cached.polyline[proj.segmentIndex];
+        const segNext = cached.polyline[proj.segmentIndex + 1];
+        if (seg && segNext) {
+          const routeBearing = bearingDegrees(seg, segNext);
+          const diff = Math.abs(((heading - routeBearing + 540) % 360) - 180);
+          // > 50° off the cached route = driver has turned, force re-fetch
+          if (diff > 50) {
+            PLANNING_ROUTE_CACHE.delete(roomId);
+            cacheValid = false;
+          }
+        }
+      }
+    }
 
     let polyline = cacheValid ? cached!.polyline : null;
     if (!polyline) {

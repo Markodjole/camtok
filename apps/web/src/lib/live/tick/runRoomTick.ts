@@ -35,7 +35,7 @@ import {
   type CityGridSpecCompact,
 } from "@/lib/live/grid/cityGrid500";
 import { getOrBuildGridSpecForRoom } from "@/lib/live/grid/gridSpecForRoom";
-import { metersBetween } from "@/lib/live/routing/geometry";
+import { bearingDegrees, metersBetween } from "@/lib/live/routing/geometry";
 import { computeDriverRouteInstruction } from "@/lib/live/routing/computeDriverRouteInstruction";
 
 // ─── Lock constants ───────────────────────────────────────────────────────────
@@ -419,7 +419,7 @@ async function detectEligibleTriggers(
 
   const { data: gpsRow } = await service
     .from("live_route_snapshots")
-    .select("normalized_lat,normalized_lng,raw_lat,raw_lng")
+    .select("normalized_lat,normalized_lng,raw_lat,raw_lng,heading_deg")
     .eq("live_session_id", sessionId)
     .order("recorded_at", { ascending: false })
     .limit(1)
@@ -430,9 +430,11 @@ async function detectEligibleTriggers(
     normalized_lng: number | null;
     raw_lat: number;
     raw_lng: number;
+    heading_deg: number | null;
   };
   const lat = g.normalized_lat ?? g.raw_lat;
   const lng = g.normalized_lng ?? g.raw_lng;
+  const driverHeadingDeg = g.heading_deg;
 
   // ── Grid triggers ─────────────────────────────────────────────────────────
   const specRes = await getOrBuildGridSpecForRoom(service, roomId, sessionId);
@@ -477,10 +479,22 @@ async function detectEligibleTriggers(
     if (pin && Number.isFinite(pin.distanceMeters)) {
       const d = pin.distanceMeters;
       if (d >= NEXT_TURN_PIN_MIN_M && d <= NEXT_TURN_PIN_MAX_M) {
-        const pinKey = `pin:${pin.id}`;
-        const fired = await hasFiredNextTurn(service, roomId, pinKey);
-        if (!fired) {
-          eligible.push({ type: "next_turn", pinKey, pinId: pin.id, pinLat: pin.lat, pinLng: pin.lng });
+        // Guard: pin must be generally ahead of the driver's heading.
+        // If the driver has turned away from the pin direction (> 90°), skip.
+        let pinIsAhead = true;
+        if (driverHeadingDeg != null) {
+          const bearingToPin = metersBetween({ lat, lng }, { lat: pin.lat, lng: pin.lng }) > 1
+            ? bearingDegrees({ lat, lng }, { lat: pin.lat, lng: pin.lng })
+            : driverHeadingDeg;
+          const diff = Math.abs(((driverHeadingDeg - bearingToPin + 540) % 360) - 180);
+          if (diff > 90) pinIsAhead = false;
+        }
+        if (pinIsAhead) {
+          const pinKey = `pin:${pin.id}`;
+          const fired = await hasFiredNextTurn(service, roomId, pinKey);
+          if (!fired) {
+            eligible.push({ type: "next_turn", pinKey, pinId: pin.id, pinLat: pin.lat, pinLng: pin.lng });
+          }
         }
       }
     }
