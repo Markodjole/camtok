@@ -2,8 +2,7 @@
 
 import { unstable_noStore } from "next/cache";
 import { createServiceClient } from "@/lib/supabase/server";
-import type { BetTypeV2 } from "@bettok/live";
-import { provisionalOptionsForBetType } from "@/lib/live/betting/engineMarketOptions";
+import type { BetTypeV2, LiveMarketOption } from "@bettok/live";
 import { metersBetween } from "@/lib/live/routing/geometry";
 import { computeEqualOdds } from "@/lib/live/betting/marketOdds";
 import {
@@ -63,7 +62,7 @@ export async function openEngineMarketForRoom(
 
   const ctx = await loadGridCenterContext(service, sessionId, roomId);
   if (!ctx.ok) return { error: ctx.error };
-  const { distanceM, cellKey, spec } = ctx;
+  const { lat: driverLat, lng: driverLng, headingDeg, speedMps, distanceM, cellKey, center, spec } = ctx;
 
   // Which phases have already fired for this cell in this session?
   const firedPhases = await loadFiredPhases(service, sessionId, cellKey);
@@ -105,18 +104,27 @@ export async function openEngineMarketForRoom(
   if (gateErr) return { error: gateErr };
 
   const betType: BetTypeV2 = "zone_exit_time";
-  const options = provisionalOptionsForBetType(betType);
-  if (!options.length) return { error: "No options for zone_exit_time" };
+
+  // Compute estimated seconds to zone exit from heading/speed/cell geometry.
+  const T = estimateZoneExitSec(
+    { lat: driverLat, lng: driverLng },
+    center,
+    headingDeg ?? 0,
+    speedMps ?? 5,
+    spec,
+  );
+
+  // Options use a real computed threshold T so viewers see a meaningful number.
+  const options: LiveMarketOption[] = [
+    { id: "exit_under", label: `Under ${T} seconds`, shortLabel: `< ${T} s`, displayOrder: 0 },
+    { id: "exit_at",    label: `Around ${T} seconds`, shortLabel: `≈ ${T} s`, displayOrder: 1 },
+    { id: "exit_over",  label: `Over ${T} seconds`,   shortLabel: `> ${T} s`, displayOrder: 2 },
+  ];
 
   // Equal odds for the 3-way time-bucket bet (5 % margin → 2.86 each).
   const odds = computeEqualOdds(options);
 
-  const title =
-    candidatePhase === "entry"
-      ? "How long until driver leaves this zone?"
-      : candidatePhase === "center_70m"
-        ? "Driver near zone centre — how soon do they exit?"
-        : "Driver heading out — will they leave the zone soon?";
+  const title = "Time left in zone";
 
   const now = new Date();
   const locksAt = new Date(now.getTime() + BET_OPEN_WINDOW_MS);
@@ -129,7 +137,7 @@ export async function openEngineMarketForRoom(
       live_session_id: sessionId,
       source: "system_generated",
       title,
-      subtitle: JSON.stringify({ capturedZone, cellKey, triggerPhase: candidatePhase }),
+      subtitle: JSON.stringify({ capturedZone, cellKey, triggerPhase: candidatePhase, estimatedSec: T }),
       market_type: betType,
       option_set: options,
       city_grid_spec: spec as unknown as Record<string, unknown>,
@@ -314,17 +322,29 @@ export async function shouldSettleEngineMarket(
 
 // ─── Grid center helper ───────────────────────────────────────────────────────
 
+type GridCenterContext =
+  | {
+      ok: true;
+      lat: number;
+      lng: number;
+      headingDeg: number | null;
+      speedMps: number | null;
+      distanceM: number;
+      cellId: string;
+      cellKey: string;
+      center: { lat: number; lng: number };
+      spec: CityGridSpecCompact;
+    }
+  | { ok: false; error: string };
+
 async function loadGridCenterContext(
   service: Awaited<ReturnType<typeof createServiceClient>>,
   liveSessionId: string,
   roomId: string,
-): Promise<
-  | { ok: true; distanceM: number; cellId: string; cellKey: string; spec: CityGridSpecCompact }
-  | { ok: false; error: string }
-> {
+): Promise<GridCenterContext> {
   const { data: latestGps } = await service
     .from("live_route_snapshots")
-    .select("normalized_lat,normalized_lng,raw_lat,raw_lng")
+    .select("normalized_lat,normalized_lng,raw_lat,raw_lng,heading_deg,speed_mps")
     .eq("live_session_id", liveSessionId)
     .order("recorded_at", { ascending: false })
     .limit(1)
@@ -336,6 +356,8 @@ async function loadGridCenterContext(
     normalized_lng: number | null;
     raw_lat: number;
     raw_lng: number;
+    heading_deg: number | null;
+    speed_mps: number | null;
   };
   const lat = g.normalized_lat ?? g.raw_lat;
   const lng = g.normalized_lng ?? g.raw_lng;
@@ -353,5 +375,73 @@ async function loadGridCenterContext(
   const center = gridCellCenter(spec, parsed.row, parsed.col);
   const distanceM = metersBetween({ lat, lng }, center);
   const cellKey = `cell:r${parsed.row}:c${parsed.col}`;
-  return { ok: true, distanceM, cellId, cellKey, spec };
+
+  return {
+    ok: true,
+    lat,
+    lng,
+    headingDeg: g.heading_deg,
+    speedMps: g.speed_mps,
+    distanceM,
+    cellId,
+    cellKey,
+    center,
+    spec,
+  };
+}
+
+/**
+ * Estimate the number of seconds the driver will remain inside the current
+ * grid cell, given their position, heading, speed, and the cell geometry.
+ *
+ * Uses a ray → axis-aligned rectangle intersection: cast a ray from the
+ * driver's position in the heading direction and find the closest cell-wall
+ * crossing.  distanceToWall / speed = estimated seconds.
+ *
+ * Result is rounded to the nearest 5 s and clamped to [10, 180] so the
+ * bet options are always clean, readable numbers.
+ */
+function estimateZoneExitSec(
+  pos: { lat: number; lng: number },
+  center: { lat: number; lng: number },
+  headingDeg: number,
+  speedMps: number,
+  spec: CityGridSpecCompact,
+): number {
+  const halfLat = spec.dLat / 2; // half-height in degrees
+  const halfLng = spec.dLng / 2; // half-width in degrees
+
+  // Current offset from cell center in degrees
+  const dy = pos.lat - center.lat; // north component
+  const dx = pos.lng - center.lng; // east component
+
+  // Ray direction (unit vector in degree space, scaled by aspect)
+  const rad = (headingDeg * Math.PI) / 180;
+  const ry = Math.cos(rad); // north
+  const rx = Math.sin(rad); // east
+
+  // Find t (in degrees-along-ray) to each wall — take the smallest positive t
+  let tMin = Infinity;
+  if (Math.abs(rx) > 1e-9) {
+    const tE = (halfLng - dx) / rx;
+    const tW = (-halfLng - dx) / rx;
+    if (tE > 1e-4) tMin = Math.min(tMin, tE);
+    if (tW > 1e-4) tMin = Math.min(tMin, tW);
+  }
+  if (Math.abs(ry) > 1e-9) {
+    const tN = (halfLat - dy) / ry;
+    const tS = (-halfLat - dy) / ry;
+    if (tN > 1e-4) tMin = Math.min(tMin, tN);
+    if (tS > 1e-4) tMin = Math.min(tMin, tS);
+  }
+
+  if (!Number.isFinite(tMin) || tMin <= 0) return 30; // fallback
+
+  // Convert degree-distance to meters using the cell's known cell size
+  // dLat corresponds to cellMeters, so tMin/dLat * cellMeters = meters
+  const distanceM = (tMin / spec.dLat) * spec.cellMeters;
+  const raw = distanceM / Math.max(1, speedMps);
+
+  // Round to nearest 5 s, clamp to 10–180 s
+  return Math.max(10, Math.min(180, Math.round(raw / 5) * 5));
 }

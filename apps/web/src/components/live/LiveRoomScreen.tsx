@@ -1083,6 +1083,21 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   >(() => currentMarket?.options ?? [], [currentMarket]);
 
   /**
+   * For zone_exit_time bets: estimated seconds remaining inside the zone,
+   * counting down each second using nowTick.  T is stored in the market
+   * subtitle as `estimatedSec` and set at market-open time by the server.
+   */
+  const zoneTimeRemainingEstSec = useMemo(() => {
+    if (currentMarket?.marketType !== "zone_exit_time") return null;
+    const T = currentMarket.meta?.estimatedSec;
+    if (typeof T !== "number") return null;
+    const opensAtMs = Date.parse(currentMarket.opensAt);
+    if (!Number.isFinite(opensAtMs)) return T;
+    const elapsedSec = Math.floor((nowTick - opensAtMs) / 1000);
+    return Math.max(0, T - elapsedSec);
+  }, [currentMarket?.marketType, currentMarket?.meta, currentMarket?.opensAt, nowTick]);
+
+  /**
    * One-touch sheet: tapping an option places the bet immediately. The only
    * remaining "closed" trigger is the 7-second window expiring (already
    * captured by `betWindowClosed`, which also hides the sheet entirely).
@@ -1673,6 +1688,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           }}
           gridMode={currentMarket.marketType === "city_grid"}
           turnMode={currentMarket.marketType === "next_turn"}
+          zoneTimeRemainingEstSec={zoneTimeRemainingEstSec}
           oneTapOptionBet={currentMarket.marketType !== "city_grid"}
         />
       ) : null}
@@ -1780,6 +1796,7 @@ function MapSelectionBottomSheet({
   onPlaceBet,
   gridMode = false,
   turnMode = false,
+  zoneTimeRemainingEstSec = null,
   oneTapOptionBet = false,
 }: {
   betHeadline: string;
@@ -1796,9 +1813,16 @@ function MapSelectionBottomSheet({
   onPlaceBet: () => Promise<void>;
   gridMode?: boolean;
   turnMode?: boolean;
+  /** When non-null, renders a 3-column < / ≈ / > layout with live countdown labels. */
+  zoneTimeRemainingEstSec?: number | null;
   oneTapOptionBet?: boolean;
 }) {
   const sorted = [...marketOptions].sort((a, b) => a.displayOrder - b.displayOrder);
+  const zoneTimeMode = zoneTimeRemainingEstSec != null;
+  const zoneTimeOptions = zoneTimeMode
+    ? (["exit_under", "exit_at", "exit_over"] as const)
+        .map((id) => sorted.find((o) => o.id === id) ?? { id, label: id, displayOrder: 0 })
+    : [];
   const turnOptions = turnMode
     ? ["left", "straight", "right"]
         .map((id) => sorted.find((o) => o.id === id))
@@ -1848,7 +1872,37 @@ function MapSelectionBottomSheet({
             </button>
           </div>
         </div>
-        {gridMode ? null : turnMode ? (
+        {gridMode ? null : zoneTimeMode ? (
+          <div className="grid min-h-0 flex-1 grid-cols-3 gap-1">
+            {zoneTimeOptions.map((opt) => {
+              const active = selectedOptionId === opt.id;
+              const t = zoneTimeRemainingEstSec ?? 0;
+              const label =
+                opt.id === "exit_under"
+                  ? `< ${t} s`
+                  : opt.id === "exit_at"
+                    ? `≈ ${t} s`
+                    : `> ${t} s`;
+              return (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => void onSelectOption(opt.id)}
+                  className={`flex h-full items-center justify-center rounded-lg px-1 text-center text-[11px] font-semibold ${
+                    active
+                      ? "bg-white text-black"
+                      : bettingClosed
+                        ? "bg-white/5 text-white/30"
+                        : "bg-white/15 text-white"
+                  }`}
+                  disabled={bettingClosed || isPlacing}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        ) : turnMode ? (
           <div className="grid min-h-0 flex-1 grid-cols-3 gap-1">
             {turnOptions.map((opt) => {
               const active = selectedOptionId === opt.id;

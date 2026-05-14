@@ -52,6 +52,11 @@ export type LiveFeedRow = {
      * Shape: { format: "decimal", margin: 0.05, lines: { optionId: 2.86 } }
      */
     odds: MarketOdds | null;
+    /**
+     * Parsed market subtitle JSON — carries per-market metadata.
+     * For zone_exit_time: { estimatedSec: number, cellKey, triggerPhase, ... }
+     */
+    meta: Record<string, unknown> | null;
   } | null;
   sessionStartedAt: string;
   lastHeartbeatAt: string | null;
@@ -132,6 +137,14 @@ function liveFeedRowFromActiveRoomRow(r: Record<string, unknown>): LiveFeedRow {
               ? ((r.current_market_city_grid_spec as CityGridSpecCompact | null) ?? null)
               : null,
           odds: (r.current_market_odds as MarketOdds | null) ?? null,
+          meta: (() => {
+            try {
+              const raw = r.current_market_subtitle as string | null;
+              return raw ? (JSON.parse(raw) as Record<string, unknown>) : null;
+            } catch {
+              return null;
+            }
+          })(),
         }
       : null,
     sessionStartedAt: r.session_started_at as string,

@@ -432,11 +432,26 @@ export async function revealAndSettleMarket(marketId: string) {
       Number.isFinite(opensAtMs) && Number.isFinite(exitAtMs)
         ? Math.max(0, (exitAtMs - opensAtMs) / 1000)
         : Number.POSITIVE_INFINITY;
-    const winner = elapsedSec < 90 ? "exit_fast" : "exit_slow";
+
+    // Read the estimated threshold T stored at market-open time.
+    let estimatedSec = 60; // safe fallback
+    try {
+      const meta = JSON.parse(subtitleStr ?? "{}") as { estimatedSec?: number };
+      if (typeof meta.estimatedSec === "number") estimatedSec = meta.estimatedSec;
+    } catch {
+      // ignore
+    }
+
+    // ±20 % window around T → "at"; outside → under / over.
+    const lo = estimatedSec * 0.8;
+    const hi = estimatedSec * 1.2;
+    const winner =
+      elapsedSec < lo ? "exit_under" : elapsedSec <= hi ? "exit_at" : "exit_over";
+
     return await settleMarketWithWinner(
       marketId,
       winner,
-      `zone_exit_${Math.round(elapsedSec)}s`,
+      `zone_exit_${Math.round(elapsedSec)}s_est${estimatedSec}s`,
     );
   }
 

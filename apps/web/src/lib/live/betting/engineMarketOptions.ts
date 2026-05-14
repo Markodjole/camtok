@@ -76,18 +76,9 @@ export function provisionalOptionsForBetType(type: BetTypeV2): EngineMarketOptio
       ];
     case "zone_exit_time":
       return [
-        {
-          id: "exit_fast",
-          label: "Leaves the zone in under 90 seconds",
-          shortLabel: "< 90 s",
-          displayOrder: 0,
-        },
-        {
-          id: "exit_slow",
-          label: "Still in zone after 90 seconds",
-          shortLabel: "90 s+",
-          displayOrder: 1,
-        },
+        { id: "exit_under", label: "Under estimated time", shortLabel: "< ? s", displayOrder: 0 },
+        { id: "exit_at",    label: "Around estimated time", shortLabel: "≈ ? s", displayOrder: 1 },
+        { id: "exit_over",  label: "Over estimated time",  shortLabel: "> ? s", displayOrder: 2 },
       ];
     default:
       return [];
