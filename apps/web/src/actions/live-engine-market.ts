@@ -300,7 +300,9 @@ async function loadFiredPhases(
 
 /**
  * Checks whether a zone_exit_time market's settlement condition has been met.
- * Settles when the driver has left the zone captured at market open.
+ * Settles on the first event:
+ *   1. driver leaves the captured grid cell, OR
+ *   2. the estimated countdown reaches zero while still inside.
  */
 export async function shouldSettleEngineMarket(
   service: Awaited<ReturnType<typeof createServiceClient>>,
@@ -323,7 +325,7 @@ export async function shouldSettleEngineMarket(
 
   const { data: marketRow } = await service
     .from("live_betting_markets")
-    .select("subtitle, city_grid_spec")
+    .select("opens_at, subtitle, city_grid_spec")
     .eq("id", marketId)
     .maybeSingle();
 
@@ -332,15 +334,26 @@ export async function shouldSettleEngineMarket(
   if (!gridSpec) return false;
 
   let startCellKey: string | null = null;
+  let estimatedSec: number | null = null;
   try {
     const meta = JSON.parse(
       (marketRow as { subtitle: string | null } | null)?.subtitle ?? "{}",
-    ) as { cellKey?: string | null };
+    ) as { cellKey?: string | null; estimatedSec?: number };
     startCellKey = meta.cellKey ?? null;
+    estimatedSec = typeof meta.estimatedSec === "number" ? meta.estimatedSec : null;
   } catch {
     // ignore parse errors
   }
   if (!startCellKey) return false;
+
+  if (estimatedSec != null) {
+    const opensAtMs = Date.parse(
+      (marketRow as { opens_at: string | null } | null)?.opens_at ?? "",
+    );
+    if (Number.isFinite(opensAtMs) && Date.now() >= opensAtMs + estimatedSec * 1000) {
+      return true;
+    }
+  }
 
   const { data: latestGps } = await service
     .from("live_route_snapshots")

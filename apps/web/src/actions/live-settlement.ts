@@ -383,9 +383,14 @@ export async function revealAndSettleMarket(marketId: string) {
     const liveSessionId = (market as { live_session_id: string }).live_session_id;
     const subtitleStr = (market as { subtitle: string | null }).subtitle;
     let startCellKey: string | null = null;
+    let estimatedSec = 60; // safe fallback
     try {
-      const meta = JSON.parse(subtitleStr ?? "{}") as { cellKey?: string | null };
+      const meta = JSON.parse(subtitleStr ?? "{}") as {
+        cellKey?: string | null;
+        estimatedSec?: number;
+      };
       startCellKey = meta.cellKey ?? null;
+      if (typeof meta.estimatedSec === "number") estimatedSec = meta.estimatedSec;
     } catch {
       // ignore parse failures — handled below.
     }
@@ -421,27 +426,27 @@ export async function revealAndSettleMarket(marketId: string) {
     const currentCell = currentCellId ? parseGridFromId(currentCellId) : null;
     const currentCellKey =
       currentCell != null ? `cell:r${currentCell.row}:c${currentCell.col}` : null;
+    const opensAtMs = new Date((market as { opens_at: string }).opens_at).getTime();
+    const nowMs = Date.now();
+    const countdownElapsed =
+      Number.isFinite(opensAtMs) && nowMs >= opensAtMs + estimatedSec * 1000;
     if (!currentCellKey || currentCellKey === startCellKey) {
+      if (countdownElapsed) {
+        return await settleMarketWithWinner(
+          marketId,
+          "exit_over",
+          `zone_exit_countdown_elapsed_est${estimatedSec}s`,
+        );
+      }
       await refundMarket(marketId, "zone_exit_still_in_zone");
       return { status: "ambiguous", reason: "zone_exit_still_in_zone" };
     }
 
-    const opensAtMs = new Date((market as { opens_at: string }).opens_at).getTime();
     const exitAtMs = new Date(g.recorded_at).getTime();
     const elapsedSec =
       Number.isFinite(opensAtMs) && Number.isFinite(exitAtMs)
         ? Math.max(0, (exitAtMs - opensAtMs) / 1000)
         : Number.POSITIVE_INFINITY;
-
-    // Read the estimated threshold T stored at market-open time.
-    let estimatedSec = 60; // safe fallback
-    try {
-      const meta = JSON.parse(subtitleStr ?? "{}") as { estimatedSec?: number };
-      if (typeof meta.estimatedSec === "number") estimatedSec = meta.estimatedSec;
-    } catch {
-      // ignore
-    }
-
     // ±20 % window around T → "at"; outside → under / over.
     const lo = estimatedSec * 0.8;
     const hi = estimatedSec * 1.2;

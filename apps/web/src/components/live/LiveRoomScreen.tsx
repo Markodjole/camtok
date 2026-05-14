@@ -105,10 +105,10 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     /** Optional descriptor, e.g. "0–1 stops"; rendered as `$2 on 0–1 stops`. */
     target?: string | null;
   } | null>(null);
-  const [balanceWinSplash, setBalanceWinSplash] = useState<{
+  const [balanceChangeSplash, setBalanceChangeSplash] = useState<{
     from: number;
     to: number;
-    gain: number;
+    delta: number;
     nonce: number;
   } | null>(null);
   /** Cache of the most recent city_grid spec so zone polygons keep showing
@@ -154,7 +154,6 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [zoneExitCountdown, setZoneExitCountdown] = useState<{
     opensAtMs: number;
     estimatedSec: number;
-    optionId: string;
   } | null>(null);
   const pipLongPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pipDragRef = useRef<{
@@ -194,25 +193,25 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     },
     [],
   );
-  const pulseBalanceWin = useCallback(
-    (gain: number) => {
-      if (!Number.isFinite(gain) || gain <= 0) return;
+  const pulseBalanceChange = useCallback(
+    (delta: number, updateWallet: boolean) => {
+      if (!Number.isFinite(delta) || delta === 0) return;
       const from = Number(wallet?.balance ?? 0);
-      const to = from + gain;
+      const to = updateWallet ? from + delta : from;
 
-      setBalanceWinSplash({
+      setBalanceChangeSplash({
         from,
         to,
-        gain,
+        delta,
         nonce: Date.now(),
       });
       playMoneySound(isMuted);
 
-      if (wallet) {
+      if (wallet && updateWallet) {
         setWallet({
           ...wallet,
           balance: to,
-          total_won: Number(wallet.total_won ?? 0) + gain,
+          total_won: Number(wallet.total_won ?? 0) + Math.max(0, delta),
         });
       }
     },
@@ -458,12 +457,13 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       });
       if (data.won) {
         pulseCenterMoney("win", data.payoutAmount, targetLabel);
-        pulseBalanceWin(data.payoutAmount);
+        pulseBalanceChange(data.payoutAmount, true);
       } else {
         pulseCenterMoney("loss", data.stakeAmount, targetLabel);
+        pulseBalanceChange(-data.stakeAmount, false);
       }
     },
-    [pulseBalanceWin, pulseCenterMoney],
+    [pulseBalanceChange, pulseCenterMoney],
   );
 
   const onViewerRoomActivity = useCallback(
@@ -632,7 +632,6 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           setZoneExitCountdown({
             opensAtMs: Date.parse(market.opensAt),
             estimatedSec: market.meta.estimatedSec as number,
-            optionId,
           });
         }
         setMyOpenBetMarketIds((prev) => new Set(prev).add(market.id));
@@ -796,7 +795,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
    *    WIDE was 2200 m — viewer asked to bring this in so adjacent cells stay
    *    big enough to tap accurately.
    */
-  const ZOOM_TIER_TIGHT_M = 420;
+  const ZOOM_TIER_TIGHT_M = 620;
   const ZOOM_TIER_MID_M = 750;
   const ZOOM_TIER_WIDE_M = 1050;
   const viewerTargetWidthMeters = (() => {
@@ -1415,13 +1414,6 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           target={centerMoneyFlash.target ?? null}
         />
       ) : null}
-      {/* Persistent balance badge — always visible, animates on win */}
-      <BalanceBadge
-        balance={Number(wallet?.balance ?? 0)}
-        splash={balanceWinSplash}
-        onSplashDone={() => setBalanceWinSplash(null)}
-      />
-
       {/* Replay sheet — shown when user taps history button */}
       {showReplay && (
         <ReplaySheet
@@ -1504,17 +1496,6 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         )}
       </div>
 
-      {/* Zone exit countdown — shown after betting on zone_exit_time */}
-      {zoneExitCountdown ? (
-        <ZoneExitCountdownWidget
-          opensAtMs={zoneExitCountdown.opensAtMs}
-          estimatedSec={zoneExitCountdown.estimatedSec}
-          optionId={zoneExitCountdown.optionId}
-          nowMs={nowTick}
-          onExpired={() => setZoneExitCountdown(null)}
-        />
-      ) : null}
-
       {room.destination ? (
         <div className="pointer-events-none fixed bottom-[4.75rem] left-2 z-30 max-w-[min(72vw,14rem)]">
           <div className="pointer-events-auto flex items-center gap-1 rounded-md border border-white/10 bg-black/35 px-1.5 py-px text-[8px] font-normal leading-tight text-white/55 shadow-none backdrop-blur-sm">
@@ -1555,8 +1536,14 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         📋
       </button>
 
-      {mapExpanded ? (
-        <div className="absolute right-4 top-[10.5rem] z-40 flex flex-col items-center gap-5">
+      <div className="absolute right-4 top-32 z-40 flex flex-col items-center gap-3">
+        <BalanceBadge
+          balance={Number(wallet?.balance ?? 0)}
+          splash={balanceChangeSplash}
+          onSplashDone={() => setBalanceChangeSplash(null)}
+        />
+        {mapExpanded ? (
+          <div className="flex flex-col items-center gap-5">
           <IconRailButton
             active={effectiveShowZones}
             onClick={() => setShowZones((v) => !v)}
@@ -1587,8 +1574,17 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           >
             <IconCrosshair />
           </IconRailButton>
-        </div>
-      ) : null}
+          </div>
+        ) : null}
+        {zoneExitCountdown ? (
+          <ZoneExitCountdownWidget
+            opensAtMs={zoneExitCountdown.opensAtMs}
+            estimatedSec={zoneExitCountdown.estimatedSec}
+            nowMs={nowTick}
+            onExpired={() => setZoneExitCountdown(null)}
+          />
+        ) : null}
+      </div>
       {mapExpanded && !mapFollow ? (
         <button
           type="button"
@@ -1771,6 +1767,10 @@ function fmtUsdFlash(n: number): string {
   return Number.isInteger(r) ? String(r) : r.toFixed(2);
 }
 
+function fmtUsdWhole(n: number): string {
+  return String(Math.round(n));
+}
+
 function playMoneySound(muted: boolean) {
   if (muted || typeof window === "undefined") return;
   try {
@@ -1781,26 +1781,26 @@ function playMoneySound(muted: boolean) {
     const ctx = new AudioCtx();
     const master = ctx.createGain();
     master.gain.setValueAtTime(0.0001, ctx.currentTime);
-    master.gain.exponentialRampToValueAtTime(0.11, ctx.currentTime + 0.015);
-    master.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.42);
+    master.gain.exponentialRampToValueAtTime(0.09, ctx.currentTime + 0.01);
+    master.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.35);
     master.connect(ctx.destination);
 
-    [880, 1175, 1568].forEach((freq, i) => {
+    [1046.5, 1568].forEach((freq, i) => {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
-      const start = ctx.currentTime + i * 0.075;
-      osc.type = "triangle";
+      const start = ctx.currentTime + i * 0.09;
+      osc.type = "sine";
       osc.frequency.setValueAtTime(freq, start);
       gain.gain.setValueAtTime(0.0001, start);
-      gain.gain.exponentialRampToValueAtTime(0.75, start + 0.018);
-      gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.16);
+      gain.gain.exponentialRampToValueAtTime(0.9, start + 0.012);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.12);
       osc.connect(gain);
       gain.connect(master);
       osc.start(start);
-      osc.stop(start + 0.18);
+      osc.stop(start + 0.14);
     });
 
-    window.setTimeout(() => void ctx.close().catch(() => undefined), 700);
+    window.setTimeout(() => void ctx.close().catch(() => undefined), 500);
   } catch {
     // Sound is non-critical; browsers may block audio until the first gesture.
   }
@@ -1853,80 +1853,39 @@ function ViewerCenterMoneyFlash({
   );
 }
 
-/**
- * Countdown widget shown at bottom-left after placing a zone_exit_time bet.
- * Counts from estimatedSec down to 0, creating tension while the driver is
- * still inside the zone. Disappears 3 seconds after reaching 0.
- */
 function ZoneExitCountdownWidget({
   opensAtMs,
   estimatedSec,
-  optionId,
   nowMs,
   onExpired,
 }: {
   opensAtMs: number;
   estimatedSec: number;
-  optionId: string;
   nowMs: number;
   onExpired: () => void;
 }) {
   const elapsed = Math.floor((nowMs - opensAtMs) / 1000);
   const remaining = Math.max(0, estimatedSec - elapsed);
-  const pct = estimatedSec > 0 ? remaining / estimatedSec : 0;
   const pastZero = elapsed > estimatedSec + 3;
 
   useEffect(() => {
     if (pastZero) onExpired();
   }, [pastZero, onExpired]);
 
-  const label =
-    optionId === "exit_under" ? "< " :
-    optionId === "exit_at"    ? "= " :
-    optionId === "exit_over"  ? "> " : "";
-
-  const color =
-    remaining === 0
-      ? "text-red-400 border-red-500/50 shadow-[0_0_10px_rgba(239,68,68,0.5)]"
-      : pct < 0.25
-        ? "text-amber-300 border-amber-400/40 shadow-[0_0_8px_rgba(251,191,36,0.4)]"
-        : "text-emerald-300 border-emerald-500/35 shadow-[0_0_8px_rgba(16,185,129,0.35)]";
-
   return (
-    <div className="pointer-events-none fixed bottom-[8rem] left-3 z-40 flex flex-col items-start gap-0.5">
-      <div className={`rounded-xl border bg-black/55 px-3 py-2 backdrop-blur-md ${color}`}>
-        <div className="text-[9px] font-black uppercase tracking-widest opacity-60">
-          Time left in zone
-        </div>
-        <div className="flex items-baseline gap-1">
-          <span className="text-[11px] font-semibold opacity-70">{label}</span>
-          <span className="text-2xl font-black tabular-nums leading-none">
-            {remaining}
-          </span>
-          <span className="text-[11px] font-semibold opacity-70">sec</span>
-        </div>
-        {remaining === 0 && (
-          <div className="mt-0.5 text-[9px] font-black uppercase tracking-wider text-red-300">
-            Zone exit!
-          </div>
-        )}
-      </div>
+    <div className="pointer-events-none rounded-full border border-white/10 bg-black/40 px-2.5 py-1 text-xs font-medium tabular-nums text-white/85 backdrop-blur-md">
+      {remaining}
     </div>
   );
 }
 
-/**
- * Persistent compact balance badge.
- * Positioned fixed top-right, below the history button.
- * When a win fires it count-ups in-place with a green glow + coin sparks.
- */
 function BalanceBadge({
   balance,
   splash,
   onSplashDone,
 }: {
   balance: number;
-  splash: { from: number; to: number; gain: number; nonce: number } | null;
+  splash: { from: number; to: number; delta: number; nonce: number } | null;
   onSplashDone: () => void;
 }) {
   const [display, setDisplay] = useState(balance);
@@ -1965,67 +1924,23 @@ function BalanceBadge({
   }, [splash, onSplashDone]);
 
   return (
-    <div
-      className={[
-        "pointer-events-none fixed right-3 top-11 z-[62]",
-        "flex flex-col items-end gap-0.5",
-      ].join(" ")}
-    >
-      {/* Balance pill */}
+    <div className="pointer-events-none flex flex-col items-center gap-1">
       <div
         className={[
-          "relative flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-black tabular-nums transition-shadow duration-300",
+          "rounded-full border border-white/10 bg-black/40 px-2.5 py-1 text-xs font-medium tabular-nums text-white/85 backdrop-blur-md transition-transform duration-150",
           animating
-            ? "border border-emerald-400/60 bg-black/60 text-emerald-300 shadow-[0_0_14px_rgba(16,185,129,0.7)] backdrop-blur-md"
-            : "border border-white/10 bg-black/40 text-white/80 shadow-md backdrop-blur-md",
+            ? "scale-105"
+            : "",
         ].join(" ")}
       >
-        {animating && (
-          <>
-            {["$", "$", "$", "$"].map((coin, i) => (
-              <span
-                key={i}
-                className="pointer-events-none absolute text-[10px] font-black text-emerald-300"
-                style={{
-                  left: `${15 + i * 22}%`,
-                  top: "-4px",
-                  animation: `bal-coin-${i % 3} 900ms ease-out forwards`,
-                  animationDelay: `${i * 60}ms`,
-                }}
-              >
-                {coin}
-              </span>
-            ))}
-          </>
-        )}
-        <span className="text-[9px] opacity-60">$</span>
-        <span>{fmtUsdFlash(display)}</span>
+        ${fmtUsdWhole(display)}
       </div>
 
-      {/* +gain badge — only during animation */}
       {animating && splash && (
-        <div className="rounded-full bg-emerald-500/25 px-2 py-0.5 text-[9px] font-black text-emerald-300">
-          +${fmtUsdFlash(splash.gain)}
+        <div className="rounded-full border border-white/10 bg-black/40 px-2 py-0.5 text-[10px] font-medium tabular-nums text-white/80 backdrop-blur-md">
+          {splash.delta > 0 ? "+" : "-"}${fmtUsdWhole(Math.abs(splash.delta))}
         </div>
       )}
-
-      <style jsx>{`
-        @keyframes bal-coin-0 {
-          from { transform: translate(0, 0) scale(0.6) rotate(0deg); opacity: 0; }
-          15% { opacity: 1; }
-          to { transform: translate(-10px, -22px) scale(1.1) rotate(-20deg); opacity: 0; }
-        }
-        @keyframes bal-coin-1 {
-          from { transform: translate(0, 0) scale(0.6) rotate(0deg); opacity: 0; }
-          15% { opacity: 1; }
-          to { transform: translate(6px, -26px) scale(1.1) rotate(18deg); opacity: 0; }
-        }
-        @keyframes bal-coin-2 {
-          from { transform: translate(0, 0) scale(0.6) rotate(0deg); opacity: 0; }
-          15% { opacity: 1; }
-          to { transform: translate(18px, -18px) scale(1) rotate(30deg); opacity: 0; }
-        }
-      `}</style>
     </div>
   );
 }
