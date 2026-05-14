@@ -150,6 +150,12 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   }, [room.roomId]);
   const [lastBetMarketId, setLastBetMarketId] = useState<string | null>(null);
   const [lastBetOptionLabel, setLastBetOptionLabel] = useState<string | null>(null);
+  /** Persists after betting on zone_exit_time so the countdown widget stays visible. */
+  const [zoneExitCountdown, setZoneExitCountdown] = useState<{
+    opensAtMs: number;
+    estimatedSec: number;
+    optionId: string;
+  } | null>(null);
   const pipLongPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pipDragRef = useRef<{
     pointerId: number | null;
@@ -622,6 +628,13 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         setSelectedMapOptionId(null);
         setLastBetMarketId(market.id);
         setLastBetOptionLabel(pickedLabel);
+        if (market.marketType === "zone_exit_time" && market.meta?.estimatedSec != null) {
+          setZoneExitCountdown({
+            opensAtMs: Date.parse(market.opensAt),
+            estimatedSec: market.meta.estimatedSec as number,
+            optionId,
+          });
+        }
         setMyOpenBetMarketIds((prev) => new Set(prev).add(market.id));
         viewerLiveLog("place_bet_ok", {
           marketId: market.id,
@@ -1491,6 +1504,17 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         )}
       </div>
 
+      {/* Zone exit countdown — shown after betting on zone_exit_time */}
+      {zoneExitCountdown ? (
+        <ZoneExitCountdownWidget
+          opensAtMs={zoneExitCountdown.opensAtMs}
+          estimatedSec={zoneExitCountdown.estimatedSec}
+          optionId={zoneExitCountdown.optionId}
+          nowMs={nowTick}
+          onExpired={() => setZoneExitCountdown(null)}
+        />
+      ) : null}
+
       {room.destination ? (
         <div className="pointer-events-none fixed bottom-[4.75rem] left-2 z-30 max-w-[min(72vw,14rem)]">
           <div className="pointer-events-auto flex items-center gap-1 rounded-md border border-white/10 bg-black/35 px-1.5 py-px text-[8px] font-normal leading-tight text-white/55 shadow-none backdrop-blur-sm">
@@ -1825,6 +1849,68 @@ function ViewerCenterMoneyFlash({
           on {target}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * Countdown widget shown at bottom-left after placing a zone_exit_time bet.
+ * Counts from estimatedSec down to 0, creating tension while the driver is
+ * still inside the zone. Disappears 3 seconds after reaching 0.
+ */
+function ZoneExitCountdownWidget({
+  opensAtMs,
+  estimatedSec,
+  optionId,
+  nowMs,
+  onExpired,
+}: {
+  opensAtMs: number;
+  estimatedSec: number;
+  optionId: string;
+  nowMs: number;
+  onExpired: () => void;
+}) {
+  const elapsed = Math.floor((nowMs - opensAtMs) / 1000);
+  const remaining = Math.max(0, estimatedSec - elapsed);
+  const pct = estimatedSec > 0 ? remaining / estimatedSec : 0;
+  const pastZero = elapsed > estimatedSec + 3;
+
+  useEffect(() => {
+    if (pastZero) onExpired();
+  }, [pastZero, onExpired]);
+
+  const label =
+    optionId === "exit_under" ? "< " :
+    optionId === "exit_at"    ? "= " :
+    optionId === "exit_over"  ? "> " : "";
+
+  const color =
+    remaining === 0
+      ? "text-red-400 border-red-500/50 shadow-[0_0_10px_rgba(239,68,68,0.5)]"
+      : pct < 0.25
+        ? "text-amber-300 border-amber-400/40 shadow-[0_0_8px_rgba(251,191,36,0.4)]"
+        : "text-emerald-300 border-emerald-500/35 shadow-[0_0_8px_rgba(16,185,129,0.35)]";
+
+  return (
+    <div className="pointer-events-none fixed bottom-[8rem] left-3 z-40 flex flex-col items-start gap-0.5">
+      <div className={`rounded-xl border bg-black/55 px-3 py-2 backdrop-blur-md ${color}`}>
+        <div className="text-[9px] font-black uppercase tracking-widest opacity-60">
+          Time left in zone
+        </div>
+        <div className="flex items-baseline gap-1">
+          <span className="text-[11px] font-semibold opacity-70">{label}</span>
+          <span className="text-2xl font-black tabular-nums leading-none">
+            {remaining}
+          </span>
+          <span className="text-[11px] font-semibold opacity-70">sec</span>
+        </div>
+        {remaining === 0 && (
+          <div className="mt-0.5 text-[9px] font-black uppercase tracking-wider text-red-300">
+            Zone exit!
+          </div>
+        )}
+      </div>
     </div>
   );
 }
