@@ -270,7 +270,7 @@ export async function revealAndSettleMarket(marketId: string) {
   const { data: market } = await service
     .from("live_betting_markets")
     .select(
-      "id, room_id, live_session_id, status, option_set, decision_node_id, reveal_at, market_type, city_grid_spec, subtitle",
+      "id, room_id, live_session_id, status, option_set, decision_node_id, opens_at, reveal_at, market_type, city_grid_spec, subtitle",
     )
     .eq("id", marketId)
     .maybeSingle();
@@ -379,8 +379,68 @@ export async function revealAndSettleMarket(marketId: string) {
     return await settleMarketWithWinner(marketId, result.winningOptionId, result.reason);
   }
 
-  // Provisional engine bet: randomly pick a winner from the option set.
-  // Real outcome logic will be added once telemetry/settlement data is wired.
+  if (marketType === "zone_exit_time" && gridSpec) {
+    const liveSessionId = (market as { live_session_id: string }).live_session_id;
+    const subtitleStr = (market as { subtitle: string | null }).subtitle;
+    let startCellKey: string | null = null;
+    try {
+      const meta = JSON.parse(subtitleStr ?? "{}") as { cellKey?: string | null };
+      startCellKey = meta.cellKey ?? null;
+    } catch {
+      // ignore parse failures — handled below.
+    }
+    if (!startCellKey) {
+      await refundMarket(marketId, "zone_exit_missing_start_cell");
+      return { status: "ambiguous", reason: "zone_exit_missing_start_cell" };
+    }
+
+    const { data: latestGps } = await service
+      .from("live_route_snapshots")
+      .select("recorded_at, normalized_lat,normalized_lng,raw_lat,raw_lng")
+      .eq("live_session_id", liveSessionId)
+      .order("recorded_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (!latestGps) {
+      await refundMarket(marketId, "zone_exit_no_gps");
+      return { status: "insufficient_confidence", reason: "zone_exit_no_gps" };
+    }
+
+    const g = latestGps as {
+      recorded_at: string;
+      normalized_lat: number | null;
+      normalized_lng: number | null;
+      raw_lat: number;
+      raw_lng: number;
+    };
+    const currentCellId = cellIdForPosition(
+      gridSpec,
+      g.normalized_lat ?? g.raw_lat,
+      g.normalized_lng ?? g.raw_lng,
+    );
+    const currentCell = currentCellId ? parseGridFromId(currentCellId) : null;
+    const currentCellKey =
+      currentCell != null ? `cell:r${currentCell.row}:c${currentCell.col}` : null;
+    if (!currentCellKey || currentCellKey === startCellKey) {
+      await refundMarket(marketId, "zone_exit_still_in_zone");
+      return { status: "ambiguous", reason: "zone_exit_still_in_zone" };
+    }
+
+    const opensAtMs = new Date((market as { opens_at: string }).opens_at).getTime();
+    const exitAtMs = new Date(g.recorded_at).getTime();
+    const elapsedSec =
+      Number.isFinite(opensAtMs) && Number.isFinite(exitAtMs)
+        ? Math.max(0, (exitAtMs - opensAtMs) / 1000)
+        : Number.POSITIVE_INFINITY;
+    const winner = elapsedSec < 90 ? "exit_fast" : "exit_slow";
+    return await settleMarketWithWinner(
+      marketId,
+      winner,
+      `zone_exit_${Math.round(elapsedSec)}s`,
+    );
+  }
+
+  // Fallback for any future engine bet that does not yet have telemetry logic.
   if (isEngineMarketType(marketType)) {
     const opts = (market as { option_set: LiveMarketOption[] }).option_set;
     if (!opts.length) {

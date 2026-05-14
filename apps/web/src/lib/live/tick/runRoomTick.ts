@@ -579,10 +579,10 @@ async function sweepPendingSettlements(
     }
 
     if (marketType === "next_turn") {
-      const passed = await driverPassedPin(service, { row, sessionId });
-      if (passed) {
+      const committed = await driverCommittedTurnDecision(service, { row, sessionId });
+      if (committed) {
         await revealAndSettleMarket(mid);
-        notes.push({ marketId: mid, reason: "pin_passed" });
+        notes.push({ marketId: mid, reason: "turn_committed" });
       }
       continue;
     }
@@ -643,7 +643,7 @@ async function driverCrossedCell(
   return currentCell !== `grid:r${startRow}:c${startCol}`;
 }
 
-async function driverPassedPin(
+async function driverCommittedTurnDecision(
   service: Awaited<ReturnType<typeof createServiceClient>>,
   args: { row: unknown; sessionId: string | null },
 ): Promise<boolean> {
@@ -651,24 +651,53 @@ async function driverPassedPin(
   const turnLat = (args.row as { turn_point_lat: number | null }).turn_point_lat;
   const turnLng = (args.row as { turn_point_lng: number | null }).turn_point_lng;
   if (turnLat == null || turnLng == null) return false;
+  const opensAt =
+    (args.row as { opens_at?: string | null }).opens_at ??
+    new Date(Date.now() - 30_000).toISOString();
 
-  const { data: latest } = await service
+  const { data: points } = await service
     .from("live_route_snapshots")
-    .select("normalized_lat,normalized_lng,raw_lat,raw_lng")
+    .select("recorded_at, normalized_lat,normalized_lng,raw_lat,raw_lng,heading_deg")
     .eq("live_session_id", args.sessionId)
-    .order("recorded_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (!latest) return false;
-  const g = latest as {
+    .gte("recorded_at", opensAt)
+    .order("recorded_at", { ascending: true })
+    .limit(120);
+
+  const samples = ((points ?? []) as Array<{
     normalized_lat: number | null;
     normalized_lng: number | null;
     raw_lat: number;
     raw_lng: number;
-  };
-  const lat = g.normalized_lat ?? g.raw_lat;
-  const lng = g.normalized_lng ?? g.raw_lng;
-  const dLat = (lat - turnLat) * 111_320;
-  const dLng = (lng - turnLng) * 111_320 * Math.cos((turnLat * Math.PI) / 180);
-  return Math.hypot(dLat, dLng) <= 15;
+    heading_deg: number | null;
+  }>).map((p) => ({
+    lat: p.normalized_lat ?? p.raw_lat,
+    lng: p.normalized_lng ?? p.raw_lng,
+    heading: p.heading_deg,
+  }));
+  if (samples.length < 2) return false;
+
+  const firstHeading = samples.find((p) => p.heading != null)?.heading ?? null;
+  const lastHeading = [...samples].reverse().find((p) => p.heading != null)?.heading ?? null;
+  const turned =
+    firstHeading != null &&
+    lastHeading != null &&
+    Math.abs(angleDelta(firstHeading, lastHeading)) >= 50;
+  if (turned) return true;
+
+  const distances = samples.map((p) =>
+    metersBetween({ lat: p.lat, lng: p.lng }, { lat: turnLat, lng: turnLng }),
+  );
+  const minDistance = Math.min(...distances);
+  const latestDistance = distances[distances.length - 1] ?? Number.POSITIVE_INFINITY;
+
+  // Straight/forward case: settle once the vehicle has crossed the pin area
+  // and is moving away again, even if it never hits the exact GPS point.
+  return minDistance <= 35 && latestDistance >= minDistance + 12;
+}
+
+function angleDelta(fromDeg: number, toDeg: number): number {
+  let d = toDeg - fromDeg;
+  while (d > 180) d -= 360;
+  while (d < -180) d += 360;
+  return d;
 }

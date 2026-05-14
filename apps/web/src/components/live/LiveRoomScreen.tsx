@@ -739,9 +739,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
    *    WIDE was 2200 m — viewer asked to bring this in so adjacent cells stay
    *    big enough to tap accurately.
    */
-  const ZOOM_TIER_TIGHT_M = 320;
-  const ZOOM_TIER_MID_M = 850;
-  const ZOOM_TIER_WIDE_M = 1400;
+  const ZOOM_TIER_TIGHT_M = 280;
+  const ZOOM_TIER_MID_M = 760;
+  const ZOOM_TIER_WIDE_M = 1200;
   const viewerTargetWidthMeters = (() => {
     switch (mapBetTypeForCamera) {
       case "next_turn":
@@ -1672,6 +1672,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             }
           }}
           gridMode={currentMarket.marketType === "city_grid"}
+          turnMode={currentMarket.marketType === "next_turn"}
           oneTapOptionBet={currentMarket.marketType !== "city_grid"}
         />
       ) : null}
@@ -1778,6 +1779,7 @@ function MapSelectionBottomSheet({
   onClose,
   onPlaceBet,
   gridMode = false,
+  turnMode = false,
   oneTapOptionBet = false,
 }: {
   betHeadline: string;
@@ -1793,9 +1795,15 @@ function MapSelectionBottomSheet({
   onClose: () => void;
   onPlaceBet: () => Promise<void>;
   gridMode?: boolean;
+  turnMode?: boolean;
   oneTapOptionBet?: boolean;
 }) {
   const sorted = [...marketOptions].sort((a, b) => a.displayOrder - b.displayOrder);
+  const turnOptions = turnMode
+    ? ["left", "straight", "right"]
+        .map((id) => sorted.find((o) => o.id === id))
+        .filter((o): o is NonNullable<typeof o> => o != null)
+    : [];
   return (
     <div
       className="pointer-events-none fixed bottom-0 right-0 z-[200] pb-16"
@@ -1840,7 +1848,33 @@ function MapSelectionBottomSheet({
             </button>
           </div>
         </div>
-        {gridMode ? null : (
+        {gridMode ? null : turnMode ? (
+          <div className="grid min-h-0 flex-1 grid-cols-3 gap-1">
+            {turnOptions.map((opt) => {
+              const active = selectedOptionId === opt.id;
+              const label =
+                opt.id === "left"
+                  ? "← Left"
+                  : opt.id === "right"
+                    ? "Right →"
+                    : "↑ Forward";
+              return (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => void onSelectOption(opt.id)}
+                  className={`flex h-full items-center justify-center rounded-lg px-1 text-center text-[10px] font-semibold ${
+                    active
+                      ? "border border-violet-400/55 bg-violet-500/20 text-white"
+                      : "border border-transparent bg-white/5 text-white/85"
+                  }`}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        ) : (
           <div className="min-h-0 flex-1 space-y-1 overflow-y-auto">
             {sorted.map((opt) => {
               const active = selectedOptionId === opt.id;

@@ -262,35 +262,54 @@ export async function shouldSettleEngineMarket(
 ): Promise<boolean> {
   if (marketType !== "zone_exit_time") return false;
 
-  // region_label lives on character_live_sessions, not live_rooms.
-  // liveSessionId is passed in from the sweep caller.
-  const [marketRow, sessionRow] = await Promise.all([
-    service
-      .from("live_betting_markets")
-      .select("subtitle")
-      .eq("id", marketId)
-      .maybeSingle(),
-    liveSessionId
-      ? service
-          .from("character_live_sessions")
-          .select("region_label")
-          .eq("id", liveSessionId)
-          .maybeSingle()
-      : Promise.resolve({ data: null }),
-  ]);
-  let capturedZone: string | null = null;
+  if (!liveSessionId) return false;
+
+  const { data: marketRow } = await service
+    .from("live_betting_markets")
+    .select("subtitle, city_grid_spec")
+    .eq("id", marketId)
+    .maybeSingle();
+
+  const gridSpec = (marketRow as { city_grid_spec: CityGridSpecCompact | null } | null)
+    ?.city_grid_spec;
+  if (!gridSpec) return false;
+
+  let startCellKey: string | null = null;
   try {
     const meta = JSON.parse(
-      (marketRow.data as { subtitle: string | null } | null)?.subtitle ?? "{}",
-    ) as { capturedZone?: string | null };
-    capturedZone = meta.capturedZone ?? null;
+      (marketRow as { subtitle: string | null } | null)?.subtitle ?? "{}",
+    ) as { cellKey?: string | null };
+    startCellKey = meta.cellKey ?? null;
   } catch {
     // ignore parse errors
   }
-  const currentZone =
-    (sessionRow.data as { region_label: string | null } | null)?.region_label ?? null;
-  if (!capturedZone) return false;
-  return currentZone !== capturedZone;
+  if (!startCellKey) return false;
+
+  const { data: latestGps } = await service
+    .from("live_route_snapshots")
+    .select("normalized_lat,normalized_lng,raw_lat,raw_lng")
+    .eq("live_session_id", liveSessionId)
+    .order("recorded_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (!latestGps) return false;
+
+  const g = latestGps as {
+    normalized_lat: number | null;
+    normalized_lng: number | null;
+    raw_lat: number;
+    raw_lng: number;
+  };
+  const currentCell = cellIdForPosition(
+    gridSpec,
+    g.normalized_lat ?? g.raw_lat,
+    g.normalized_lng ?? g.raw_lng,
+  );
+  if (!currentCell) return false;
+  const parsed = parseGridOptionId(currentCell);
+  if (!parsed) return false;
+
+  return `cell:r${parsed.row}:c${parsed.col}` !== startCellKey;
 }
 
 // ─── Grid center helper ───────────────────────────────────────────────────────
