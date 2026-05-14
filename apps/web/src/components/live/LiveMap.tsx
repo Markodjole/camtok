@@ -1475,7 +1475,7 @@ export function LiveMap({
           </p>
         </div>
       )}
-      <div className="pointer-events-none absolute left-2 right-2 top-2 z-[2000] flex flex-wrap items-start justify-between gap-2">
+      <div className="pointer-events-none absolute left-2 right-12 top-11 z-[2000] flex flex-wrap items-start justify-between gap-1.5 sm:right-2 sm:top-2 sm:gap-2">
         <div className="flex flex-wrap items-center gap-1">
           {destinationRoute && destinationRoute.length > 1 ? (
             <span
@@ -1492,7 +1492,7 @@ export function LiveMap({
             </span>
           ) : null}
         </div>
-        <div className="flex max-w-[min(92%,280px)] flex-wrap justify-end gap-0.5 opacity-85">
+        <div className="flex max-w-[min(100%,240px)] flex-wrap justify-end gap-0.5 opacity-85 sm:max-w-[min(92%,280px)]">
           {(driverRouteBadges ?? []).map((label) => (
             <span
               key={label}

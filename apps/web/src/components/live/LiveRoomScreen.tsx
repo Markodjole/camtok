@@ -45,6 +45,7 @@ import {
 import { useViewerChromeStore } from "@/stores/viewer-chrome-store";
 import type { BetTypeV2 } from "@bettok/live";
 import { isEngineMarketType } from "@/lib/live/betting/engineMarketOptions";
+import { useUserStore } from "@/stores/user-store";
 
 const LiveMap = dynamic(() => import("./LiveMap").then((m) => m.LiveMap), {
   ssr: false,
@@ -90,6 +91,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     initialRoom.routePoints ?? [],
   );
   const lastStakeAmount = useViewerChromeStore((s) => s.lastStakeAmount);
+  const isMuted = useViewerChromeStore((s) => s.isMuted);
+  const wallet = useUserStore((s) => s.wallet);
+  const setWallet = useUserStore((s) => s.setWallet);
   const [placingOptionId, setPlacingOptionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [mapSheetError, setMapSheetError] = useState<string | null>(null);
@@ -100,6 +104,12 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     amount: number;
     /** Optional descriptor, e.g. "0–1 stops"; rendered as `$2 on 0–1 stops`. */
     target?: string | null;
+  } | null>(null);
+  const [balanceWinSplash, setBalanceWinSplash] = useState<{
+    from: number;
+    to: number;
+    gain: number;
+    nonce: number;
   } | null>(null);
   /** Cache of the most recent city_grid spec so zone polygons keep showing
    *  even while an engine market is the current round. */
@@ -177,6 +187,30 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       }, ms);
     },
     [],
+  );
+  const pulseBalanceWin = useCallback(
+    (gain: number) => {
+      if (!Number.isFinite(gain) || gain <= 0) return;
+      const from = Number(wallet?.balance ?? 0);
+      const to = from + gain;
+
+      setBalanceWinSplash({
+        from,
+        to,
+        gain,
+        nonce: Date.now(),
+      });
+      playMoneySound(isMuted);
+
+      if (wallet) {
+        setWallet({
+          ...wallet,
+          balance: to,
+          total_won: Number(wallet.total_won ?? 0) + gain,
+        });
+      }
+    },
+    [isMuted, setWallet, wallet],
   );
 
   useEffect(() => {
@@ -418,11 +452,12 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       });
       if (data.won) {
         pulseCenterMoney("win", data.payoutAmount, targetLabel);
+        pulseBalanceWin(data.payoutAmount);
       } else {
         pulseCenterMoney("loss", data.stakeAmount, targetLabel);
       }
     },
-    [pulseCenterMoney],
+    [pulseBalanceWin, pulseCenterMoney],
   );
 
   const onViewerRoomActivity = useCallback(
@@ -568,6 +603,15 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           const spec = market.cityGridSpec;
           const p = parseGridOptionId(optionId);
           pickedLabel = p && spec ? cellLabel(p.row, p.col) : optionId;
+        } else if (market.marketType === "zone_exit_time") {
+          pickedLabel =
+            zoneTimeOptionLabel(
+              optionId,
+              estimatedZoneSecondsRemaining(market, Date.now()),
+            ) ??
+            market.options.find((o) => o.id === optionId)?.shortLabel ??
+            market.options.find((o) => o.id === optionId)?.label ??
+            null;
         } else {
           pickedLabel =
             market.options.find((o) => o.id === optionId)?.shortLabel ??
@@ -739,9 +783,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
    *    WIDE was 2200 m — viewer asked to bring this in so adjacent cells stay
    *    big enough to tap accurately.
    */
-  const ZOOM_TIER_TIGHT_M = 280;
-  const ZOOM_TIER_MID_M = 760;
-  const ZOOM_TIER_WIDE_M = 1200;
+  const ZOOM_TIER_TIGHT_M = 320;
+  const ZOOM_TIER_MID_M = 850;
+  const ZOOM_TIER_WIDE_M = 1350;
   const viewerTargetWidthMeters = (() => {
     switch (mapBetTypeForCamera) {
       case "next_turn":
@@ -1088,14 +1132,10 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
    * subtitle as `estimatedSec` and set at market-open time by the server.
    */
   const zoneTimeRemainingEstSec = useMemo(() => {
-    if (currentMarket?.marketType !== "zone_exit_time") return null;
-    const T = currentMarket.meta?.estimatedSec;
-    if (typeof T !== "number") return null;
-    const opensAtMs = Date.parse(currentMarket.opensAt);
-    if (!Number.isFinite(opensAtMs)) return T;
-    const elapsedSec = Math.floor((nowTick - opensAtMs) / 1000);
-    return Math.max(0, T - elapsedSec);
-  }, [currentMarket?.marketType, currentMarket?.meta, currentMarket?.opensAt, nowTick]);
+    return currentMarket
+      ? estimatedZoneSecondsRemaining(currentMarket, nowTick)
+      : null;
+  }, [currentMarket, nowTick]);
 
   /**
    * One-touch sheet: tapping an option places the bet immediately. The only
@@ -1360,6 +1400,15 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           kind={centerMoneyFlash.kind}
           amount={centerMoneyFlash.amount}
           target={centerMoneyFlash.target ?? null}
+        />
+      ) : null}
+      {balanceWinSplash ? (
+        <BalanceWinSplash
+          key={balanceWinSplash.nonce}
+          from={balanceWinSplash.from}
+          to={balanceWinSplash.to}
+          gain={balanceWinSplash.gain}
+          onDone={() => setBalanceWinSplash(null)}
         />
       ) : null}
 
@@ -1701,6 +1750,41 @@ function fmtUsdFlash(n: number): string {
   return Number.isInteger(r) ? String(r) : r.toFixed(2);
 }
 
+function playMoneySound(muted: boolean) {
+  if (muted || typeof window === "undefined") return;
+  try {
+    const AudioCtx =
+      window.AudioContext ??
+      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const master = ctx.createGain();
+    master.gain.setValueAtTime(0.0001, ctx.currentTime);
+    master.gain.exponentialRampToValueAtTime(0.11, ctx.currentTime + 0.015);
+    master.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.42);
+    master.connect(ctx.destination);
+
+    [880, 1175, 1568].forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      const start = ctx.currentTime + i * 0.075;
+      osc.type = "triangle";
+      osc.frequency.setValueAtTime(freq, start);
+      gain.gain.setValueAtTime(0.0001, start);
+      gain.gain.exponentialRampToValueAtTime(0.75, start + 0.018);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.16);
+      osc.connect(gain);
+      gain.connect(master);
+      osc.start(start);
+      osc.stop(start + 0.18);
+    });
+
+    window.setTimeout(() => void ctx.close().catch(() => undefined), 700);
+  } catch {
+    // Sound is non-critical; browsers may block audio until the first gesture.
+  }
+}
+
 /** Full-screen center money cue: stake (white), win (green +payout), loss (red -stake). */
 function ViewerCenterMoneyFlash({
   kind,
@@ -1748,6 +1832,88 @@ function ViewerCenterMoneyFlash({
   );
 }
 
+function BalanceWinSplash({
+  from,
+  to,
+  gain,
+  onDone,
+}: {
+  from: number;
+  to: number;
+  gain: number;
+  onDone: () => void;
+}) {
+  const [display, setDisplay] = useState(from);
+
+  useEffect(() => {
+    const duration = 1250;
+    const started = performance.now();
+    let raf = 0;
+
+    const frame = (now: number) => {
+      const p = Math.min(1, (now - started) / duration);
+      const eased = 1 - Math.pow(1 - p, 3);
+      setDisplay(from + (to - from) * eased);
+      if (p < 1) {
+        raf = requestAnimationFrame(frame);
+      } else {
+        setDisplay(to);
+        window.setTimeout(onDone, 700);
+      }
+    };
+
+    raf = requestAnimationFrame(frame);
+    return () => cancelAnimationFrame(raf);
+  }, [from, onDone, to]);
+
+  return (
+    <div className="pointer-events-none fixed inset-0 z-[246] flex items-center justify-center">
+      <div className="relative flex flex-col items-center rounded-3xl border border-emerald-300/35 bg-black/55 px-7 py-5 text-center shadow-[0_0_42px_rgba(16,185,129,0.55)] backdrop-blur-md">
+        <div className="absolute inset-[-18px] rounded-[2rem] border border-emerald-300/30 opacity-70 animate-ping" />
+        {["$", "$", "$", "$", "$", "$"].map((coin, i) => (
+          <span
+            key={i}
+            className="absolute text-lg font-black text-emerald-200/80 [text-shadow:0_0_10px_rgba(16,185,129,0.95)]"
+            style={{
+              left: `${10 + i * 16}%`,
+              top: `${i % 2 === 0 ? -16 : 96}%`,
+              animation: `money-splash-${i % 3} 1050ms ease-out forwards`,
+            }}
+          >
+            {coin}
+          </span>
+        ))}
+        <div className="text-[10px] font-black uppercase tracking-[0.28em] text-emerald-200/80">
+          Balance
+        </div>
+        <div className="mt-1 text-4xl font-black tabular-nums text-emerald-300 [text-shadow:0_0_24px_rgba(16,185,129,0.9)]">
+          ${fmtUsdFlash(display)}
+        </div>
+        <div className="mt-1 rounded-full bg-emerald-400/20 px-3 py-1 text-sm font-black text-emerald-100">
+          +${fmtUsdFlash(gain)}
+        </div>
+      </div>
+      <style jsx>{`
+        @keyframes money-splash-0 {
+          from { transform: translate3d(0, 0, 0) scale(0.5) rotate(0deg); opacity: 0; }
+          18% { opacity: 1; }
+          to { transform: translate3d(-26px, -48px, 0) scale(1.25) rotate(-18deg); opacity: 0; }
+        }
+        @keyframes money-splash-1 {
+          from { transform: translate3d(0, 0, 0) scale(0.5) rotate(0deg); opacity: 0; }
+          18% { opacity: 1; }
+          to { transform: translate3d(18px, -54px, 0) scale(1.18) rotate(22deg); opacity: 0; }
+        }
+        @keyframes money-splash-2 {
+          from { transform: translate3d(0, 0, 0) scale(0.5) rotate(0deg); opacity: 0; }
+          18% { opacity: 1; }
+          to { transform: translate3d(34px, 38px, 0) scale(1.2) rotate(15deg); opacity: 0; }
+        }
+      `}</style>
+    </div>
+  );
+}
+
 function formatDistance(m: number): string {
   if (!Number.isFinite(m) || m <= 0) return "0 m";
   if (m < 1000) return `${Math.round(m)} m`;
@@ -1761,6 +1927,26 @@ function formatEta(sec: number): string {
   const h = Math.floor(minutes / 60);
   const r = minutes % 60;
   return r === 0 ? `${h} h` : `${h} h ${r} min`;
+}
+
+function estimatedZoneSecondsRemaining(
+  market: NonNullable<LiveFeedRow["currentMarket"]>,
+  nowMs: number,
+): number | null {
+  if (market.marketType !== "zone_exit_time") return null;
+  const T = market.meta?.estimatedSec;
+  if (typeof T !== "number") return null;
+  const opensAtMs = Date.parse(market.opensAt);
+  if (!Number.isFinite(opensAtMs)) return T;
+  return Math.max(0, T - Math.floor((nowMs - opensAtMs) / 1000));
+}
+
+function zoneTimeOptionLabel(optionId: string, remainingSec: number | null): string | null {
+  if (remainingSec == null) return null;
+  if (optionId === "exit_under") return `< ${remainingSec} sec`;
+  if (optionId === "exit_at") return `= ${remainingSec} sec`;
+  if (optionId === "exit_over") return `> ${remainingSec} sec`;
+  return null;
 }
 
 function MarketTimer({ locksAt }: { locksAt: string }) {
@@ -1876,13 +2062,9 @@ function MapSelectionBottomSheet({
           <div className="grid min-h-0 flex-1 grid-cols-3 gap-1">
             {zoneTimeOptions.map((opt) => {
               const active = selectedOptionId === opt.id;
-              const t = zoneTimeRemainingEstSec ?? 0;
               const label =
-                opt.id === "exit_under"
-                  ? `< ${t} s`
-                  : opt.id === "exit_at"
-                    ? `≈ ${t} s`
-                    : `> ${t} s`;
+                zoneTimeOptionLabel(opt.id, zoneTimeRemainingEstSec) ??
+                (opt.shortLabel ?? opt.label);
               return (
                 <button
                   key={opt.id}
@@ -1906,24 +2088,31 @@ function MapSelectionBottomSheet({
           <div className="grid min-h-0 flex-1 grid-cols-3 gap-1">
             {turnOptions.map((opt) => {
               const active = selectedOptionId === opt.id;
+              const arrow =
+                opt.id === "left"
+                  ? "←"
+                  : opt.id === "right"
+                    ? "→"
+                    : "↑";
               const label =
                 opt.id === "left"
-                  ? "← Left"
+                  ? "Left"
                   : opt.id === "right"
-                    ? "Right →"
-                    : "↑ Forward";
+                    ? "Right"
+                    : "Straight";
               return (
                 <button
                   key={opt.id}
                   type="button"
                   onClick={() => void onSelectOption(opt.id)}
-                  className={`flex h-full items-center justify-center rounded-lg px-1 text-center text-[10px] font-semibold ${
+                  className={`flex h-full flex-col items-center justify-center gap-0.5 rounded-lg px-1 text-center font-semibold ${
                     active
                       ? "border border-violet-400/55 bg-violet-500/20 text-white"
                       : "border border-transparent bg-white/5 text-white/85"
                   }`}
                 >
-                  {label}
+                  <span className="text-base leading-none">{arrow}</span>
+                  <span className="text-[9px] leading-none">{label}</span>
                 </button>
               );
             })}

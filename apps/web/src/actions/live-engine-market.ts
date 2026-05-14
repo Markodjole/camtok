@@ -3,7 +3,12 @@
 import { unstable_noStore } from "next/cache";
 import { createServiceClient } from "@/lib/supabase/server";
 import type { BetTypeV2, LiveMarketOption } from "@bettok/live";
-import { metersBetween } from "@/lib/live/routing/geometry";
+import { fetchGoogleDirectionsRoute } from "@/lib/live/routing/googleDirections";
+import { metersBetween, type LatLng } from "@/lib/live/routing/geometry";
+import {
+  normalizeDrivingRouteStyle,
+  type DrivingRouteStyle,
+} from "@/lib/live/routing/drivingRouteStyle";
 import { computeEqualOdds } from "@/lib/live/betting/marketOdds";
 import {
   BET_OPEN_WINDOW_MS,
@@ -55,10 +60,17 @@ export async function openEngineMarketForRoom(
 
   const { data: sessionRow } = await service
     .from("character_live_sessions")
-    .select("region_label")
+    .select("region_label,destination_lat,destination_lng,transport_mode,character_id")
     .eq("id", sessionId)
     .maybeSingle();
-  const capturedZone = (sessionRow as { region_label: string | null } | null)?.region_label ?? null;
+  const session = sessionRow as {
+    region_label: string | null;
+    destination_lat: number | null;
+    destination_lng: number | null;
+    transport_mode: string | null;
+    character_id: string | null;
+  } | null;
+  const capturedZone = session?.region_label ?? null;
 
   const ctx = await loadGridCenterContext(service, sessionId, roomId);
   if (!ctx.ok) return { error: ctx.error };
@@ -105,20 +117,42 @@ export async function openEngineMarketForRoom(
 
   const betType: BetTypeV2 = "zone_exit_time";
 
-  // Compute estimated seconds to zone exit from heading/speed/cell geometry.
-  const T = estimateZoneExitSec(
-    { lat: driverLat, lng: driverLng },
-    center,
-    headingDeg ?? 0,
-    speedMps ?? 5,
+  const drivingRouteStyle = await loadDrivingRouteStyle(service, session?.character_id ?? null);
+
+  const routeEstimate = await estimateZoneExitSecFromGoogleRoute({
+    driver: { lat: driverLat, lng: driverLng },
+    destination:
+      session?.destination_lat != null && session.destination_lng != null
+        ? { lat: session.destination_lat, lng: session.destination_lng }
+        : null,
+    transportMode: session?.transport_mode ?? null,
+    drivingRouteStyle,
+    currentCellId: ctx.cellId,
     spec,
-  );
+    fallbackSpeedMps: speedMps ?? 5,
+  });
+
+  // Prefer Google road-path timing. Fall back to heading/speed geometry if
+  // there is no destination route or Google temporarily fails.
+  const estimate =
+    routeEstimate ??
+    {
+      sec: estimateZoneExitSecRay(
+        { lat: driverLat, lng: driverLng },
+        center,
+        headingDeg ?? 0,
+        speedMps ?? 5,
+        spec,
+      ),
+      source: "ray" as const,
+    };
+  const T = estimate.sec;
 
   // Options use a real computed threshold T so viewers see a meaningful number.
   const options: LiveMarketOption[] = [
-    { id: "exit_under", label: `Under ${T} seconds`, shortLabel: `< ${T} s`, displayOrder: 0 },
-    { id: "exit_at",    label: `Around ${T} seconds`, shortLabel: `≈ ${T} s`, displayOrder: 1 },
-    { id: "exit_over",  label: `Over ${T} seconds`,   shortLabel: `> ${T} s`, displayOrder: 2 },
+    { id: "exit_under", label: `Under ${T} seconds`, shortLabel: `< ${T} sec`, displayOrder: 0 },
+    { id: "exit_at",    label: `Exactly ${T} seconds`, shortLabel: `= ${T} sec`, displayOrder: 1 },
+    { id: "exit_over",  label: `Over ${T} seconds`,   shortLabel: `> ${T} sec`, displayOrder: 2 },
   ];
 
   // Equal odds for the 3-way time-bucket bet (5 % margin → 2.86 each).
@@ -137,7 +171,13 @@ export async function openEngineMarketForRoom(
       live_session_id: sessionId,
       source: "system_generated",
       title,
-      subtitle: JSON.stringify({ capturedZone, cellKey, triggerPhase: candidatePhase, estimatedSec: T }),
+      subtitle: JSON.stringify({
+        capturedZone,
+        cellKey,
+        triggerPhase: candidatePhase,
+        estimatedSec: T,
+        estimateSource: estimate.source,
+      }),
       market_type: betType,
       option_set: options,
       city_grid_spec: spec as unknown as Record<string, unknown>,
@@ -390,18 +430,112 @@ async function loadGridCenterContext(
   };
 }
 
+async function loadDrivingRouteStyle(
+  service: Awaited<ReturnType<typeof createServiceClient>>,
+  characterId: string | null,
+): Promise<DrivingRouteStyle | null> {
+  if (!characterId) return null;
+  const { data } = await service
+    .from("characters")
+    .select("driving_route_style")
+    .eq("id", characterId)
+    .maybeSingle();
+  return normalizeDrivingRouteStyle(
+    (data as { driving_route_style: unknown } | null)?.driving_route_style,
+  );
+}
+
 /**
- * Estimate the number of seconds the driver will remain inside the current
- * grid cell, given their position, heading, speed, and the cell geometry.
- *
- * Uses a ray → axis-aligned rectangle intersection: cast a ray from the
- * driver's position in the heading direction and find the closest cell-wall
- * crossing.  distanceToWall / speed = estimated seconds.
- *
- * Result is rounded to the nearest 5 s and clamped to [10, 180] so the
- * bet options are always clean, readable numbers.
+ * Preferred zone-exit estimate: ask Google for the current road route, then
+ * walk along that polyline until it crosses out of the captured grid cell.
+ * The displayed threshold is the proportional Google route duration to that
+ * crossing point.
  */
-function estimateZoneExitSec(
+async function estimateZoneExitSecFromGoogleRoute(params: {
+  driver: LatLng;
+  destination: LatLng | null;
+  transportMode: string | null;
+  drivingRouteStyle: DrivingRouteStyle | null;
+  currentCellId: string;
+  spec: CityGridSpecCompact;
+  fallbackSpeedMps: number;
+}): Promise<{ sec: number; source: "google_route" } | null> {
+  const {
+    driver,
+    destination,
+    transportMode,
+    drivingRouteStyle,
+    currentCellId,
+    spec,
+    fallbackSpeedMps,
+  } = params;
+  if (!destination) return null;
+
+  const route = await fetchGoogleDirectionsRoute(driver, destination, {
+    transportMode: transportMode ?? undefined,
+    drivingRouteStyle,
+  });
+  if (!route || route.polyline.length < 2) return null;
+
+  const points = [driver, ...route.polyline];
+  let travelledM = 0;
+  for (let i = 1; i < points.length; i += 1) {
+    const a = points[i - 1]!;
+    const b = points[i]!;
+    const segM = metersBetween(a, b);
+    if (segM <= 0) continue;
+
+    const bCell = cellIdForPosition(spec, b.lat, b.lng);
+    if (bCell === currentCellId) {
+      travelledM += segM;
+      continue;
+    }
+
+    const crossing = findCellExitPoint(a, b, currentCellId, spec);
+    const exitDistanceM = travelledM + metersBetween(a, crossing);
+    const raw =
+      route.distanceMeters > 0 && route.durationSec > 0
+        ? route.durationSec * (exitDistanceM / route.distanceMeters)
+        : exitDistanceM / Math.max(1, fallbackSpeedMps);
+    return { sec: roundCleanSec(raw), source: "google_route" };
+  }
+
+  return null;
+}
+
+function findCellExitPoint(
+  inside: LatLng,
+  outside: LatLng,
+  currentCellId: string,
+  spec: CityGridSpecCompact,
+): LatLng {
+  let lo = inside;
+  let hi = outside;
+  for (let i = 0; i < 24; i += 1) {
+    const mid = {
+      lat: (lo.lat + hi.lat) / 2,
+      lng: (lo.lng + hi.lng) / 2,
+    };
+    const midCell = cellIdForPosition(spec, mid.lat, mid.lng);
+    if (midCell === currentCellId) {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+  return hi;
+}
+
+function roundCleanSec(raw: number): number {
+  if (!Number.isFinite(raw) || raw <= 0) return 30;
+  return Math.max(10, Math.min(180, Math.round(raw / 5) * 5));
+}
+
+/**
+ * Fallback if Google has no route: cast a straight ray from the driver in
+ * their heading direction and estimate time to the nearest cell wall.
+ */
+function estimateZoneExitSecRay(
   pos: { lat: number; lng: number },
   center: { lat: number; lng: number },
   headingDeg: number,
@@ -442,6 +576,5 @@ function estimateZoneExitSec(
   const distanceM = (tMin / spec.dLat) * spec.cellMeters;
   const raw = distanceM / Math.max(1, speedMps);
 
-  // Round to nearest 5 s, clamp to 10–180 s
-  return Math.max(10, Math.min(180, Math.round(raw / 5) * 5));
+  return roundCleanSec(raw);
 }

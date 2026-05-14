@@ -76,9 +76,9 @@ export function provisionalOptionsForBetType(type: BetTypeV2): EngineMarketOptio
       ];
     case "zone_exit_time":
       return [
-        { id: "exit_under", label: "Under estimated time", shortLabel: "< ? s", displayOrder: 0 },
-        { id: "exit_at",    label: "Around estimated time", shortLabel: "≈ ? s", displayOrder: 1 },
-        { id: "exit_over",  label: "Over estimated time",  shortLabel: "> ? s", displayOrder: 2 },
+        { id: "exit_under", label: "Under estimated time", shortLabel: "< ? sec", displayOrder: 0 },
+        { id: "exit_at",    label: "Exactly estimated time", shortLabel: "= ? sec", displayOrder: 1 },
+        { id: "exit_over",  label: "Over estimated time",  shortLabel: "> ? sec", displayOrder: 2 },
       ];
     default:
       return [];
