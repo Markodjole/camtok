@@ -178,6 +178,7 @@ export async function getUserBetsForClip(clipNodeId: string) {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return [];
+  
 
   const { data } = await supabase
     .from("bets")
