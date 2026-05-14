@@ -1402,15 +1402,12 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           target={centerMoneyFlash.target ?? null}
         />
       ) : null}
-      {balanceWinSplash ? (
-        <BalanceWinSplash
-          key={balanceWinSplash.nonce}
-          from={balanceWinSplash.from}
-          to={balanceWinSplash.to}
-          gain={balanceWinSplash.gain}
-          onDone={() => setBalanceWinSplash(null)}
-        />
-      ) : null}
+      {/* Persistent balance badge — always visible, animates on win */}
+      <BalanceBadge
+        balance={Number(wallet?.balance ?? 0)}
+        splash={balanceWinSplash}
+        onSplashDone={() => setBalanceWinSplash(null)}
+      />
 
       {/* Replay sheet — shown when user taps history button */}
       {showReplay && (
@@ -1832,82 +1829,115 @@ function ViewerCenterMoneyFlash({
   );
 }
 
-function BalanceWinSplash({
-  from,
-  to,
-  gain,
-  onDone,
+/**
+ * Persistent compact balance badge.
+ * Positioned fixed top-right, below the history button.
+ * When a win fires it count-ups in-place with a green glow + coin sparks.
+ */
+function BalanceBadge({
+  balance,
+  splash,
+  onSplashDone,
 }: {
-  from: number;
-  to: number;
-  gain: number;
-  onDone: () => void;
+  balance: number;
+  splash: { from: number; to: number; gain: number; nonce: number } | null;
+  onSplashDone: () => void;
 }) {
-  const [display, setDisplay] = useState(from);
+  const [display, setDisplay] = useState(balance);
+  const [animating, setAnimating] = useState(false);
+
+  // Keep idle display in sync with wallet changes (non-win updates)
+  useEffect(() => {
+    if (!splash) setDisplay(balance);
+  }, [balance, splash]);
 
   useEffect(() => {
-    const duration = 1250;
+    if (!splash) return;
+    setAnimating(true);
+    setDisplay(splash.from);
+    const duration = 1200;
     const started = performance.now();
     let raf = 0;
 
     const frame = (now: number) => {
       const p = Math.min(1, (now - started) / duration);
       const eased = 1 - Math.pow(1 - p, 3);
-      setDisplay(from + (to - from) * eased);
+      setDisplay(splash.from + (splash.to - splash.from) * eased);
       if (p < 1) {
         raf = requestAnimationFrame(frame);
       } else {
-        setDisplay(to);
-        window.setTimeout(onDone, 700);
+        setDisplay(splash.to);
+        window.setTimeout(() => {
+          setAnimating(false);
+          onSplashDone();
+        }, 600);
       }
     };
 
     raf = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(raf);
-  }, [from, onDone, to]);
+  }, [splash, onSplashDone]);
 
   return (
-    <div className="pointer-events-none fixed inset-0 z-[246] flex items-center justify-center">
-      <div className="relative flex flex-col items-center rounded-3xl border border-emerald-300/35 bg-black/55 px-7 py-5 text-center shadow-[0_0_42px_rgba(16,185,129,0.55)] backdrop-blur-md">
-        <div className="absolute inset-[-18px] rounded-[2rem] border border-emerald-300/30 opacity-70 animate-ping" />
-        {["$", "$", "$", "$", "$", "$"].map((coin, i) => (
-          <span
-            key={i}
-            className="absolute text-lg font-black text-emerald-200/80 [text-shadow:0_0_10px_rgba(16,185,129,0.95)]"
-            style={{
-              left: `${10 + i * 16}%`,
-              top: `${i % 2 === 0 ? -16 : 96}%`,
-              animation: `money-splash-${i % 3} 1050ms ease-out forwards`,
-            }}
-          >
-            {coin}
-          </span>
-        ))}
-        <div className="text-[10px] font-black uppercase tracking-[0.28em] text-emerald-200/80">
-          Balance
-        </div>
-        <div className="mt-1 text-4xl font-black tabular-nums text-emerald-300 [text-shadow:0_0_24px_rgba(16,185,129,0.9)]">
-          ${fmtUsdFlash(display)}
-        </div>
-        <div className="mt-1 rounded-full bg-emerald-400/20 px-3 py-1 text-sm font-black text-emerald-100">
-          +${fmtUsdFlash(gain)}
-        </div>
+    <div
+      className={[
+        "pointer-events-none fixed right-3 top-11 z-[62]",
+        "flex flex-col items-end gap-0.5",
+      ].join(" ")}
+    >
+      {/* Balance pill */}
+      <div
+        className={[
+          "relative flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-black tabular-nums transition-shadow duration-300",
+          animating
+            ? "border border-emerald-400/60 bg-black/60 text-emerald-300 shadow-[0_0_14px_rgba(16,185,129,0.7)] backdrop-blur-md"
+            : "border border-white/10 bg-black/40 text-white/80 shadow-md backdrop-blur-md",
+        ].join(" ")}
+      >
+        {animating && (
+          <>
+            {["$", "$", "$", "$"].map((coin, i) => (
+              <span
+                key={i}
+                className="pointer-events-none absolute text-[10px] font-black text-emerald-300"
+                style={{
+                  left: `${15 + i * 22}%`,
+                  top: "-4px",
+                  animation: `bal-coin-${i % 3} 900ms ease-out forwards`,
+                  animationDelay: `${i * 60}ms`,
+                }}
+              >
+                {coin}
+              </span>
+            ))}
+          </>
+        )}
+        <span className="text-[9px] opacity-60">$</span>
+        <span>{fmtUsdFlash(display)}</span>
       </div>
+
+      {/* +gain badge — only during animation */}
+      {animating && splash && (
+        <div className="rounded-full bg-emerald-500/25 px-2 py-0.5 text-[9px] font-black text-emerald-300">
+          +${fmtUsdFlash(splash.gain)}
+        </div>
+      )}
+
       <style jsx>{`
-        @keyframes money-splash-0 {
-          from { transform: translate3d(0, 0, 0) scale(0.5) rotate(0deg); opacity: 0; }
-          18% { opacity: 1; }
-          to { transform: translate3d(-26px, -48px, 0) scale(1.25) rotate(-18deg); opacity: 0; }
+        @keyframes bal-coin-0 {
+          from { transform: translate(0, 0) scale(0.6) rotate(0deg); opacity: 0; }
+          15% { opacity: 1; }
+          to { transform: translate(-10px, -22px) scale(1.1) rotate(-20deg); opacity: 0; }
         }
-        @keyframes money-splash-1 {
-          from { transform: translate3d(0, 0, 0) scale(0.5) rotate(0deg); opacity: 0; }
-          18% { opacity: 1; }
-          to { transform: translate3d(18px, -54px, 0) scale(1.18) rotate(22deg); opacity: 0; }
+        @keyframes bal-coin-1 {
+          from { transform: translate(0, 0) scale(0.6) rotate(0deg); opacity: 0; }
+          15% { opacity: 1; }
+          to { transform: translate(6px, -26px) scale(1.1) rotate(18deg); opacity: 0; }
         }
-        @keyframes money-splash-2 {
-          from { transform: translate3d(0, 0, 0) scale(0.5) rotate(0deg); opacity: 0; }
-          18% { opacity: 1; }
-          to { transform: translate3d(34px, 38px, 0) scale(1.2) rotate(15deg); opacity: 0; }
+        @keyframes bal-coin-2 {
+          from { transform: translate(0, 0) scale(0.6) rotate(0deg); opacity: 0; }
+          15% { opacity: 1; }
+          to { transform: translate(18px, -18px) scale(1) rotate(30deg); opacity: 0; }
         }
       `}</style>
     </div>
