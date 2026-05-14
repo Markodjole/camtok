@@ -16,8 +16,17 @@
  *    opens immediately when the screen clears (see tick route).
  */
 
-/** Bet popup stays on screen for exactly this long (unless user bets sooner). */
-export const BET_OPEN_WINDOW_MS = 7_000;
+/**
+ * Bet popup minimum display time. Every market stays open for at least this long.
+ * When the queue is empty the opener extends to BET_OPEN_WINDOW_IDLE_MS instead.
+ */
+export const BET_OPEN_WINDOW_MS = 8_000;
+
+/**
+ * Extended window used when there are no queued triggers waiting — viewer gets
+ * the full 12 seconds to decide.
+ */
+export const BET_OPEN_WINDOW_IDLE_MS = 12_000;
 
 // ─── next_zone ────────────────────────────────────────────────────────────────
 

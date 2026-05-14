@@ -27,7 +27,7 @@ import { computeEqualOdds } from "@/lib/live/betting/marketOdds";
  */
 export async function openNextTurnMarketForRoom(
   roomId: string,
-  opts?: { queuedPinId?: number },
+  opts?: { queuedPinId?: number; windowMs?: number },
 ) {
   unstable_noStore();
   const service = await createServiceClient();
@@ -123,7 +123,8 @@ export async function openNextTurnMarketForRoom(
   const odds = computeEqualOdds(options);
 
   const now = new Date();
-  const locksAt = new Date(now.getTime() + BET_OPEN_WINDOW_MS);
+  const windowMs = opts?.windowMs ?? BET_OPEN_WINDOW_MS;
+  const locksAt = new Date(now.getTime() + windowMs);
   const revealAt = new Date(now.getTime() + 60_000);
 
   const { data: market, error: marketError } = await service

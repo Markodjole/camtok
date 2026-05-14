@@ -134,6 +134,16 @@ const PLANNING_ROUTE_CACHE = new Map<string, PlanningCacheEntry>();
 const PLANNING_ROUTE_TTL_MS = 30_000;
 const PLANNING_DRIVER_BUCKET_DEG = 0.0008; // ~85 m
 
+/**
+ * Force-expire the planning route cache for a room so the next call to
+ * `computeDriverRouteInstruction` (or a zone-exit estimate) fetches a
+ * completely fresh polyline from Google.  Call this immediately before
+ * triggering a zone_exit_time market.
+ */
+export function bustPlanningRouteCache(roomId: string): void {
+  PLANNING_ROUTE_CACHE.delete(roomId);
+}
+
 function planningBucket(p: LatLng): string {
   const lat = Math.round(p.lat / PLANNING_DRIVER_BUCKET_DEG);
   const lng = Math.round(p.lng / PLANNING_DRIVER_BUCKET_DEG);

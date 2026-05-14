@@ -20,6 +20,8 @@ import { openNextTurnMarketForRoom } from "@/actions/live-next-turn-market";
 import { lockMarket, revealAndSettleMarket } from "@/actions/live-settlement";
 import { isEngineMarketType } from "@/lib/live/betting/engineMarketOptions";
 import {
+  BET_OPEN_WINDOW_MS,
+  BET_OPEN_WINDOW_IDLE_MS,
   NEXT_TURN_PIN_MIN_M,
   NEXT_TURN_PIN_MAX_M,
   NEXT_ZONE_TRIGGER_M,
@@ -320,8 +322,11 @@ async function openFromQueueOrTriggers(
     .filter((t) => now - t.queuedAt < QUEUE_EXPIRY_MS)
     .sort((a, b) => triggerPriority(a) - triggerPriority(b));
 
-  for (const trigger of prioritySorted) {
-    const res = await openQueuedTrigger(trigger, roomId);
+  for (let i = 0; i < prioritySorted.length; i++) {
+    const trigger = prioritySorted[i]!;
+    // remaining = triggers still waiting after this one opens
+    const remaining = prioritySorted.length - 1 - i + fresh.length;
+    const res = await openQueuedTrigger(trigger, roomId, remaining);
     if ("marketId" in res && res.marketId) {
       return { action: `opened_${trigger.type}_from_queue`, detail: { marketId: res.marketId, trigger } };
     }
@@ -332,8 +337,10 @@ async function openFromQueueOrTriggers(
   }
 
   const freshSorted = [...fresh].sort((a, b) => freshPriority(a) - freshPriority(b));
-  for (const ft of freshSorted) {
-    const res = await openFreshTrigger(ft, roomId);
+  for (let i = 0; i < freshSorted.length; i++) {
+    const ft = freshSorted[i]!;
+    const remaining = freshSorted.length - 1 - i;
+    const res = await openFreshTrigger(ft, roomId, remaining);
     if ("marketId" in res && res.marketId) {
       return { action: `opened_${ft.type}`, detail: { marketId: res.marketId } };
     }
@@ -367,18 +374,37 @@ function freshPriority(t: FreshTrigger): number {
   return 3 + phases.indexOf(t.phase as ZoneExitPhase);
 }
 
-async function openQueuedTrigger(trigger: QueuedTrigger, roomId: string) {
-  if (trigger.type === "next_turn") {
-    return openNextTurnMarketForRoom(roomId, { queuedPinId: trigger.pinId });
-  }
-  if (trigger.type === "next_zone") return openCityGridMarketForRoom(roomId);
-  return openEngineMarketForRoom(roomId, { phase: trigger.phase });
+/**
+ * Compute the bet window for this open event.
+ * Rule: at least BET_OPEN_WINDOW_MS (8 s), up to BET_OPEN_WINDOW_IDLE_MS (12 s)
+ * when there is nothing else queued.
+ */
+function betWindowMs(remainingQueueSize: number): number {
+  return remainingQueueSize > 0 ? BET_OPEN_WINDOW_MS : BET_OPEN_WINDOW_IDLE_MS;
 }
 
-async function openFreshTrigger(ft: FreshTrigger, roomId: string) {
-  if (ft.type === "next_turn") return openNextTurnMarketForRoom(roomId);
-  if (ft.type === "next_zone") return openCityGridMarketForRoom(roomId);
-  return openEngineMarketForRoom(roomId, { phase: ft.phase as ZoneExitPhase });
+async function openQueuedTrigger(
+  trigger: QueuedTrigger,
+  roomId: string,
+  remainingQueueSize: number,
+) {
+  const windowMs = betWindowMs(remainingQueueSize);
+  if (trigger.type === "next_turn") {
+    return openNextTurnMarketForRoom(roomId, { queuedPinId: trigger.pinId, windowMs });
+  }
+  if (trigger.type === "next_zone") return openCityGridMarketForRoom(roomId, { windowMs });
+  return openEngineMarketForRoom(roomId, { phase: trigger.phase, windowMs });
+}
+
+async function openFreshTrigger(
+  ft: FreshTrigger,
+  roomId: string,
+  remainingFreshCount: number,
+) {
+  const windowMs = betWindowMs(remainingFreshCount);
+  if (ft.type === "next_turn") return openNextTurnMarketForRoom(roomId, { windowMs });
+  if (ft.type === "next_zone") return openCityGridMarketForRoom(roomId, { windowMs });
+  return openEngineMarketForRoom(roomId, { phase: ft.phase as ZoneExitPhase, windowMs });
 }
 
 // ─── Trigger detection ────────────────────────────────────────────────────────

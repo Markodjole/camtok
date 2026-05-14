@@ -12,6 +12,7 @@ import { getOrBuildGridSpecForRoom } from "@/lib/live/grid/gridSpecForRoom";
 import { Safety, type LiveMarketOption, type TransportMode } from "@bettok/live";
 import {
   BET_OPEN_WINDOW_MS,
+  BET_OPEN_WINDOW_IDLE_MS,
   NEXT_ZONE_TRIGGER_M,
 } from "@/lib/live/betting/betWindowConstants";
 import { metersBetween } from "@/lib/live/routing/geometry";
@@ -26,7 +27,10 @@ import { computeEqualOdds } from "@/lib/live/betting/marketOdds";
  *   center. This fires at most once per zone cell visit (dupe guard checks
  *   the last 30 markets for this room).
  */
-export async function openCityGridMarketForRoom(roomId: string) {
+export async function openCityGridMarketForRoom(
+  roomId: string,
+  opts?: { windowMs?: number },
+) {
   unstable_noStore();
   const service = await createServiceClient();
 
@@ -140,7 +144,8 @@ export async function openCityGridMarketForRoom(roomId: string) {
   const odds = computeEqualOdds(options);
 
   const now = new Date();
-  const locksAt = new Date(now.getTime() + BET_OPEN_WINDOW_MS);
+  const windowMs = opts?.windowMs ?? BET_OPEN_WINDOW_MS;
+  const locksAt = new Date(now.getTime() + windowMs);
   const revealAt = new Date(now.getTime() + 10 * 60_000);
 
   const { data: market, error: marketError } = await service

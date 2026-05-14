@@ -10,6 +10,7 @@ import {
   type DrivingRouteStyle,
 } from "@/lib/live/routing/drivingRouteStyle";
 import { computeEqualOdds } from "@/lib/live/betting/marketOdds";
+import { bustPlanningRouteCache } from "@/lib/live/routing/computeDriverRouteInstruction";
 import {
   BET_OPEN_WINDOW_MS,
   ZONE_EXIT_CENTER_TRIGGER_M,
@@ -39,7 +40,7 @@ export type ZoneExitPhase = "entry" | "center_70m" | "exit_outer";
  */
 export async function openEngineMarketForRoom(
   roomId: string,
-  opts?: { phase?: ZoneExitPhase },
+  opts?: { phase?: ZoneExitPhase; windowMs?: number },
 ) {
   unstable_noStore();
 
@@ -117,6 +118,10 @@ export async function openEngineMarketForRoom(
 
   const betType: BetTypeV2 = "zone_exit_time";
 
+  // Bust any in-process planning cache for this room so the route fetch below
+  // reflects the driver's current position, not a position up to 30 s stale.
+  bustPlanningRouteCache(roomId);
+
   const drivingRouteStyle = await loadDrivingRouteStyle(service, session?.character_id ?? null);
 
   const routeEstimate = await estimateZoneExitSecFromGoogleRoute({
@@ -134,6 +139,9 @@ export async function openEngineMarketForRoom(
 
   // Prefer Google road-path timing. Fall back to heading/speed geometry if
   // there is no destination route or Google temporarily fails.
+  // Ray fallback: GPS speed can be 0 when stopped at lights; clamp to at
+  // least 7 m/s (≈ 25 km/h) so the estimate is never absurdly large.
+  const RAY_MIN_SPEED_MPS = 7;
   const estimate =
     routeEstimate ??
     {
@@ -141,7 +149,7 @@ export async function openEngineMarketForRoom(
         { lat: driverLat, lng: driverLng },
         center,
         headingDeg ?? 0,
-        speedMps ?? 5,
+        Math.max(RAY_MIN_SPEED_MPS, speedMps ?? RAY_MIN_SPEED_MPS),
         spec,
       ),
       source: "ray" as const,
@@ -161,7 +169,8 @@ export async function openEngineMarketForRoom(
   const title = "Time left in zone";
 
   const now = new Date();
-  const locksAt = new Date(now.getTime() + BET_OPEN_WINDOW_MS);
+  const windowMs = opts?.windowMs ?? BET_OPEN_WINDOW_MS;
+  const locksAt = new Date(now.getTime() + windowMs);
   const revealAt = new Date(now.getTime() + 5 * 60_000);
 
   const { data: market, error: marketError } = await service
