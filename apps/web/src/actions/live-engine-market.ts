@@ -4,7 +4,7 @@ import { unstable_noStore } from "next/cache";
 import { createServiceClient } from "@/lib/supabase/server";
 import type { BetTypeV2, LiveMarketOption } from "@bettok/live";
 import { fetchGoogleDirectionsRoute } from "@/lib/live/routing/googleDirections";
-import { metersBetween, type LatLng } from "@/lib/live/routing/geometry";
+import { metersBetween, bearingDegrees, type LatLng } from "@/lib/live/routing/geometry";
 import {
   normalizeDrivingRouteStyle,
   type DrivingRouteStyle,
@@ -126,6 +126,7 @@ export async function openEngineMarketForRoom(
 
   const routeEstimate = await estimateZoneExitSecFromGoogleRoute({
     driver: { lat: driverLat, lng: driverLng },
+    driverHeadingDeg: headingDeg ?? null,
     destination:
       session?.destination_lat != null && session.destination_lng != null
         ? { lat: session.destination_lat, lng: session.destination_lng }
@@ -472,9 +473,18 @@ async function loadDrivingRouteStyle(
  * walk along that polyline until it crosses out of the captured grid cell.
  * The displayed threshold is the proportional Google route duration to that
  * crossing point.
+ *
+ * Safety checks:
+ * 1. The first meaningful segment of the route must be heading within 90° of
+ *    the driver's current GPS heading — if it's pointing backwards or sideways
+ *    the route is stale and we return null to trigger the ray fallback.
+ * 2. Polyline segments that are moving backwards relative to the driver's
+ *    heading (dot product < 0) are skipped so a circuitous route doesn't
+ *    produce a wildly wrong exit time.
  */
 async function estimateZoneExitSecFromGoogleRoute(params: {
   driver: LatLng;
+  driverHeadingDeg: number | null;
   destination: LatLng | null;
   transportMode: string | null;
   drivingRouteStyle: DrivingRouteStyle | null;
@@ -484,6 +494,7 @@ async function estimateZoneExitSecFromGoogleRoute(params: {
 }): Promise<{ sec: number; source: "google_route" } | null> {
   const {
     driver,
+    driverHeadingDeg,
     destination,
     transportMode,
     drivingRouteStyle,
@@ -499,6 +510,31 @@ async function estimateZoneExitSecFromGoogleRoute(params: {
   });
   if (!route || route.polyline.length < 2) return null;
 
+  // --- heading validation ---
+  // If we know where the driver is facing, confirm the route starts going
+  // in roughly the same direction (within 90°). A stale/wrong route that
+  // starts behind the driver will produce a huge or nonsensical estimate.
+  if (driverHeadingDeg != null) {
+    // Find the first polyline point that is meaningfully far from the driver.
+    const firstFarPoint = route.polyline.find(
+      (p) => metersBetween(driver, p) > 15,
+    );
+    if (firstFarPoint) {
+      const routeBearing = bearingDegrees(driver, firstFarPoint);
+      let diff = Math.abs(routeBearing - driverHeadingDeg) % 360;
+      if (diff > 180) diff = 360 - diff;
+      // Route is pointing more than 90° off the driver's heading → stale.
+      if (diff > 90) return null;
+    }
+  }
+
+  // Pre-compute driver heading unit vector for forward-check per segment.
+  const hdRad = driverHeadingDeg != null
+    ? (driverHeadingDeg * Math.PI) / 180
+    : null;
+  const hvN = hdRad != null ? Math.cos(hdRad) : null; // north component
+  const hvE = hdRad != null ? Math.sin(hdRad) : null; // east component
+
   const points = [driver, ...route.polyline];
   let travelledM = 0;
   for (let i = 1; i < points.length; i += 1) {
@@ -506,6 +542,15 @@ async function estimateZoneExitSecFromGoogleRoute(params: {
     const b = points[i]!;
     const segM = metersBetween(a, b);
     if (segM <= 0) continue;
+
+    // Skip segments that run backwards relative to the driver's heading.
+    // (Only applies while we're still inside the current cell.)
+    if (hvN != null && hvE != null) {
+      const segN = b.lat - a.lat;
+      const segE = b.lng - a.lng;
+      const dot = segN * hvN + segE * hvE;
+      if (dot < 0) continue; // backwards — skip
+    }
 
     const bCell = cellIdForPosition(spec, b.lat, b.lng);
     if (bCell === currentCellId) {
