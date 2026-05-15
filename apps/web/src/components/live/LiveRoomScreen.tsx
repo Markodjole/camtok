@@ -2373,40 +2373,28 @@ function MarketTimer({ locksAt }: { locksAt: string }) {
 }
 
 /** 0 = start of window (green-grey), 1 = lock (red-grey). */
-function useBetWindowUrgency(opensAt: string, locksAt: string): number {
+/** Returns seconds elapsed since the market opened. */
+function useBetWindowElapsed(opensAt: string): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 250);
     return () => clearInterval(id);
   }, []);
   const openMs = Date.parse(opensAt);
-  const lockMs = Date.parse(locksAt);
-  if (!Number.isFinite(openMs) || !Number.isFinite(lockMs) || lockMs <= openMs) return 0;
-  const remaining = Math.max(0, lockMs - now);
-  const total = lockMs - openMs;
-  return Math.min(1, Math.max(0, 1 - remaining / total));
+  if (!Number.isFinite(openMs)) return 0;
+  return Math.max(0, (now - openMs) / 1000);
 }
 
-function betSheetUrgencyBackground(progress: number): string {
-  const p = Math.min(1, Math.max(0, progress));
-  const greenGrey: [number, number, number] = [42, 48, 44];
-  const yellowGrey: [number, number, number] = [50, 47, 38];
-  const redGrey: [number, number, number] = [52, 40, 40];
-  let r: number;
-  let g: number;
-  let b: number;
-  if (p <= 0.5) {
-    const t = p / 0.5;
-    r = greenGrey[0] + (yellowGrey[0] - greenGrey[0]) * t;
-    g = greenGrey[1] + (yellowGrey[1] - greenGrey[1]) * t;
-    b = greenGrey[2] + (yellowGrey[2] - greenGrey[2]) * t;
-  } else {
-    const t = (p - 0.5) / 0.5;
-    r = yellowGrey[0] + (redGrey[0] - yellowGrey[0]) * t;
-    g = yellowGrey[1] + (redGrey[1] - yellowGrey[1]) * t;
-    b = yellowGrey[2] + (redGrey[2] - yellowGrey[2]) * t;
-  }
-  return `rgba(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)}, 0.72)`;
+/**
+ * Three distinct phases based on elapsed seconds:
+ *   0 – 4 s  → greenish grey  (plenty of time)
+ *   4 – 5 s  → yellowish grey (hurry up)
+ *   5 + s    → reddish grey   (last call, 3 s left of 8 s window)
+ */
+function betSheetUrgencyBackground(elapsedSec: number): string {
+  if (elapsedSec < 4) return "rgba(30, 46, 32, 0.78)";   // green-grey
+  if (elapsedSec < 5) return "rgba(50, 46, 22, 0.78)";   // yellow-grey
+  return "rgba(54, 24, 24, 0.78)";                         // red-grey
 }
 
 function MapSelectionBottomSheet({
@@ -2449,8 +2437,8 @@ function MapSelectionBottomSheet({
   zoneTimeRemainingEstSec?: number | null;
   oneTapOptionBet?: boolean;
 }) {
-  const urgency = useBetWindowUrgency(opensAt, locksAt);
-  const sheetBg = betSheetUrgencyBackground(urgency);
+  const elapsed = useBetWindowElapsed(opensAt);
+  const sheetBg = betSheetUrgencyBackground(elapsed);
   const sorted = [...marketOptions].sort((a, b) => a.displayOrder - b.displayOrder);
   const zoneTimeMode = zoneTimeRemainingEstSec != null;
   const zoneTimeOptions = zoneTimeMode
