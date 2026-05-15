@@ -1974,7 +1974,7 @@ function ZoneExitCountdownWidget({
   }, [pastZero, onExpired]);
 
   return (
-    <div className="pointer-events-none rounded-full border border-white/10 bg-black/40 px-2.5 py-1 text-xs font-medium tabular-nums text-white/85 backdrop-blur-md">
+    <div className="pointer-events-none flex h-11 w-11 items-center justify-center rounded-full border border-white/15 bg-black/30 text-sm font-semibold tabular-nums text-white/85 backdrop-blur">
       {remaining}
     </div>
   );
