@@ -11,7 +11,6 @@ import {
   enumerateGridCells,
   gridCellCenter,
   parseGridOptionId,
-  type Wgs84LatLngBoundsTuple,
 } from "@/lib/live/grid/cityGrid500";
 import { drivingRouteStyleBadges } from "@/lib/live/routing/drivingRouteStyle";
 import dynamic from "next/dynamic";
@@ -23,7 +22,11 @@ import {
 } from "@/lib/live/liveBetMinOpenMs";
 import { liveBetRelaxClient } from "@/lib/live/liveBetRelax";
 import { viewerLiveLog, viewerLiveWarn } from "@/lib/live/viewerLiveConsole";
-import { metersBetween, squareWgs84BoundsFromCenter } from "@/lib/live/routing/geometry";
+import { metersBetween } from "@/lib/live/routing/geometry";
+import {
+  NEXT_TURN_PIN_MAX_M,
+  NEXT_TURN_PIN_MIN_M,
+} from "@/lib/live/betting/betWindowConstants";
 import { LiveVideoPlayer } from "./LiveVideoPlayer";
 import { LiveDecisionStatusRibbon } from "./LiveDecisionStatusRibbon";
 import { useCountdown } from "./useCountdown";
@@ -787,26 +790,48 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     bettableDisplayBetType === "next_turn"
       ? "next_zone"
       : bettableDisplayBetType;
-  /** Map camera tracks intent immediately; ribbon/sheet can stay stable via `displayBetType`. */
-  const mapBetTypeForCamera: BetTypeV2 | null =
-    viewerEnginePillType ?? effectiveEngineType ?? marketAnchoredBetType;
+  /**
+   * Map zoom follows the **open market** when a bet popup is live; between
+   * markets use pill pick or heuristics. Avoids engine-pill rotation fighting
+   * the active round.
+   */
+  const mapBetTypeForCamera: BetTypeV2 | null = currentMarket
+    ? marketAnchoredBetType
+    : viewerEnginePillType ?? effectiveEngineType ?? null;
 
   const zonesVisualStyleForBet =
     viewerBetOfferType === "next_zone" ? "pick_zone" : zoneEngineBetActive ? "muted" : "default";
 
   /**
-   * Three zoom tiers:
-   *  - TURN  (~380 m):  next_turn — pin comfortably ahead.
-   *  - ZONE  (~650 m):  next_zone / zone_exit_time — whole cell + neighbours.
-   *  - DEFAULT (~500 m): no active bet.
+   * Width-only zoom tiers (Google Maps–style):
+   *  - DEFAULT (~520 m): cruising with destination — see neighbourhood + route.
+   *  - APPROACH (~360 m): no bet yet but within turn trigger window — nudge in.
+   *  - ZONE (~700 m): pick zone / time in zone — whole cell visible.
+   *  - TURN (~280 m): active turn bet — tight on pin so you don't miss it.
    */
-  const ZOOM_TIER_TURN_M  = 380;
-  const ZOOM_TIER_ZONE_M  = 650;
-  const ZOOM_TIER_DEFAULT_M = 500;
-  const targetWidthMeters =
-    mapBetTypeForCamera === "next_turn"  ? ZOOM_TIER_TURN_M  :
-    mapBetTypeForCamera === "next_zone" || mapBetTypeForCamera === "zone_exit_time"
-      ? ZOOM_TIER_ZONE_M : ZOOM_TIER_DEFAULT_M;
+  const ZOOM_TIER_DEFAULT_M = 520;
+  const ZOOM_TIER_APPROACH_M = 360;
+  const ZOOM_TIER_ZONE_M = 700;
+  const ZOOM_TIER_TURN_M = 280;
+
+  const nextPinDistForZoom = driverPins?.[0]?.distanceMeters ?? null;
+  const approachingTurnNoBet =
+    !currentMarket &&
+    nextPinDistForZoom != null &&
+    nextPinDistForZoom >= NEXT_TURN_PIN_MIN_M &&
+    nextPinDistForZoom <= NEXT_TURN_PIN_MAX_M;
+
+  const targetWidthMeters = (() => {
+    if (mapBetTypeForCamera === "next_turn") return ZOOM_TIER_TURN_M;
+    if (
+      mapBetTypeForCamera === "next_zone" ||
+      mapBetTypeForCamera === "zone_exit_time"
+    ) {
+      return ZOOM_TIER_ZONE_M;
+    }
+    if (approachingTurnNoBet) return ZOOM_TIER_APPROACH_M;
+    return ZOOM_TIER_DEFAULT_M;
+  })();
 
   // Smooth the zoom target over ~1.5 s so bet transitions are gradual.
   const smoothedWidthRef = useRef<number>(targetWidthMeters);
@@ -846,84 +871,6 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   }, [targetWidthMeters]);
 
   const viewerTargetWidthMeters = smoothedWidth;
-
-  /**
-   * Viewer follow framing rules:
-   *  - `next_turn`  → no fixed bounds; LiveMap uses normal profile zoom (navigation feel).
-   *  - `next_zone`  → 1000 m visible width square around current/selected cell center.
-   *  - all other bets on city_grid → 500 m visible width square.
-   *  - non–city_grid markets → no fixed bounds.
-   */
-  const viewerGridMapFraming = useMemo((): {
-    bounds: Wgs84LatLngBoundsTuple | null;
-    minZoom: number | null;
-  } => {
-    // next_turn: standard nav zoom, no bounds override.
-    if (mapBetTypeForCamera === "next_turn" || !routeLast) {
-      return { bounds: null, minZoom: null };
-    }
-
-    if (currentMarket?.marketType === "city_grid" && cityGridSpec) {
-      let centerLat = routeLast.lat;
-      let centerLng = routeLast.lng;
-
-      // Prefer the selected cell's center; fall back to driver's cell.
-      const sel = selectedZoneId ? parseGridOptionId(selectedZoneId) : null;
-      if (
-        sel != null &&
-        sel.row >= 0 &&
-        sel.row < cityGridSpec.nRows &&
-        sel.col >= 0 &&
-        sel.col < cityGridSpec.nCols
-      ) {
-        const c = gridCellCenter(cityGridSpec, sel.row, sel.col);
-        centerLat = c.lat;
-        centerLng = c.lng;
-      } else {
-        const cell = cellIdForPosition(
-          cityGridSpec,
-          routeLast.lat,
-          routeLast.lng,
-        );
-        if (cell) {
-          const p = parseGridOptionId(cell);
-          if (p) {
-            const c = gridCellCenter(cityGridSpec, p.row, p.col);
-            centerLat = c.lat;
-            centerLng = c.lng;
-          }
-        }
-      }
-
-      const pickZone = mapBetTypeForCamera === "next_zone";
-      const framingM = Math.max(320, viewerTargetWidthMeters ?? 320);
-
-      return {
-        bounds: squareWgs84BoundsFromCenter(centerLat, centerLng, framingM),
-        minZoom: pickZone ? 14.5 : 15.5,
-      };
-    }
-
-    // Non–city_grid markets: frame by active bet type.
-    if (mapBetTypeForCamera != null && routeLast) {
-      const pickZone = mapBetTypeForCamera === "next_zone";
-      const framingM = Math.max(320, viewerTargetWidthMeters ?? 320);
-      return {
-        bounds: squareWgs84BoundsFromCenter(routeLast.lat, routeLast.lng, framingM),
-        minZoom: pickZone ? 14.5 : 15.5,
-      };
-    }
-
-    return { bounds: null, minZoom: null };
-  }, [
-    currentMarket?.marketType,
-    cityGridSpec,
-    mapBetTypeForCamera,
-    routeLast?.lat,
-    routeLast?.lng,
-    selectedZoneId,
-    viewerTargetWidthMeters,
-  ]);
 
   const marketTurnPassKey =
     currentMarket != null && currentMarket.marketType !== "city_grid"
@@ -1500,10 +1447,10 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             destinationRoute={destinationRoute}
             destinationRouteLabel="Google suggested route"
             driverRouteBadges={driverRouteBadges}
-            viewerFollowLatLngBounds={viewerGridMapFraming.bounds}
-            viewerFollowBoundsMinZoom={viewerGridMapFraming.minZoom}
+            viewerFollowLatLngBounds={null}
+            viewerFollowBoundsMinZoom={null}
             viewerTargetWidthMeters={viewerTargetWidthMeters}
-            viewerZoomRuleKey={`${mapBetTypeForCamera ?? "none"}:${currentMarket?.id ?? "nomarket"}`}
+            viewerZoomRuleKey={`zoom:${Math.round(viewerTargetWidthMeters)}:${currentMarket?.id ?? "nomarket"}`}
             onZoneSelect={(id) => {
               /**
                * For a live `city_grid` (`next_zone`) market, tapping a cell
@@ -1713,10 +1660,10 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               destinationRoute={destinationRoute}
               destinationRouteLabel="Google suggested route"
               driverRouteBadges={driverRouteBadges}
-              viewerFollowLatLngBounds={viewerGridMapFraming.bounds}
-              viewerFollowBoundsMinZoom={viewerGridMapFraming.minZoom}
+              viewerFollowLatLngBounds={null}
+              viewerFollowBoundsMinZoom={null}
               viewerTargetWidthMeters={viewerTargetWidthMeters}
-              viewerZoomRuleKey={`${mapBetTypeForCamera ?? "none"}:${currentMarket?.id ?? "nomarket"}`}
+              viewerZoomRuleKey={`zoom:${Math.round(viewerTargetWidthMeters)}:${currentMarket?.id ?? "nomarket"}`}
             />
             {routePoints.length === 0 && (
               <div className="absolute inset-0 flex items-center justify-center bg-black/30 text-[9px] text-white/70">

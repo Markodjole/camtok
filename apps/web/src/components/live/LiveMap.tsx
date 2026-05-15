@@ -194,7 +194,7 @@ function normalizeAngleDeg(deg: number): number {
 const VIEWER_MAP_ROTATION_TAU_SEC = 2;
 
 /** Zoom target approaches this fraction of the remaining delta per animation frame (~60fps). */
-const VIEWER_ZOOM_BLEND_PER_FRAME = 0.06;
+const VIEWER_ZOOM_BLEND_PER_FRAME = 0.11;
 
 /** With `viewerFollowLatLngBounds`, never go wider than this (higher = closer). */
 const VIEWER_FOLLOW_BOUNDS_ZOOM_FLOOR = 14;
