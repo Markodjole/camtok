@@ -795,15 +795,57 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     viewerBetOfferType === "next_zone" ? "pick_zone" : zoneEngineBetActive ? "muted" : "default";
 
   /**
-   * Two zoom tiers:
-   *  - TURN (~380 m): next_turn — pin comfortably ahead of driver.
-   *  - ZONE (~1400 m): next_zone, zone_exit_time, and default — whole zone + neighbors.
+   * Three zoom tiers:
+   *  - TURN  (~380 m):  next_turn — pin comfortably ahead.
+   *  - ZONE  (~650 m):  next_zone / zone_exit_time — whole cell + neighbours.
+   *  - DEFAULT (~500 m): no active bet.
    */
-  const ZOOM_TIER_TURN_M = 380;
-  const ZOOM_TIER_ZONE_M = 1400;
-  const viewerTargetWidthMeters = mapBetTypeForCamera === "next_turn"
-    ? ZOOM_TIER_TURN_M
-    : ZOOM_TIER_ZONE_M;
+  const ZOOM_TIER_TURN_M  = 380;
+  const ZOOM_TIER_ZONE_M  = 650;
+  const ZOOM_TIER_DEFAULT_M = 500;
+  const targetWidthMeters =
+    mapBetTypeForCamera === "next_turn"  ? ZOOM_TIER_TURN_M  :
+    mapBetTypeForCamera === "next_zone" || mapBetTypeForCamera === "zone_exit_time"
+      ? ZOOM_TIER_ZONE_M : ZOOM_TIER_DEFAULT_M;
+
+  // Smooth the zoom target over ~1.5 s so bet transitions are gradual.
+  const smoothedWidthRef = useRef<number>(targetWidthMeters);
+  const smoothWidthRafRef = useRef<number | null>(null);
+  const smoothWidthFrameRef = useRef<{ from: number; to: number; startMs: number } | null>(null);
+  const [smoothedWidth, setSmoothedWidth] = useState<number>(targetWidthMeters);
+
+  useEffect(() => {
+    const DURATION_MS = 1500;
+    const from = smoothedWidthRef.current;
+    const to = targetWidthMeters;
+    if (Math.abs(to - from) < 1) return;
+    if (smoothWidthRafRef.current != null) cancelAnimationFrame(smoothWidthRafRef.current);
+    smoothWidthFrameRef.current = { from, to, startMs: performance.now() };
+    const tick = () => {
+      const frame = smoothWidthFrameRef.current;
+      if (!frame) return;
+      const p = Math.min(1, (performance.now() - frame.startMs) / DURATION_MS);
+      // ease-in-out cubic
+      const eased = p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2;
+      const val = frame.from + (frame.to - frame.from) * eased;
+      smoothedWidthRef.current = val;
+      setSmoothedWidth(val);
+      if (p < 1) {
+        smoothWidthRafRef.current = requestAnimationFrame(tick);
+      } else {
+        smoothedWidthRef.current = frame.to;
+        setSmoothedWidth(frame.to);
+        smoothWidthRafRef.current = null;
+        smoothWidthFrameRef.current = null;
+      }
+    };
+    smoothWidthRafRef.current = requestAnimationFrame(tick);
+    return () => {
+      if (smoothWidthRafRef.current != null) cancelAnimationFrame(smoothWidthRafRef.current);
+    };
+  }, [targetWidthMeters]);
+
+  const viewerTargetWidthMeters = smoothedWidth;
 
   /**
    * Viewer follow framing rules:
