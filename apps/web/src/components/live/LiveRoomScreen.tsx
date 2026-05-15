@@ -1880,7 +1880,7 @@ function ZoneExitCountdownWidget({
   onExpired: () => void;
 }) {
   const elapsed = Math.floor((nowMs - opensAtMs) / 1000);
-  const remaining = Math.max(0, estimatedSec - elapsed);
+  const remaining = Math.max(0, Math.round(estimatedSec) - elapsed);
   const pastZero = elapsed > estimatedSec + 3;
 
   useEffect(() => {
@@ -1993,16 +1993,18 @@ function estimatedZoneSecondsRemaining(
   if (market.marketType !== "zone_exit_time") return null;
   const T = market.meta?.estimatedSec;
   if (typeof T !== "number") return null;
+  const Tsec = Math.round(T);
   const opensAtMs = Date.parse(market.opensAt);
-  if (!Number.isFinite(opensAtMs)) return T;
-  return Math.max(0, T - Math.floor((nowMs - opensAtMs) / 1000));
+  if (!Number.isFinite(opensAtMs)) return Tsec;
+  return Math.max(0, Tsec - Math.floor((nowMs - opensAtMs) / 1000));
 }
 
 function zoneTimeOptionLabel(optionId: string, remainingSec: number | null): string | null {
   if (remainingSec == null) return null;
-  if (optionId === "exit_under") return `< ${remainingSec} sec`;
-  if (optionId === "exit_at") return `= ${remainingSec} sec`;
-  if (optionId === "exit_over") return `> ${remainingSec} sec`;
+  const sec = Math.round(remainingSec);
+  if (optionId === "exit_under") return `< ${sec} sec`;
+  if (optionId === "exit_at") return `= ${sec} sec`;
+  if (optionId === "exit_over") return `> ${sec} sec`;
   return null;
 }
 

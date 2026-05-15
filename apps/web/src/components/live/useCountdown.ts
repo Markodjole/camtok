@@ -15,6 +15,6 @@ export function useCountdown(targetIso: string) {
 
   return {
     secondsLeft,
-    label: secondsLeft < 10 ? `${deltaMs / 1000 > 0 ? (deltaMs / 1000).toFixed(1) : "0"}s` : `${secondsLeft}s`,
+    label: `${secondsLeft}s`,
   };
 }
