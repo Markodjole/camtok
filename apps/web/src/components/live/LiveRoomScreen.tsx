@@ -2003,7 +2003,7 @@ function BalanceBadge({
     const fromVal = splash.from;
     const toVal = splash.to;
     const startMs = performance.now();
-    const dur = 1300;
+    const dur = 700;
     let raf = 0;
     const tick = () => {
       const t = Math.min(1, (performance.now() - startMs) / dur);
@@ -2018,7 +2018,7 @@ function BalanceBadge({
 
   useEffect(() => {
     if (!splash) return;
-    const timer = window.setTimeout(onSplashDone, isWin ? 1700 : 1100);
+    const timer = window.setTimeout(onSplashDone, 1000);
     return () => window.clearTimeout(timer);
   }, [splash, onSplashDone, isWin]);
 
