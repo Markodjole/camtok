@@ -2075,13 +2075,9 @@ function BalanceBadge({
         <span className="balance-number relative z-10">
           ${fmtUsdWhole(isWin ? rolling : balance)}
         </span>
-        {animating && splash ? (
-          <span
-            className={`balance-delta relative z-10 ml-1 text-[10px] font-semibold ${
-              isWin ? "text-amber-200" : "text-rose-200"
-            }`}
-          >
-            {splash.delta > 0 ? "+" : "-"}${fmtUsdWhole(Math.abs(splash.delta))}
+        {animating && isWin && splash ? (
+          <span className="balance-delta relative z-10 ml-1 text-[10px] font-semibold text-amber-200">
+            +${fmtUsdWhole(splash.delta)}
           </span>
         ) : null}
 
