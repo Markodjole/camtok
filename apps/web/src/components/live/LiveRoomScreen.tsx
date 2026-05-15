@@ -795,28 +795,15 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     viewerBetOfferType === "next_zone" ? "pick_zone" : zoneEngineBetActive ? "muted" : "default";
 
   /**
-   * Three fixed zoom tiers, one per bet category — every bet maps to exactly one.
-   *  - TIGHT (~320 m): next_turn (navigation feel).
-   *  - MID   (~850 m): pin / route bets (time_vs_google, turn_count_to_pin, eta_drift).
-   *  - WIDE  (~1400 m): zone-level bets (next_zone, stop_count, turns_before_zone_exit,
-   *                                       zone_exit_time, zone_duration).
-   *    WIDE was 2200 m — viewer asked to bring this in so adjacent cells stay
-   *    big enough to tap accurately.
+   * Two zoom tiers:
+   *  - TURN (~380 m): next_turn — pin comfortably ahead of driver.
+   *  - ZONE (~1400 m): next_zone, zone_exit_time, and default — whole zone + neighbors.
    */
-  const ZOOM_TIER_TIGHT_M = 620;
-  const ZOOM_TIER_MID_M = 750;
-  const ZOOM_TIER_WIDE_M = 1050;
-  const viewerTargetWidthMeters = (() => {
-    switch (mapBetTypeForCamera) {
-      case "next_turn":
-        return ZOOM_TIER_TIGHT_M;
-      case "next_zone":
-      case "zone_exit_time":
-        return ZOOM_TIER_WIDE_M;
-      default:
-        return ZOOM_TIER_MID_M;
-    }
-  })();
+  const ZOOM_TIER_TURN_M = 380;
+  const ZOOM_TIER_ZONE_M = 1400;
+  const viewerTargetWidthMeters = mapBetTypeForCamera === "next_turn"
+    ? ZOOM_TIER_TURN_M
+    : ZOOM_TIER_ZONE_M;
 
   /**
    * Viewer follow framing rules:
@@ -1521,6 +1508,15 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         </div>
       ) : null}
 
+      {/* Route overview — only during active next_zone bet */}
+      {currentMarket?.marketType === "city_grid" && routeLast && room.destination ? (
+        <RouteOverviewMap
+          routePoints={routePoints}
+          destination={room.destination}
+          destinationRoute={destinationRoute}
+        />
+      ) : null}
+
       {/* Corner live dot + compact actions (no stake stepper — use header stake) */}
       <div
         className="pointer-events-none fixed left-3 top-3 z-[62]"
@@ -1967,6 +1963,61 @@ function BalanceBadge({
           }
         `}</style>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Small north-up overview map shown in the top-left during a next_zone bet.
+ * Fits the visible area to include both the driver's current position and
+ * the destination so the viewer can see the full Google route at a glance.
+ */
+function RouteOverviewMap({
+  routePoints,
+  destination,
+  destinationRoute,
+}: {
+  routePoints: Array<{ lat: number; lng: number }>;
+  destination: { lat: number; lng: number; label?: string } | null;
+  destinationRoute: Array<{ lat: number; lng: number }> | null;
+}) {
+  const last = routePoints[routePoints.length - 1];
+  const bounds = useMemo((): [[number, number], [number, number]] | null => {
+    if (!last || !destination) return null;
+    const minLat = Math.min(last.lat, destination.lat);
+    const maxLat = Math.max(last.lat, destination.lat);
+    const minLng = Math.min(last.lng, destination.lng);
+    const maxLng = Math.max(last.lng, destination.lng);
+    const padLat = (maxLat - minLat) * 0.25 + 0.002;
+    const padLng = (maxLng - minLng) * 0.25 + 0.002;
+    return [
+      [minLat - padLat, minLng - padLng],
+      [maxLat + padLat, maxLng + padLng],
+    ];
+  }, [last?.lat, last?.lng, destination?.lat, destination?.lng]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!bounds) return null;
+
+  return (
+    <div
+      className="pointer-events-none fixed left-3 top-8 z-[61] overflow-hidden rounded-lg border border-white/15 shadow-xl"
+      style={{ width: "32vw", height: "32vw", maxWidth: 160, maxHeight: 160 }}
+    >
+      <LiveMap
+        routePoints={routePoints}
+        className="h-full w-full"
+        interactive={false}
+        audienceRole="viewer"
+        showCourseArrow={false}
+        rotateWithHeading={false}
+        followMode={false}
+        tileOpacity={0.85}
+        destination={destination}
+        destinationRoute={destinationRoute}
+        viewerFollowLatLngBounds={bounds}
+        viewerFollowBoundsMinZoom={null}
+        viewerZoomRuleKey={`overview:${destination?.lat}:${destination?.lng}`}
+      />
     </div>
   );
 }
