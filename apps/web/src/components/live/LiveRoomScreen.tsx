@@ -1590,13 +1590,6 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         📋
       </button>
 
-      {balanceChangeSplash && balanceChangeSplash.delta > 0 ? (
-        <JackpotFlash
-          delta={balanceChangeSplash.delta}
-          nonce={balanceChangeSplash.nonce}
-        />
-      ) : null}
-
       <div className="absolute right-4 top-32 z-40 flex flex-col items-end gap-3">
         <BalanceBadge
           balance={Number(wallet?.balance ?? 0)}
@@ -1990,8 +1983,9 @@ function BalanceBadge({
   onSplashDone: () => void;
 }) {
   const isWin = (splash?.delta ?? 0) > 0;
-  const isLoss = (splash?.delta ?? 0) < 0;
   const animating = splash != null;
+  /** Gold glow / coins only during the 1 s win animation, never after. */
+  const showWinFx = animating && isWin;
 
   /** Slot-machine rolling number for wins. */
   const [rolling, setRolling] = useState<number>(balance);
@@ -2020,7 +2014,7 @@ function BalanceBadge({
     if (!splash) return;
     const timer = window.setTimeout(onSplashDone, 1000);
     return () => window.clearTimeout(timer);
-  }, [splash, onSplashDone, isWin]);
+  }, [splash, onSplashDone]);
 
   // 12 coin trajectories around the badge.
   const coins = Array.from({ length: 12 }, (_, i) => i);
@@ -2029,22 +2023,20 @@ function BalanceBadge({
     <div className="pointer-events-none flex justify-end">
       <div
         className={[
-          "relative rounded-full border px-2.5 py-1 text-xs font-medium tabular-nums backdrop-blur-md transition-all duration-200",
-          isWin
-            ? "border-amber-300/70 text-amber-50 shadow-[0_0_22px_rgba(251,191,36,0.55)]"
-            : isLoss
-              ? "border-rose-400/50 text-rose-100"
-              : "border-white/10 text-white/85",
-          animating ? "scale-110" : "",
+          "relative rounded-full border border-white/10 bg-black/40 px-2.5 py-1 text-xs font-medium tabular-nums text-white/85 backdrop-blur-md transition-all duration-200",
+          showWinFx ? "scale-110 border-amber-300/70 text-amber-50 shadow-[0_0_22px_rgba(251,191,36,0.55)]" : "",
         ].join(" ")}
-        style={{
-          background: isWin
-            ? "linear-gradient(135deg, rgba(120,80,0,0.55), rgba(0,0,0,0.55))"
-            : "rgba(0,0,0,0.4)",
-        }}
+        style={
+          showWinFx
+            ? {
+                background:
+                  "linear-gradient(135deg, rgba(120,80,0,0.55), rgba(0,0,0,0.55))",
+              }
+            : undefined
+        }
       >
         {/* Sheen sweep across the pill on win */}
-        {isWin ? (
+        {showWinFx ? (
           <span
             aria-hidden
             className="pointer-events-none absolute inset-0 overflow-hidden rounded-full"
@@ -2054,7 +2046,7 @@ function BalanceBadge({
         ) : null}
 
         {/* Coin burst */}
-        {isWin ? (
+        {showWinFx ? (
           <>
             {coins.map((i) => {
               const angle = (i / coins.length) * Math.PI * 2;
@@ -2081,9 +2073,9 @@ function BalanceBadge({
         ) : null}
 
         <span className="balance-number relative z-10">
-          ${fmtUsdWhole(isWin ? rolling : balance)}
+          ${fmtUsdWhole(showWinFx ? rolling : balance)}
         </span>
-        {animating && isWin && splash ? (
+        {showWinFx && splash ? (
           <span className="balance-delta relative z-10 ml-1 text-[10px] font-semibold text-amber-200">
             +${fmtUsdWhole(splash.delta)}
           </span>
@@ -2128,7 +2120,7 @@ function BalanceBadge({
             }
           }
           .balance-number {
-            text-shadow: ${isWin ? "0 0 10px rgba(251,191,36,0.55)" : "none"};
+            text-shadow: ${showWinFx ? "0 0 10px rgba(251,191,36,0.55)" : "none"};
           }
           .balance-delta {
             animation: ${animating ? "balance-delta-in 280ms ease-out" : "none"};
@@ -2143,120 +2135,6 @@ function BalanceBadge({
   );
 }
 
-/**
- * Full-screen split-second jackpot celebration that takes over for ~1 s on a
- * win. Big bouncy number with confetti-coin burst from the center.
- */
-function JackpotFlash({
-  delta,
-  nonce,
-}: {
-  delta: number;
-  nonce: number;
-}) {
-  const confetti = useMemo(
-    () =>
-      Array.from({ length: 28 }, (_, i) => {
-        const angle = (i / 28) * Math.PI * 2 + (i % 2 ? 0.12 : -0.12);
-        const dist = 160 + Math.random() * 140;
-        return {
-          dx: Math.cos(angle) * dist,
-          dy: Math.sin(angle) * dist - 40,
-          rot: (Math.random() * 540 - 270).toFixed(0),
-          delay: (Math.random() * 80).toFixed(0),
-          size: 8 + Math.round(Math.random() * 6),
-          hue: Math.random() < 0.7 ? "gold" : "white",
-        };
-      }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [nonce],
-  );
-
-  return (
-    <div
-      key={nonce}
-      className="pointer-events-none fixed inset-0 z-[260] flex items-center justify-center"
-      aria-live="polite"
-    >
-      {/* radial flash */}
-      <div
-        className="jackpot-glow absolute inset-0"
-        style={{
-          background:
-            "radial-gradient(circle at 50% 50%, rgba(251,191,36,0.45) 0%, rgba(251,191,36,0.0) 55%)",
-        }}
-      />
-      {/* confetti coins */}
-      {confetti.map((c, i) => (
-        <span
-          key={i}
-          aria-hidden
-          className="jackpot-coin absolute left-1/2 top-1/2 rounded-full"
-          style={{
-            width: c.size,
-            height: c.size,
-            background:
-              c.hue === "gold"
-                ? "radial-gradient(circle at 30% 30%, #fff7c2 0%, #fbbf24 55%, #b45309 100%)"
-                : "radial-gradient(circle at 30% 30%, #ffffff 0%, #e5e7eb 70%, #9ca3af 100%)",
-            boxShadow: "0 0 10px rgba(251,191,36,0.7)",
-            ["--cx" as string]: `${c.dx}px`,
-            ["--cy" as string]: `${c.dy}px`,
-            ["--rot" as string]: `${c.rot}deg`,
-            animationDelay: `${c.delay}ms`,
-          }}
-        />
-      ))}
-      {/* big WIN amount */}
-      <div className="jackpot-amount relative z-10 select-none text-center">
-        <div className="text-xs font-bold uppercase tracking-[0.35em] text-amber-300/80 [text-shadow:0_0_12px_rgba(0,0,0,0.85)]">
-          You won
-        </div>
-        <div className="bg-gradient-to-b from-yellow-200 via-amber-300 to-orange-500 bg-clip-text text-6xl font-black tabular-nums tracking-tight text-transparent drop-shadow-[0_0_30px_rgba(251,191,36,0.55)] sm:text-7xl">
-          +${fmtUsdWhole(delta)}
-        </div>
-      </div>
-
-      <style jsx>{`
-        .jackpot-glow {
-          animation: jackpot-glow 950ms ease-out forwards;
-        }
-        @keyframes jackpot-glow {
-          0%   { opacity: 0; }
-          20%  { opacity: 1; }
-          100% { opacity: 0; }
-        }
-        .jackpot-amount {
-          animation: jackpot-amount 1100ms cubic-bezier(0.2, 1.4, 0.4, 1) forwards;
-        }
-        @keyframes jackpot-amount {
-          0%   { transform: scale(0.55); opacity: 0; filter: blur(6px); }
-          25%  { transform: scale(1.18); opacity: 1; filter: blur(0); }
-          60%  { transform: scale(1); }
-          100% { transform: scale(0.95); opacity: 0; }
-        }
-        .jackpot-coin {
-          transform: translate3d(-50%, -50%, 0) rotate(0deg) scale(0.4);
-          opacity: 0;
-          animation: jackpot-coin 1100ms cubic-bezier(0.2, 0.7, 0.3, 1) forwards;
-        }
-        @keyframes jackpot-coin {
-          0%   { transform: translate3d(-50%, -50%, 0) rotate(0deg) scale(0.4); opacity: 0; }
-          12%  { opacity: 1; transform: translate3d(-50%, -50%, 0) rotate(0deg) scale(1.05); }
-          75%  { opacity: 1; }
-          100% {
-            transform: translate3d(
-              calc(-50% + var(--cx)),
-              calc(-50% + var(--cy)),
-              0
-            ) rotate(var(--rot)) scale(0.7);
-            opacity: 0;
-          }
-        }
-      `}</style>
-    </div>
-  );
-}
 
 /**
  * Small north-up overview map shown in the top-left during a next_zone bet.
