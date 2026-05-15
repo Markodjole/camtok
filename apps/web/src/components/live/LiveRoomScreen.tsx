@@ -2264,12 +2264,30 @@ function RouteOverviewMap({
   destination: { lat: number; lng: number; label?: string } | null;
   destinationRoute: Array<{ lat: number; lng: number }> | null;
 }) {
-  if (routePoints.length === 0) return null;
+  const last = routePoints[routePoints.length - 1];
+
+  // Compute a bounding box that covers both current position and destination
+  // with 20% padding, so the map auto-fits both points.
+  const bounds = useMemo((): [[number, number], [number, number]] | null => {
+    if (!last || !destination) return null;
+    const minLat = Math.min(last.lat, destination.lat);
+    const maxLat = Math.max(last.lat, destination.lat);
+    const minLng = Math.min(last.lng, destination.lng);
+    const maxLng = Math.max(last.lng, destination.lng);
+    const padLat = Math.max((maxLat - minLat) * 0.22, 0.003);
+    const padLng = Math.max((maxLng - minLng) * 0.22, 0.003);
+    return [
+      [minLat - padLat, minLng - padLng],
+      [maxLat + padLat, maxLng + padLng],
+    ];
+  }, [last?.lat, last?.lng, destination?.lat, destination?.lng]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!last || !destination) return null;
 
   return (
     <div
       className="pointer-events-none fixed left-3 top-8 z-[61] overflow-hidden rounded-xl border border-white/20 shadow-xl"
-      style={{ width: "44vw", maxWidth: 200, height: 72 }}
+      style={{ width: 72, height: 200 }}
     >
       <LiveMap
         routePoints={routePoints}
@@ -2277,13 +2295,15 @@ function RouteOverviewMap({
         interactive={false}
         audienceRole="viewer"
         showCourseArrow={false}
-        rotateWithHeading={true}
+        rotateWithHeading={false}
         followMode={true}
         tileOpacity={0.85}
         destination={destination}
         destinationRoute={destinationRoute}
-        viewerTargetWidthMeters={4000}
-        viewerZoomRuleKey="route-overview"
+        viewerFollowLatLngBounds={bounds}
+        viewerFollowBoundsMinZoom={null}
+        viewerTargetWidthMeters={500}
+        viewerZoomRuleKey={`route-overview:${destination.lat}:${destination.lng}`}
       />
     </div>
   );

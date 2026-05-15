@@ -1380,8 +1380,15 @@ export function LiveMap({
       );
       const clampedWidthZ = Math.max(12, Math.min(20, widthBasedZ));
 
+      // When viewerFollowLatLngBounds is active, prefer the bounds-fitted zoom so
+      // the map frame stays at the right level to show the whole area (e.g. the
+      // full route driver→destination in the overview strip, or the current grid
+      // cell in zone-pick mode).  Fall back to width-based zoom when bounds aren't set.
+      const boundsZ = smoothGridFramingRef.current ? (viewerBoundsZoomRef.current ?? null) : null;
+      const autoZ = boundsZ ?? clampedWidthZ;
+
       // If user has manually zoomed, respect their choice; only pan.
-      const targetZ = userZoomOverrideRef.current ?? clampedWidthZ;
+      const targetZ = userZoomOverrideRef.current ?? autoZ;
       const curZ = mm.getZoom();
       let z = curZ;
       if (followMode) {
