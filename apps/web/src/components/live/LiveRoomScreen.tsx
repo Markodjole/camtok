@@ -1043,15 +1043,23 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     return "pending";
   })();
 
+  // Sync market turn point into stickyViewerPin so the blue pin stays visible
+  // after the market settles — until the vehicle physically passes it.
+  useEffect(() => {
+    if (!viewerTurnTarget) return;
+    setStickyViewerPin((prev) => {
+      // Only update if it's a different position (new turn target from market).
+      if (
+        prev &&
+        Math.abs(prev.lat - viewerTurnTarget.lat) < 1e-7 &&
+        Math.abs(prev.lng - viewerTurnTarget.lng) < 1e-7
+      ) return prev;
+      return { id: `market-turn`, lat: viewerTurnTarget.lat, lng: viewerTurnTarget.lng };
+    });
+  }, [viewerTurnTarget?.lat, viewerTurnTarget?.lng]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const viewerOsrmPreviewPins = useMemo(() => {
     if (currentMarket?.marketType === "city_grid") return driverPins;
-    if (
-      viewerTurnTarget &&
-      currentMarket &&
-      currentMarket.marketType !== "city_grid"
-    ) {
-      return [];
-    }
     if (!stickyViewerPin) return driverPins;
     const dm =
       typeof stickyViewerPin.id === "number"
