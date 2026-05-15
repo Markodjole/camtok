@@ -2023,27 +2023,12 @@ function RouteOverviewMap({
   destination: { lat: number; lng: number; label?: string } | null;
   destinationRoute: Array<{ lat: number; lng: number }> | null;
 }) {
-  const last = routePoints[routePoints.length - 1];
-  const bounds = useMemo((): [[number, number], [number, number]] | null => {
-    if (!last || !destination) return null;
-    const minLat = Math.min(last.lat, destination.lat);
-    const maxLat = Math.max(last.lat, destination.lat);
-    const minLng = Math.min(last.lng, destination.lng);
-    const maxLng = Math.max(last.lng, destination.lng);
-    const padLat = (maxLat - minLat) * 0.25 + 0.002;
-    const padLng = (maxLng - minLng) * 0.25 + 0.002;
-    return [
-      [minLat - padLat, minLng - padLng],
-      [maxLat + padLat, maxLng + padLng],
-    ];
-  }, [last?.lat, last?.lng, destination?.lat, destination?.lng]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  if (!bounds) return null;
+  if (routePoints.length === 0) return null;
 
   return (
     <div
-      className="pointer-events-none fixed left-3 top-8 z-[61] overflow-hidden rounded-lg border border-white/15 shadow-xl"
-      style={{ width: "32vw", height: "32vw", maxWidth: 160, maxHeight: 160 }}
+      className="pointer-events-none fixed left-3 top-8 z-[61] overflow-hidden rounded-xl border border-white/20 shadow-xl"
+      style={{ width: "44vw", maxWidth: 200, height: 72 }}
     >
       <LiveMap
         routePoints={routePoints}
@@ -2051,14 +2036,13 @@ function RouteOverviewMap({
         interactive={false}
         audienceRole="viewer"
         showCourseArrow={false}
-        rotateWithHeading={false}
-        followMode={false}
+        rotateWithHeading={true}
+        followMode={true}
         tileOpacity={0.85}
         destination={destination}
         destinationRoute={destinationRoute}
-        viewerFollowLatLngBounds={bounds}
-        viewerFollowBoundsMinZoom={null}
-        viewerZoomRuleKey={`overview:${destination?.lat}:${destination?.lng}`}
+        viewerTargetWidthMeters={4000}
+        viewerZoomRuleKey="route-overview"
       />
     </div>
   );
