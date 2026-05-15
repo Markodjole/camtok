@@ -1582,6 +1582,13 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         📋
       </button>
 
+      {balanceChangeSplash && balanceChangeSplash.delta > 0 ? (
+        <JackpotFlash
+          delta={balanceChangeSplash.delta}
+          nonce={balanceChangeSplash.nonce}
+        />
+      ) : null}
+
       <div className="absolute right-4 top-32 z-40 flex flex-col items-end gap-3">
         <BalanceBadge
           balance={Number(wallet?.balance ?? 0)}
@@ -1788,6 +1795,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           bettingClosed={sheetBettingClosed}
           isPlacing={!!placingOptionId}
           error={mapSheetError}
+          opensAt={currentMarket.opensAt}
+          locksAt={currentMarket.locksAt}
           countdown={
             currentMarket ? <MarketTimer locksAt={currentMarket.locksAt} /> : null
           }
@@ -1834,26 +1843,57 @@ function playMoneySound(muted: boolean) {
     const ctx = new AudioCtx();
     const master = ctx.createGain();
     master.gain.setValueAtTime(0.0001, ctx.currentTime);
-    master.gain.exponentialRampToValueAtTime(0.09, ctx.currentTime + 0.01);
-    master.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.35);
+    master.gain.exponentialRampToValueAtTime(0.16, ctx.currentTime + 0.015);
+    master.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 1.25);
     master.connect(ctx.destination);
 
-    [1046.5, 1568].forEach((freq, i) => {
+    // Casino "cha-ching" — bright triad cascading like a slot win, plus a
+    // bell tail. Frequencies chosen to feel celebratory but short.
+    const cascade = [
+      { f: 783.99, t: 0.0,  d: 0.18 }, // G5
+      { f: 987.77, t: 0.07, d: 0.20 }, // B5
+      { f: 1318.5, t: 0.16, d: 0.28 }, // E6
+      { f: 1568.0, t: 0.26, d: 0.30 }, // G6
+      { f: 2093.0, t: 0.38, d: 0.40 }, // C7  ← bell
+    ];
+    cascade.forEach(({ f, t, d }) => {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
-      const start = ctx.currentTime + i * 0.09;
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(freq, start);
+      const start = ctx.currentTime + t;
+      osc.type = t < 0.3 ? "triangle" : "sine";
+      osc.frequency.setValueAtTime(f, start);
       gain.gain.setValueAtTime(0.0001, start);
-      gain.gain.exponentialRampToValueAtTime(0.9, start + 0.012);
-      gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.12);
+      gain.gain.exponentialRampToValueAtTime(0.95, start + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + d);
       osc.connect(gain);
       gain.connect(master);
       osc.start(start);
-      osc.stop(start + 0.14);
+      osc.stop(start + d + 0.02);
     });
 
-    window.setTimeout(() => void ctx.close().catch(() => undefined), 500);
+    // Coin-shake noise burst (filtered white-ish noise) for "metal-on-metal".
+    const noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 0.45, ctx.sampleRate);
+    const ch = noiseBuf.getChannelData(0);
+    for (let i = 0; i < ch.length; i++) {
+      const env = Math.pow(1 - i / ch.length, 1.8);
+      ch[i] = (Math.random() * 2 - 1) * env;
+    }
+    const noise = ctx.createBufferSource();
+    noise.buffer = noiseBuf;
+    const noiseFilter = ctx.createBiquadFilter();
+    noiseFilter.type = "highpass";
+    noiseFilter.frequency.value = 2400;
+    const noiseGain = ctx.createGain();
+    noiseGain.gain.setValueAtTime(0.0001, ctx.currentTime);
+    noiseGain.gain.exponentialRampToValueAtTime(0.22, ctx.currentTime + 0.02);
+    noiseGain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.45);
+    noise.connect(noiseFilter);
+    noiseFilter.connect(noiseGain);
+    noiseGain.connect(master);
+    noise.start(ctx.currentTime);
+    noise.stop(ctx.currentTime + 0.5);
+
+    window.setTimeout(() => void ctx.close().catch(() => undefined), 1500);
   } catch {
     // Sound is non-critical; browsers may block audio until the first gesture.
   }
@@ -1941,70 +1981,275 @@ function BalanceBadge({
   splash: { from: number; to: number; delta: number; nonce: number } | null;
   onSplashDone: () => void;
 }) {
-  const [animating, setAnimating] = useState(false);
+  const isWin = (splash?.delta ?? 0) > 0;
+  const isLoss = (splash?.delta ?? 0) < 0;
+  const animating = splash != null;
+
+  /** Slot-machine rolling number for wins. */
+  const [rolling, setRolling] = useState<number>(balance);
+  useEffect(() => {
+    if (!splash || splash.delta <= 0) {
+      setRolling(balance);
+      return;
+    }
+    const fromVal = splash.from;
+    const toVal = splash.to;
+    const startMs = performance.now();
+    const dur = 1300;
+    let raf = 0;
+    const tick = () => {
+      const t = Math.min(1, (performance.now() - startMs) / dur);
+      // ease-out cubic
+      const eased = 1 - Math.pow(1 - t, 3);
+      setRolling(fromVal + (toVal - fromVal) * eased);
+      if (t < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [splash, balance]);
 
   useEffect(() => {
     if (!splash) return;
-    setAnimating(true);
-    const timer = window.setTimeout(() => {
-      setAnimating(false);
-      onSplashDone();
-    }, 900);
+    const timer = window.setTimeout(onSplashDone, isWin ? 1700 : 1100);
     return () => window.clearTimeout(timer);
-  }, [splash, onSplashDone]);
+  }, [splash, onSplashDone, isWin]);
+
+  // 12 coin trajectories around the badge.
+  const coins = Array.from({ length: 12 }, (_, i) => i);
 
   return (
     <div className="pointer-events-none flex justify-end">
       <div
         className={[
-          "relative rounded-full border border-white/10 bg-black/40 px-2.5 py-1 text-xs font-medium tabular-nums text-white/85 backdrop-blur-md transition-transform duration-150",
-          animating
-            ? "scale-105"
-            : "",
+          "relative rounded-full border px-2.5 py-1 text-xs font-medium tabular-nums backdrop-blur-md transition-all duration-200",
+          isWin
+            ? "border-amber-300/70 text-amber-50 shadow-[0_0_22px_rgba(251,191,36,0.55)]"
+            : isLoss
+              ? "border-rose-400/50 text-rose-100"
+              : "border-white/10 text-white/85",
+          animating ? "scale-110" : "",
         ].join(" ")}
+        style={{
+          background: isWin
+            ? "linear-gradient(135deg, rgba(120,80,0,0.55), rgba(0,0,0,0.55))"
+            : "rgba(0,0,0,0.4)",
+        }}
       >
-        {animating && (splash?.delta ?? 0) > 0 ? (
+        {/* Sheen sweep across the pill on win */}
+        {isWin ? (
+          <span
+            aria-hidden
+            className="pointer-events-none absolute inset-0 overflow-hidden rounded-full"
+          >
+            <span className="balance-sheen" />
+          </span>
+        ) : null}
+
+        {/* Coin burst */}
+        {isWin ? (
           <>
-            {["$", "$", "$", "$", "$", "$"].map((coin, i) => (
-              <span
-                key={i}
-                className="pointer-events-none absolute text-[10px] font-medium text-yellow-200"
-                style={{
-                  right: `${6 + (i % 3) * 8}px`,
-                  top: "50%",
-                  animation: `balance-coin-${i % 3} 620ms ease-out forwards`,
-                  animationDelay: `${i * 35}ms`,
-                }}
-              >
-                {coin}
-              </span>
-            ))}
+            {coins.map((i) => {
+              const angle = (i / coins.length) * Math.PI * 2;
+              const dist = 28 + (i % 3) * 6;
+              const dx = Math.cos(angle) * dist;
+              const dy = Math.sin(angle) * dist - 6;
+              return (
+                <span
+                  key={i}
+                  aria-hidden
+                  className="balance-coin pointer-events-none absolute left-1/2 top-1/2 h-2 w-2 rounded-full"
+                  style={{
+                    background:
+                      "radial-gradient(circle at 30% 30%, #fff7c2 0%, #fbbf24 55%, #b45309 100%)",
+                    boxShadow: "0 0 6px rgba(251,191,36,0.9)",
+                    ["--cx" as string]: `${dx}px`,
+                    ["--cy" as string]: `${dy}px`,
+                    animationDelay: `${i * 30}ms`,
+                  }}
+                />
+              );
+            })}
           </>
         ) : null}
-        <span>${fmtUsdWhole(balance)}</span>
+
+        <span className="balance-number relative z-10">
+          ${fmtUsdWhole(isWin ? rolling : balance)}
+        </span>
         {animating && splash ? (
-          <span className="ml-1 text-[10px] text-white/70">
+          <span
+            className={`balance-delta relative z-10 ml-1 text-[10px] font-semibold ${
+              isWin ? "text-amber-200" : "text-rose-200"
+            }`}
+          >
             {splash.delta > 0 ? "+" : "-"}${fmtUsdWhole(Math.abs(splash.delta))}
           </span>
         ) : null}
+
         <style jsx>{`
-          @keyframes balance-coin-0 {
-            from { transform: translate3d(0, -50%, 0) scale(0.7); opacity: 0; }
-            20% { opacity: 1; }
-            to { transform: translate3d(-18px, -34px, 0) scale(1.05); opacity: 0; }
+          .balance-sheen {
+            position: absolute;
+            top: 0;
+            left: -120%;
+            width: 60%;
+            height: 100%;
+            background: linear-gradient(
+              90deg,
+              transparent 0%,
+              rgba(255, 255, 255, 0.65) 50%,
+              transparent 100%
+            );
+            transform: skewX(-20deg);
+            animation: balance-sheen 1100ms ease-out forwards;
           }
-          @keyframes balance-coin-1 {
-            from { transform: translate3d(0, -50%, 0) scale(0.7); opacity: 0; }
-            20% { opacity: 1; }
-            to { transform: translate3d(2px, -38px, 0) scale(1.05); opacity: 0; }
+          @keyframes balance-sheen {
+            from { left: -120%; }
+            to   { left: 160%; }
           }
-          @keyframes balance-coin-2 {
-            from { transform: translate3d(0, -50%, 0) scale(0.7); opacity: 0; }
-            20% { opacity: 1; }
-            to { transform: translate3d(18px, -30px, 0) scale(1.05); opacity: 0; }
+          .balance-coin {
+            transform: translate3d(-50%, -50%, 0) scale(0.4);
+            opacity: 0;
+            animation: balance-coin 1200ms cubic-bezier(0.2, 0.7, 0.3, 1) forwards;
+          }
+          @keyframes balance-coin {
+            0%   { transform: translate3d(-50%, -50%, 0) scale(0.4); opacity: 0; }
+            15%  { opacity: 1; transform: translate3d(-50%, -50%, 0) scale(1.1); }
+            70%  { opacity: 1; }
+            100% {
+              transform: translate3d(
+                calc(-50% + var(--cx)),
+                calc(-50% + var(--cy)),
+                0
+              ) scale(0.6);
+              opacity: 0;
+            }
+          }
+          .balance-number {
+            text-shadow: ${isWin ? "0 0 10px rgba(251,191,36,0.55)" : "none"};
+          }
+          .balance-delta {
+            animation: ${animating ? "balance-delta-in 280ms ease-out" : "none"};
+          }
+          @keyframes balance-delta-in {
+            from { opacity: 0; transform: translateY(-4px); }
+            to   { opacity: 1; transform: translateY(0); }
           }
         `}</style>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Full-screen split-second jackpot celebration that takes over for ~1 s on a
+ * win. Big bouncy number with confetti-coin burst from the center.
+ */
+function JackpotFlash({
+  delta,
+  nonce,
+}: {
+  delta: number;
+  nonce: number;
+}) {
+  const confetti = useMemo(
+    () =>
+      Array.from({ length: 28 }, (_, i) => {
+        const angle = (i / 28) * Math.PI * 2 + (i % 2 ? 0.12 : -0.12);
+        const dist = 160 + Math.random() * 140;
+        return {
+          dx: Math.cos(angle) * dist,
+          dy: Math.sin(angle) * dist - 40,
+          rot: (Math.random() * 540 - 270).toFixed(0),
+          delay: (Math.random() * 80).toFixed(0),
+          size: 8 + Math.round(Math.random() * 6),
+          hue: Math.random() < 0.7 ? "gold" : "white",
+        };
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [nonce],
+  );
+
+  return (
+    <div
+      key={nonce}
+      className="pointer-events-none fixed inset-0 z-[260] flex items-center justify-center"
+      aria-live="polite"
+    >
+      {/* radial flash */}
+      <div
+        className="jackpot-glow absolute inset-0"
+        style={{
+          background:
+            "radial-gradient(circle at 50% 50%, rgba(251,191,36,0.45) 0%, rgba(251,191,36,0.0) 55%)",
+        }}
+      />
+      {/* confetti coins */}
+      {confetti.map((c, i) => (
+        <span
+          key={i}
+          aria-hidden
+          className="jackpot-coin absolute left-1/2 top-1/2 rounded-full"
+          style={{
+            width: c.size,
+            height: c.size,
+            background:
+              c.hue === "gold"
+                ? "radial-gradient(circle at 30% 30%, #fff7c2 0%, #fbbf24 55%, #b45309 100%)"
+                : "radial-gradient(circle at 30% 30%, #ffffff 0%, #e5e7eb 70%, #9ca3af 100%)",
+            boxShadow: "0 0 10px rgba(251,191,36,0.7)",
+            ["--cx" as string]: `${c.dx}px`,
+            ["--cy" as string]: `${c.dy}px`,
+            ["--rot" as string]: `${c.rot}deg`,
+            animationDelay: `${c.delay}ms`,
+          }}
+        />
+      ))}
+      {/* big WIN amount */}
+      <div className="jackpot-amount relative z-10 select-none text-center">
+        <div className="text-xs font-bold uppercase tracking-[0.35em] text-amber-300/80 [text-shadow:0_0_12px_rgba(0,0,0,0.85)]">
+          You won
+        </div>
+        <div className="bg-gradient-to-b from-yellow-200 via-amber-300 to-orange-500 bg-clip-text text-6xl font-black tabular-nums tracking-tight text-transparent drop-shadow-[0_0_30px_rgba(251,191,36,0.55)] sm:text-7xl">
+          +${fmtUsdWhole(delta)}
+        </div>
+      </div>
+
+      <style jsx>{`
+        .jackpot-glow {
+          animation: jackpot-glow 950ms ease-out forwards;
+        }
+        @keyframes jackpot-glow {
+          0%   { opacity: 0; }
+          20%  { opacity: 1; }
+          100% { opacity: 0; }
+        }
+        .jackpot-amount {
+          animation: jackpot-amount 1100ms cubic-bezier(0.2, 1.4, 0.4, 1) forwards;
+        }
+        @keyframes jackpot-amount {
+          0%   { transform: scale(0.55); opacity: 0; filter: blur(6px); }
+          25%  { transform: scale(1.18); opacity: 1; filter: blur(0); }
+          60%  { transform: scale(1); }
+          100% { transform: scale(0.95); opacity: 0; }
+        }
+        .jackpot-coin {
+          transform: translate3d(-50%, -50%, 0) rotate(0deg) scale(0.4);
+          opacity: 0;
+          animation: jackpot-coin 1100ms cubic-bezier(0.2, 0.7, 0.3, 1) forwards;
+        }
+        @keyframes jackpot-coin {
+          0%   { transform: translate3d(-50%, -50%, 0) rotate(0deg) scale(0.4); opacity: 0; }
+          12%  { opacity: 1; transform: translate3d(-50%, -50%, 0) rotate(0deg) scale(1.05); }
+          75%  { opacity: 1; }
+          100% {
+            transform: translate3d(
+              calc(-50% + var(--cx)),
+              calc(-50% + var(--cy)),
+              0
+            ) rotate(var(--rot)) scale(0.7);
+            opacity: 0;
+          }
+        }
+      `}</style>
     </div>
   );
 }
@@ -2103,6 +2348,43 @@ function MarketTimer({ locksAt }: { locksAt: string }) {
   );
 }
 
+/** 0 = start of window (green-grey), 1 = lock (red-grey). */
+function useBetWindowUrgency(opensAt: string, locksAt: string): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(id);
+  }, []);
+  const openMs = Date.parse(opensAt);
+  const lockMs = Date.parse(locksAt);
+  if (!Number.isFinite(openMs) || !Number.isFinite(lockMs) || lockMs <= openMs) return 0;
+  const remaining = Math.max(0, lockMs - now);
+  const total = lockMs - openMs;
+  return Math.min(1, Math.max(0, 1 - remaining / total));
+}
+
+function betSheetUrgencyBackground(progress: number): string {
+  const p = Math.min(1, Math.max(0, progress));
+  const greenGrey: [number, number, number] = [42, 48, 44];
+  const yellowGrey: [number, number, number] = [50, 47, 38];
+  const redGrey: [number, number, number] = [52, 40, 40];
+  let r: number;
+  let g: number;
+  let b: number;
+  if (p <= 0.5) {
+    const t = p / 0.5;
+    r = greenGrey[0] + (yellowGrey[0] - greenGrey[0]) * t;
+    g = greenGrey[1] + (yellowGrey[1] - greenGrey[1]) * t;
+    b = greenGrey[2] + (yellowGrey[2] - greenGrey[2]) * t;
+  } else {
+    const t = (p - 0.5) / 0.5;
+    r = yellowGrey[0] + (redGrey[0] - yellowGrey[0]) * t;
+    g = yellowGrey[1] + (redGrey[1] - yellowGrey[1]) * t;
+    b = yellowGrey[2] + (redGrey[2] - yellowGrey[2]) * t;
+  }
+  return `rgba(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)}, 0.72)`;
+}
+
 function MapSelectionBottomSheet({
   betHeadline,
   selectionDetail,
@@ -2114,6 +2396,8 @@ function MapSelectionBottomSheet({
   isPlacing,
   error,
   countdown,
+  opensAt,
+  locksAt,
   onClose,
   onPlaceBet,
   gridMode = false,
@@ -2131,6 +2415,8 @@ function MapSelectionBottomSheet({
   isPlacing: boolean;
   error: string | null;
   countdown: ReactNode;
+  opensAt: string;
+  locksAt: string;
   onClose: () => void;
   onPlaceBet: () => Promise<void>;
   gridMode?: boolean;
@@ -2139,6 +2425,8 @@ function MapSelectionBottomSheet({
   zoneTimeRemainingEstSec?: number | null;
   oneTapOptionBet?: boolean;
 }) {
+  const urgency = useBetWindowUrgency(opensAt, locksAt);
+  const sheetBg = betSheetUrgencyBackground(urgency);
   const sorted = [...marketOptions].sort((a, b) => a.displayOrder - b.displayOrder);
   const zoneTimeMode = zoneTimeRemainingEstSec != null;
   const zoneTimeOptions = zoneTimeMode
@@ -2161,11 +2449,13 @@ function MapSelectionBottomSheet({
       }}
     >
       <div
-        className="pointer-events-auto flex h-full flex-col border-y border-r border-white/10 bg-black/40 p-2 text-white shadow-lg backdrop-blur-md"
+        className="pointer-events-auto flex h-full flex-col border-y border-r border-white/10 p-2 text-white shadow-lg backdrop-blur-md"
         /** Match the PiP square (left): width:34vw capped at 180px → height the same. */
         style={{
           height: "min(34vw, 180px)",
           minHeight: "min(34vw, 180px)",
+          backgroundColor: sheetBg,
+          transition: "background-color 0.35s ease",
         }}
       >
         <div className="mb-1 flex items-start gap-2">
