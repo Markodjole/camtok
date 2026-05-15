@@ -803,33 +803,28 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     viewerBetOfferType === "next_zone" ? "pick_zone" : zoneEngineBetActive ? "muted" : "default";
 
   /**
-   * Width-only zoom tiers (Google Maps–style):
-   *  - DEFAULT (~520 m): cruising with destination — see neighbourhood + route.
-   *  - APPROACH (~360 m): no bet yet but within turn trigger window — nudge in.
-   *  - ZONE (~700 m): pick zone / time in zone — whole cell visible.
-   *  - TURN (~280 m): active turn bet — tight on pin so you don't miss it.
+   * Width-only zoom tiers (mobile-first — wider so more context is visible):
+   *  - DEFAULT (~600 m): cruising, see neighbourhood + route.
+   *  - APPROACH (~420 m): entering turn window (90-150m to pin) — gentle zoom-in.
+   *  - ZONE (~900 m): next_zone / zone_exit_time — show full cell + adjacent cells.
+   *  - TURN = APPROACH (no separate tight turn tier).
    */
-  const ZOOM_TIER_DEFAULT_M = 520;
-  const ZOOM_TIER_APPROACH_M = 360;
-  const ZOOM_TIER_ZONE_M = 700;
-  const ZOOM_TIER_TURN_M = 280;
+  const ZOOM_TIER_DEFAULT_M  = 600;
+  const ZOOM_TIER_APPROACH_M = 420;
+  const ZOOM_TIER_ZONE_M     = 900;
 
   const nextPinDistForZoom = driverPins?.[0]?.distanceMeters ?? null;
-  const approachingTurnNoBet =
-    !currentMarket &&
+  const approachingTurn =
     nextPinDistForZoom != null &&
     nextPinDistForZoom >= NEXT_TURN_PIN_MIN_M &&
     nextPinDistForZoom <= NEXT_TURN_PIN_MAX_M;
 
   const targetWidthMeters = (() => {
-    if (mapBetTypeForCamera === "next_turn") return ZOOM_TIER_TURN_M;
     if (
       mapBetTypeForCamera === "next_zone" ||
       mapBetTypeForCamera === "zone_exit_time"
-    ) {
-      return ZOOM_TIER_ZONE_M;
-    }
-    if (approachingTurnNoBet) return ZOOM_TIER_APPROACH_M;
+    ) return ZOOM_TIER_ZONE_M;
+    if (mapBetTypeForCamera === "next_turn" || approachingTurn) return ZOOM_TIER_APPROACH_M;
     return ZOOM_TIER_DEFAULT_M;
   })();
 
@@ -1970,29 +1965,12 @@ function BalanceBadge({
     <div className="pointer-events-none flex justify-end">
       <div
         className={[
-          "relative rounded-full border border-white/10 bg-black/40 px-2.5 py-1 text-xs font-medium tabular-nums text-white/85 backdrop-blur-md transition-all duration-200",
-          showWinFx ? "scale-110 border-amber-300/70 text-amber-50 shadow-[0_0_22px_rgba(251,191,36,0.55)]" : "",
+          "relative overflow-hidden rounded-full border border-white/10 bg-black/40 px-2.5 py-1 text-xs font-medium tabular-nums text-white/85 backdrop-blur-md",
+          showWinFx ? "scale-105" : "",
+          "transition-transform duration-150",
         ].join(" ")}
-        style={
-          showWinFx
-            ? {
-                background:
-                  "linear-gradient(135deg, rgba(120,80,0,0.55), rgba(0,0,0,0.55))",
-              }
-            : undefined
-        }
       >
-        {/* Sheen sweep across the pill on win */}
-        {showWinFx ? (
-          <span
-            aria-hidden
-            className="pointer-events-none absolute inset-0 overflow-hidden rounded-full"
-          >
-            <span className="balance-sheen" />
-          </span>
-        ) : null}
-
-        {/* Coin burst */}
+        {/* Coin burst — only during 1 s win animation */}
         {showWinFx ? (
           <>
             {coins.map((i) => {
@@ -2008,7 +1986,6 @@ function BalanceBadge({
                   style={{
                     background:
                       "radial-gradient(circle at 30% 30%, #fff7c2 0%, #fbbf24 55%, #b45309 100%)",
-                    boxShadow: "0 0 6px rgba(251,191,36,0.9)",
                     ["--cx" as string]: `${dx}px`,
                     ["--cy" as string]: `${dy}px`,
                     animationDelay: `${i * 30}ms`,
@@ -2019,39 +1996,15 @@ function BalanceBadge({
           </>
         ) : null}
 
-        <span className="balance-number relative z-10">
+        <span className="relative z-10">
           ${fmtUsdWhole(showWinFx ? rolling : balance)}
         </span>
-        {showWinFx && splash ? (
-          <span className="balance-delta relative z-10 ml-1 text-[10px] font-semibold text-amber-200">
-            +${fmtUsdWhole(splash.delta)}
-          </span>
-        ) : null}
 
         <style jsx>{`
-          .balance-sheen {
-            position: absolute;
-            top: 0;
-            left: -120%;
-            width: 60%;
-            height: 100%;
-            background: linear-gradient(
-              90deg,
-              transparent 0%,
-              rgba(255, 255, 255, 0.65) 50%,
-              transparent 100%
-            );
-            transform: skewX(-20deg);
-            animation: balance-sheen 1100ms ease-out forwards;
-          }
-          @keyframes balance-sheen {
-            from { left: -120%; }
-            to   { left: 160%; }
-          }
           .balance-coin {
             transform: translate3d(-50%, -50%, 0) scale(0.4);
             opacity: 0;
-            animation: balance-coin 1200ms cubic-bezier(0.2, 0.7, 0.3, 1) forwards;
+            animation: balance-coin 900ms cubic-bezier(0.2, 0.7, 0.3, 1) forwards;
           }
           @keyframes balance-coin {
             0%   { transform: translate3d(-50%, -50%, 0) scale(0.4); opacity: 0; }
@@ -2065,16 +2018,6 @@ function BalanceBadge({
               ) scale(0.6);
               opacity: 0;
             }
-          }
-          .balance-number {
-            text-shadow: ${showWinFx ? "0 0 10px rgba(251,191,36,0.55)" : "none"};
-          }
-          .balance-delta {
-            animation: ${animating ? "balance-delta-in 280ms ease-out" : "none"};
-          }
-          @keyframes balance-delta-in {
-            from { opacity: 0; transform: translateY(-4px); }
-            to   { opacity: 1; transform: translateY(0); }
           }
         `}</style>
       </div>
