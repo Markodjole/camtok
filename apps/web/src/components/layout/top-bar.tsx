@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useUserStore } from "@/stores/user-store";
+import { walletLiveBalance } from "@/lib/live/walletBalance";
 import { useViewerChromeStore } from "@/stores/viewer-chrome-store";
 import { formatCurrency } from "@/lib/utils";
 import { Wallet, ChevronDown, Menu, Sparkles } from "lucide-react";
@@ -128,7 +129,9 @@ export function TopBar() {
             className="flex items-center gap-1.5 rounded-full bg-secondary px-3 py-1.5 text-sm font-medium transition-colors hover:bg-secondary/80"
           >
             <Wallet className="h-3.5 w-3.5 text-primary" />
-            <span>{wallet ? formatCurrency(wallet.balance) : "..."}</span>
+            <span>
+              {wallet ? formatCurrency(walletLiveBalance(wallet)) : "..."}
+            </span>
           </Link>
         )}
       </div>

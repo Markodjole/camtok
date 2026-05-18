@@ -199,15 +199,22 @@ function normalizeAngleDeg(deg: number): number {
 /** Viewer bearing blend toward GPS heading (~Google Maps navigation feel). */
 const VIEWER_MAP_ROTATION_TAU_SEC = 2;
 
-/**
- * Zoom target approaches this fraction of the remaining delta per animation frame (~60fps).
- * The incoming `viewerTargetWidthMeters` is already eased upstream
- * (LiveRoomScreen smooths width over ~1.8 s), so this blend should be tight to
- * avoid double-smoothing lag while still hiding any sub-pixel jitter.
- */
-const VIEWER_ZOOM_BLEND_PER_FRAME = 0.28;
-/** Used only for unusually large jumps (e.g. recovering from manual zoom). */
-const VIEWER_ZOOM_BLEND_LARGE_DELTA = 0.38;
+/** One-shot zoom transition when visible width tier changes (ms). */
+const VIEWER_ZOOM_ANIM_MS = 2400;
+
+function easeInOutCubic(t: number): number {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+function zoomForVisibleWidthM(
+  lat: number,
+  viewportW: number,
+  widthM: number,
+): number {
+  const cosLat = Math.max(0.01, Math.cos((lat * Math.PI) / 180));
+  const z = Math.log2((viewportW * 40075017 * cosLat) / (256 * widthM));
+  return Math.max(12, Math.min(20, z));
+}
 
 /** With `viewerFollowLatLngBounds`, never go wider than this (higher = closer). */
 const VIEWER_FOLLOW_BOUNDS_ZOOM_FLOOR = 14;
@@ -331,6 +338,15 @@ export function LiveMap({
   const viewerTargetWidthRef = useRef<number>(250);
   /** Set by user zoom events; cleared when viewerTargetWidthMeters prop changes. */
   const userZoomOverrideRef = useRef<number | null>(null);
+  /** Single continuous zoom transition (one ease curve, no staged blends). */
+  const viewerZoomAnimRef = useRef<{
+    fromZ: number;
+    toZ: number;
+    startMs: number;
+    durationMs: number;
+  } | null>(null);
+  const viewerZoomAnimQueuedWidthRef = useRef<number | null>(null);
+  const viewerTargetWidthPrevRef = useRef<number | null>(null);
   const smoothHeadingRef = useRef<number>(0);
   /** CSS wrapper rotation target (degrees); `-vehicleHeading`. Viewer RAF eases toward this. */
   const viewerMapRotationTargetRef = useRef<number>(0);
@@ -345,14 +361,18 @@ export function LiveMap({
   const streamer = audienceRole === "streamer";
   // Keep width ref in sync every render.
   viewerTargetWidthRef.current = viewerTargetWidthMeters ?? 250;
-  // When the target width changes (bet type changed) → clear any user zoom override
-  // so auto-zoom kicks in for the new bet's zoom level.
+  // When the target width tier changes → queue one zoom animation (handled in RAF).
   useEffect(() => {
     userZoomOverrideRef.current = null;
-    if (!streamer && followMode) {
-      hasAppliedInitialZoomRef.current = false;
+    if (streamer || viewerTargetWidthMeters == null || viewerTargetWidthMeters <= 0) {
+      return;
     }
-  }, [viewerTargetWidthMeters, viewerZoomRuleKey, followMode, streamer]);
+    const prev = viewerTargetWidthPrevRef.current;
+    viewerTargetWidthPrevRef.current = viewerTargetWidthMeters;
+    if (prev != null && Math.abs(prev - viewerTargetWidthMeters) > 1) {
+      viewerZoomAnimQueuedWidthRef.current = viewerTargetWidthMeters;
+    }
+  }, [viewerTargetWidthMeters, viewerZoomRuleKey, streamer]);
   useEffect(() => {
     onUserInteractRef.current = onUserInteract;
   }, [onUserInteract]);
@@ -1422,11 +1442,11 @@ export function LiveMap({
       // Web Mercator: m/px = 156543.03 * cos(lat) / 2^z.
       // Solve for z given target m/px = targetWidthM / viewportW:
       //   z = log2(viewportW * 40075017 * cos(lat) / (256 * targetWidthM))
-      const cosLat = Math.max(0.01, Math.cos((nLat * Math.PI) / 180));
-      const widthBasedZ = Math.log2(
-        (viewportW * 40075017 * cosLat) / (256 * viewerTargetWidthRef.current),
+      const clampedWidthZ = zoomForVisibleWidthM(
+        nLat,
+        viewportW,
+        viewerTargetWidthRef.current,
       );
-      const clampedWidthZ = Math.max(12, Math.min(20, widthBasedZ));
 
       // When viewerFollowLatLngBounds is active, prefer the bounds-fitted zoom so
       // the map frame stays at the right level to show the whole area (e.g. the
@@ -1435,17 +1455,49 @@ export function LiveMap({
       const boundsZ = smoothGridFramingRef.current ? (viewerBoundsZoomRef.current ?? null) : null;
       const autoZ = boundsZ ?? clampedWidthZ;
 
+      // Start one continuous zoom animation when width tier changes.
+      const queuedWidth = viewerZoomAnimQueuedWidthRef.current;
+      if (
+        followMode &&
+        !streamer &&
+        queuedWidth != null &&
+        queuedWidth > 0 &&
+        userZoomOverrideRef.current == null &&
+        boundsZ == null
+      ) {
+        viewerZoomAnimQueuedWidthRef.current = null;
+        const toZ = zoomForVisibleWidthM(nLat, viewportW, queuedWidth);
+        const fromZ = mm.getZoom();
+        if (Math.abs(toZ - fromZ) > 0.02) {
+          viewerZoomAnimRef.current = {
+            fromZ,
+            toZ,
+            startMs: performance.now(),
+            durationMs: VIEWER_ZOOM_ANIM_MS,
+          };
+        }
+      }
+
       // If user has manually zoomed, respect their choice; only pan.
       const targetZ = userZoomOverrideRef.current ?? autoZ;
       const curZ = mm.getZoom();
       let z = curZ;
-      if (followMode) {
-        const dz = targetZ - curZ;
-        const blend =
-          Math.abs(dz) > 1.25
-            ? VIEWER_ZOOM_BLEND_LARGE_DELTA
-            : VIEWER_ZOOM_BLEND_PER_FRAME;
-        z = Math.abs(dz) < 0.01 ? targetZ : curZ + dz * blend;
+      if (followMode && userZoomOverrideRef.current == null) {
+        const anim = viewerZoomAnimRef.current;
+        if (anim) {
+          const p = Math.min(
+            1,
+            (performance.now() - anim.startMs) / anim.durationMs,
+          );
+          const eased = easeInOutCubic(p);
+          z = anim.fromZ + (anim.toZ - anim.fromZ) * eased;
+          if (p >= 1) {
+            z = anim.toZ;
+            viewerZoomAnimRef.current = null;
+          }
+        } else {
+          z = targetZ;
+        }
       }
 
       mm.setView(centerLatLng, z, { animate: false });

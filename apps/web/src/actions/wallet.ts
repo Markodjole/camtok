@@ -1,6 +1,7 @@
 "use server";
 
 import { createServerClient, createServiceClient } from "@/lib/supabase/server";
+import { walletNumericField } from "@/lib/live/walletBalance";
 import { walletStartingBalance } from "@/lib/live/walletStartingBalance";
 
 /** Create profile and wallet for the current user if missing (e.g. user created before trigger existed). */
@@ -80,6 +81,81 @@ export async function ensureProfileAndWallet(): Promise<
   return { profile: profile ?? null, wallet: wallet ?? null };
 }
 
+/**
+ * Ensure the user's live/demo balance is initialized and persisted (not reset per session).
+ * - Never funded (both lanes 0, no deposits): grant starting balance once.
+ * - Main balance funded but demo lane empty (legacy rows): copy main → demo.
+ */
+export async function ensureWalletLiveBalance(): Promise<
+  { wallet: unknown } | { error: string }
+> {
+  const ensured = await ensureProfileAndWallet();
+  if ("error" in ensured) return ensured;
+
+  const supabase = await createServerClient();
+  const serviceClient = await createServiceClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Not authenticated" };
+
+  const { data: walletRow } = await serviceClient
+    .from("wallets")
+    .select("*")
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  if (!walletRow) return { error: "Wallet not found" };
+
+  const balance = walletNumericField(walletRow.balance);
+  const balanceDemo = walletNumericField(walletRow.balance_demo);
+  const totalDeposited = walletNumericField(walletRow.total_deposited);
+  const start = walletStartingBalance();
+
+  let nextDemo = balanceDemo;
+  let nextMain = balance;
+
+  if (balanceDemo <= 0 && balance > 0) {
+    nextDemo = balance;
+  } else if (balanceDemo <= 0 && balance <= 0 && totalDeposited <= 0) {
+    nextMain = start;
+    nextDemo = start;
+  }
+
+  if (nextDemo !== balanceDemo || nextMain !== balance) {
+    const { error: updateErr } = await serviceClient
+      .from("wallets")
+      .update({
+        balance: nextMain,
+        balance_demo: nextDemo,
+        ...(nextMain > balance && totalDeposited <= 0
+          ? { total_deposited: start }
+          : {}),
+      })
+      .eq("id", walletRow.id);
+
+    if (updateErr) return { error: updateErr.message };
+
+    if (nextMain > balance && totalDeposited <= 0) {
+      await serviceClient.from("wallet_transactions").insert({
+        wallet_id: walletRow.id,
+        type: "deposit_demo",
+        amount: start,
+        balance_after: start,
+        description: "Welcome bonus",
+      });
+    }
+  }
+
+  const { data: wallet } = await serviceClient
+    .from("wallets")
+    .select("*")
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  return { wallet: wallet ?? null };
+}
+
 export async function getWallet() {
   const supabase = await createServerClient();
   const {
@@ -142,7 +218,8 @@ export async function depositDemo(amount: number) {
 
   if (!wallet) return { error: "Wallet not found" };
 
-  const newBalance = Number(wallet.balance) + amount;
+  const newBalance = walletNumericField(wallet.balance) + amount;
+  const newDemo = walletNumericField(wallet.balance_demo) + amount;
 
   const { error: txError } = await serviceClient
     .from("wallet_transactions")
@@ -160,11 +237,12 @@ export async function depositDemo(amount: number) {
     .from("wallets")
     .update({
       balance: newBalance,
-      total_deposited: Number(wallet.total_deposited) + amount,
+      balance_demo: newDemo,
+      total_deposited: walletNumericField(wallet.total_deposited) + amount,
     })
     .eq("id", wallet.id);
 
-  return { data: { balance: newBalance } };
+  return { data: { balance: newBalance, balance_demo: newDemo } };
 }
 
 export async function getAvailableBalance() {

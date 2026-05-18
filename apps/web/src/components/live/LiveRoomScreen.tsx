@@ -49,6 +49,8 @@ import { useViewerChromeStore } from "@/stores/viewer-chrome-store";
 import type { BetTypeV2 } from "@bettok/live";
 import { isEngineMarketType } from "@/lib/live/betting/engineMarketOptions";
 import { useUserStore } from "@/stores/user-store";
+import { ensureWalletLiveBalance } from "@/actions/wallet";
+import { walletLiveBalance } from "@/lib/live/walletBalance";
 
 const LiveMap = dynamic(() => import("./LiveMap").then((m) => m.LiveMap), {
   ssr: false,
@@ -96,9 +98,20 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const lastStakeAmount = useViewerChromeStore((s) => s.lastStakeAmount);
   const isMuted = useViewerChromeStore((s) => s.isMuted);
   const wallet = useUserStore((s) => s.wallet);
+  const walletLoading = useUserStore((s) => s.isLoading);
   const setWallet = useUserStore((s) => s.setWallet);
-  // Live bets debit/credit balance_demo; use it as the display balance in this screen.
-  const liveBalance = Number(wallet?.balance_demo ?? wallet?.balance ?? 0);
+  const liveBalance = walletLiveBalance(wallet);
+
+  useEffect(() => {
+    let cancelled = false;
+    void ensureWalletLiveBalance().then((result) => {
+      if (cancelled || "error" in result || !result.wallet) return;
+      setWallet(result.wallet as Parameters<typeof setWallet>[0]);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [setWallet]);
   const [placingOptionId, setPlacingOptionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [mapSheetError, setMapSheetError] = useState<string | null>(null);
@@ -228,7 +241,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const pulseBalanceChange = useCallback(
     (delta: number, updateWallet: boolean) => {
       if (!Number.isFinite(delta) || delta === 0) return;
-      const from = Number(wallet?.balance_demo ?? wallet?.balance ?? 0);
+      const from = walletLiveBalance(wallet);
       const to = updateWallet ? from + delta : from;
 
       setBalanceChangeSplash({
@@ -892,44 +905,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     currentMarket?.marketType === "next_turn" && !betJustPlaced;
 
   const targetWidthMeters = nextTurnSheetOpen ? ZOOM_NEXT_TURN_M : ZOOM_DEFAULT_M;
-  // Smooth the zoom target over ~1.5 s so bet transitions are gradual.
-  const smoothedWidthRef = useRef<number>(targetWidthMeters);
-  const smoothWidthRafRef = useRef<number | null>(null);
-  const smoothWidthFrameRef = useRef<{ from: number; to: number; startMs: number } | null>(null);
-  const [smoothedWidth, setSmoothedWidth] = useState<number>(targetWidthMeters);
-
-  useEffect(() => {
-    const DURATION_MS = isMobileViewport ? 1800 : 2200;
-    const from = smoothedWidthRef.current;
-    const to = targetWidthMeters;
-    if (Math.abs(to - from) < 1) return;
-    if (smoothWidthRafRef.current != null) cancelAnimationFrame(smoothWidthRafRef.current);
-    smoothWidthFrameRef.current = { from, to, startMs: performance.now() };
-    const tick = () => {
-      const frame = smoothWidthFrameRef.current;
-      if (!frame) return;
-      const p = Math.min(1, (performance.now() - frame.startMs) / DURATION_MS);
-      // ease-in-out cubic
-      const eased = p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2;
-      const val = frame.from + (frame.to - frame.from) * eased;
-      smoothedWidthRef.current = val;
-      setSmoothedWidth(val);
-      if (p < 1) {
-        smoothWidthRafRef.current = requestAnimationFrame(tick);
-      } else {
-        smoothedWidthRef.current = frame.to;
-        setSmoothedWidth(frame.to);
-        smoothWidthRafRef.current = null;
-        smoothWidthFrameRef.current = null;
-      }
-    };
-    smoothWidthRafRef.current = requestAnimationFrame(tick);
-    return () => {
-      if (smoothWidthRafRef.current != null) cancelAnimationFrame(smoothWidthRafRef.current);
-    };
-  }, [targetWidthMeters, isMobileViewport]);
-
-  const viewerTargetWidthMeters = smoothedWidth;
+  // Width jumps instantly; LiveMap runs one continuous zoom animation (no double-ease).
+  const viewerTargetWidthMeters = targetWidthMeters;
 
   const marketTurnPassKey =
     currentMarket != null && currentMarket.marketType !== "city_grid"
@@ -1458,27 +1435,21 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         turnPoint={viewerDecisionLatLng}
         driverPos={viewerDriverPos}
         betOptionLabel={
-          zoneExitPending
+          currentMarket && lastBetMarketId === currentMarket.id
             ? lastBetOptionLabel
-            : currentMarket && lastBetMarketId === currentMarket.id
-              ? lastBetOptionLabel
-              : null
+            : null
         }
         currentBetHeadline={viewerCurrentBetHeadline}
         nowTick={nowTick}
         eligibleRoundPlans={activeBettingRound?.eligibleRoundPlans ?? []}
         highlightedEngineType={
-          zoneExitPending
-            ? null
-            : displayBetType && displayBetType !== viewerBetOfferType
-              ? displayBetType
-              : null
+          displayBetType && displayBetType !== viewerBetOfferType
+            ? displayBetType
+            : null
         }
         onSelectEngineType={(t) => {
           setViewerEnginePillType((prev) => (prev === t ? null : t));
         }}
-        zoneExitInRoundSec={zoneExitPending ? zoneExitInRoundSec : null}
-        zoneExitResolving={zoneExitResolving}
       />
       <BottomNav />
       <LiveEventToasts
@@ -1636,11 +1607,13 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       </button>
 
       <div className="absolute right-4 top-32 z-40 flex flex-col items-end gap-3">
-        <BalanceBadge
-          balance={liveBalance}
-          splash={balanceChangeSplash}
-          onSplashDone={() => setBalanceChangeSplash(null)}
-        />
+        {wallet && !walletLoading ? (
+          <BalanceBadge
+            balance={liveBalance}
+            splash={balanceChangeSplash}
+            onSplashDone={() => setBalanceChangeSplash(null)}
+          />
+        ) : null}
         {mapExpanded ? (
           <div className="flex flex-col items-center gap-5">
           <IconRailButton
@@ -1674,6 +1647,14 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             <IconCrosshair />
           </IconRailButton>
           </div>
+        ) : null}
+        {zoneExitPending ? (
+          <ZoneExitCountdownWidget
+            opensAtMs={zoneExitPending.opensAtMs}
+            estimatedSec={zoneExitPending.estimatedSec}
+            nowMs={nowTick}
+            resolving={zoneExitResolving}
+          />
         ) : null}
       </div>
       {mapExpanded && !mapFollow ? (
@@ -1976,6 +1957,34 @@ function ViewerCenterMoneyFlash({
           on {target}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function ZoneExitCountdownWidget({
+  opensAtMs,
+  estimatedSec,
+  nowMs,
+  resolving = false,
+}: {
+  opensAtMs: number;
+  estimatedSec: number;
+  nowMs: number;
+  resolving?: boolean;
+}) {
+  const elapsed = Math.floor((nowMs - opensAtMs) / 1000);
+  const remaining = Math.max(0, Math.round(estimatedSec) - elapsed);
+
+  return (
+    <div
+      className="pointer-events-none flex h-11 w-11 items-center justify-center rounded-full border border-white/15 bg-black/30 text-sm font-semibold tabular-nums text-white/85 backdrop-blur"
+      title={resolving ? "Resolving bet" : "Time in zone"}
+    >
+      {resolving ? (
+        <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+      ) : (
+        remaining
+      )}
     </div>
   );
 }

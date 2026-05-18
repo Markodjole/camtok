@@ -21,10 +21,6 @@ interface LiveDecisionStatusRibbonProps {
   eligibleRoundPlans?: RoundPlanV2[];
   highlightedEngineType?: BetTypeV2 | null;
   onSelectEngineType?: (type: BetTypeV2) => void;
-  /** Zone-exit bet in play: seconds left until countdown ends (whichever comes first: 0 or zone exit). */
-  zoneExitInRoundSec?: number | null;
-  /** True when countdown hit 0 or driver left zone — waiting for settlement. */
-  zoneExitResolving?: boolean;
 }
 
 function haversineMeters(
@@ -54,8 +50,6 @@ export function LiveDecisionStatusRibbon({
   eligibleRoundPlans = [],
   highlightedEngineType = null,
   onSelectEngineType,
-  zoneExitInRoundSec = null,
-  zoneExitResolving = false,
 }: LiveDecisionStatusRibbonProps) {
   const distanceM =
     turnPoint && driverPos ? haversineMeters(driverPos, turnPoint) : null;
@@ -124,24 +118,7 @@ export function LiveDecisionStatusRibbon({
           </div>
         ) : null}
 
-        {zoneExitInRoundSec != null ? (
-          <div
-            className={`pointer-events-none flex min-w-[5.5rem] items-center justify-center gap-1.5 rounded-full border px-3 py-1 text-[11px] font-bold tabular-nums shadow-sm backdrop-blur-sm [text-shadow:0_1px_2px_rgba(0,0,0,0.65)] ${
-              zoneExitResolving
-                ? "border-amber-300/50 bg-amber-600/40 text-amber-50"
-                : "border-violet-400/55 bg-violet-700/45 text-white"
-            }`}
-          >
-            <span className="text-[9px] font-semibold uppercase tracking-wide opacity-90">
-              {zoneExitResolving ? "Resolving" : "In round"}
-            </span>
-            {!zoneExitResolving ? (
-              <span className="text-sm leading-none">{zoneExitInRoundSec}s</span>
-            ) : (
-              <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-            )}
-          </div>
-        ) : highlightedEngineType && onSelectEngineType ? (
+        {highlightedEngineType && onSelectEngineType ? (
           <button
             type="button"
             onClick={() => {
