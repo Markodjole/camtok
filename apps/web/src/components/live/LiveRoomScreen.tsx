@@ -130,6 +130,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [showCheckpoints, setShowCheckpoints] = useState(true);
   const [mapFollow, setMapFollow] = useState(true);
   const mapFollowRestoreRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastZoomLogKeyRef = useRef<string>("");
   const [osmCheckpoints, setOsmCheckpoints] = useState<MapCheckpoint[]>([]);
   const [pipPos, setPipPos] = useState({ top: 48, left: 12 });
   const [pipDragReady, setPipDragReady] = useState(false);
@@ -830,16 +831,6 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     if (mapBetTypeForCamera === "next_turn" || approachingTurn) return ZOOM_TIER_APPROACH_M;
     return ZOOM_TIER_DEFAULT_M;
   })();
-  const prevTargetWidthRef = useRef<number>(targetWidthMeters);
-  if (prevTargetWidthRef.current !== targetWidthMeters) {
-    console.log("[LiveRoomScreen] zoom tier →", targetWidthMeters, "m", {
-      betType: mapBetTypeForCamera,
-      approachingTurn,
-      prev: prevTargetWidthRef.current,
-    });
-    prevTargetWidthRef.current = targetWidthMeters;
-  }
-
   // Smooth the zoom target over ~1.5 s so bet transitions are gradual.
   const smoothedWidthRef = useRef<number>(targetWidthMeters);
   const smoothWidthRafRef = useRef<number | null>(null);
@@ -878,6 +869,19 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   }, [targetWidthMeters]);
 
   const viewerTargetWidthMeters = smoothedWidth;
+
+  // Log only when bet-driven zoom tier changes (not every smoothed-width animation frame).
+  useEffect(() => {
+    const key = `${mapBetTypeForCamera ?? "none"}:${targetWidthMeters}`;
+    if (lastZoomLogKeyRef.current === key) return;
+    lastZoomLogKeyRef.current = key;
+    console.log("[LiveRoomScreen] zoom tier", {
+      betType: mapBetTypeForCamera,
+      widthM: targetWidthMeters,
+      marketId: currentMarket?.id ?? null,
+      marketType: currentMarket?.marketType ?? null,
+    });
+  }, [mapBetTypeForCamera, targetWidthMeters, currentMarket?.id, currentMarket?.marketType]);
 
   const marketTurnPassKey =
     currentMarket != null && currentMarket.marketType !== "city_grid"
@@ -1097,7 +1101,6 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   // doesn't permanently disable zoom switching between bet rounds.
   useEffect(() => {
     if (currentMarket?.id) {
-      console.log("[LiveRoomScreen] mapFollow → true (new market)", currentMarket.id, currentMarket.marketType);
       if (mapFollowRestoreRef.current) {
         clearTimeout(mapFollowRestoreRef.current);
         mapFollowRestoreRef.current = null;
@@ -1255,13 +1258,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         // Only update when we have an actual Google road polyline.
         // Keep last valid route on transient misses; retry until Google returns again.
         if (j.route?.polyline && j.route.polyline.length > 1) {
-          console.log("[LiveRoomScreen] destinationRoute received", j.route.polyline.length, "pts", "dist:", j.route.distanceMeters, "m");
           setDestinationRoute(j.route.polyline);
-        } else {
-          console.log("[LiveRoomScreen] destinationRoute none", j.reason ?? "unknown");
-          if (j.reason === "no_destination" || j.reason === "arrived") {
-            setDestinationRoute(null);
-          }
+        } else if (j.reason === "no_destination" || j.reason === "arrived") {
+          setDestinationRoute(null);
         }
         setDestinationDistanceM(
           j.route?.distanceMeters ?? j.distanceToDestinationMeters ?? null,

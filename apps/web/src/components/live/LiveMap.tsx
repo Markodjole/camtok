@@ -317,8 +317,6 @@ export function LiveMap({
   const viewerTargetWidthRef = useRef<number>(250);
   /** Set by user zoom events; cleared when viewerTargetWidthMeters prop changes. */
   const userZoomOverrideRef = useRef<number | null>(null);
-  /** Last auto-zoom target we logged (avoid spamming every RAF frame during blend). */
-  const lastLoggedZoomTargetRef = useRef<number | null>(null);
   const smoothHeadingRef = useRef<number>(0);
   /** CSS wrapper rotation target (degrees); `-vehicleHeading`. Viewer RAF eases toward this. */
   const viewerMapRotationTargetRef = useRef<number>(0);
@@ -334,7 +332,6 @@ export function LiveMap({
   // so auto-zoom kicks in for the new bet's zoom level.
   useEffect(() => {
     userZoomOverrideRef.current = null;
-    lastLoggedZoomTargetRef.current = null;
   }, [viewerTargetWidthMeters, viewerZoomRuleKey]);
   useEffect(() => {
     onUserInteractRef.current = onUserInteract;
@@ -742,7 +739,6 @@ export function LiveMap({
         const pts = destinationRoute.map(
           (p) => [p.lat, p.lng] as [number, number],
         );
-        console.log("[LiveMap] rendering destinationRoute", pts.length, "pts");
         const line = L.polyline(pts, {
           color: "#3b82f6",
           weight: 5,
@@ -1398,18 +1394,6 @@ export function LiveMap({
       if (followMode) {
         const dz = targetZ - curZ;
         z = Math.abs(dz) < 0.01 ? targetZ : curZ + dz * VIEWER_ZOOM_BLEND_PER_FRAME;
-      }
-
-      const targetKey = Math.round(targetZ * 2) / 2;
-      if (lastLoggedZoomTargetRef.current !== targetKey) {
-        lastLoggedZoomTargetRef.current = targetKey;
-        console.log("[LiveMap] zoom target →", targetKey, {
-          cur: +curZ.toFixed(2),
-          widthM: viewerTargetWidthRef.current,
-          widthZ: +clampedWidthZ.toFixed(2),
-          boundsZ: boundsZ != null ? +boundsZ.toFixed(2) : null,
-          userOverride: userZoomOverrideRef.current,
-        });
       }
 
       mm.setView(centerLatLng, z, { animate: false });
