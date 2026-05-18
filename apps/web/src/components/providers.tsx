@@ -1,7 +1,7 @@
 "use client";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { createBrowserClient, getUserQueued } from "@/lib/supabase/client";
 import { useUserStore } from "@/stores/user-store";
 import { ToastProvider } from "@/components/ui/toast";
@@ -11,63 +11,51 @@ function AuthSync() {
   const setProfile = useUserStore((s) => s.setProfile);
   const setWallet = useUserStore((s) => s.setWallet);
   const setLoading = useUserStore((s) => s.setLoading);
+  const loadInflightRef = useRef<Promise<void> | null>(null);
 
   useEffect(() => {
     const supabase = createBrowserClient();
 
-    async function loadUser() {
-      const {
-        data: { user },
-      } = await getUserQueued();
+    function loadUser(): Promise<void> {
+      if (loadInflightRef.current) return loadInflightRef.current;
 
-      if (!user) {
+      const run = (async () => {
+        const {
+          data: { user },
+        } = await getUserQueued();
+
+        if (!user) {
+          setProfile(null);
+          setWallet(null);
+          return;
+        }
+
+        const ensured = await ensureWalletLiveBalance();
+        if ("error" in ensured) return;
+        if (ensured.profile) setProfile(ensured.profile as never);
+        if (ensured.wallet) setWallet(ensured.wallet as never);
+      })().finally(() => {
         setLoading(false);
-        return;
-      }
+        loadInflightRef.current = null;
+      });
 
-      const profileRes = await supabase
-        .from("profiles")
-        .select("*")
-        .eq("id", user.id)
-        .maybeSingle();
-
-      let profile = profileRes.data;
-      let wallet: unknown = null;
-
-      const ensured = await ensureWalletLiveBalance();
-      if (!("error" in ensured) && ensured.wallet) {
-        wallet = ensured.wallet;
-      } else {
-        const walletRes = await supabase
-          .from("wallets")
-          .select("*")
-          .eq("user_id", user.id)
-          .maybeSingle();
-        wallet = walletRes.data;
-      }
-
-      if (!profile && wallet) {
-        const profileRetry = await supabase
-          .from("profiles")
-          .select("*")
-          .eq("id", user.id)
-          .maybeSingle();
-        profile = profileRetry.data;
-      }
-
-      if (profile) setProfile(profile);
-      if (wallet) setWallet(wallet as never);
-      setLoading(false);
+      loadInflightRef.current = run;
+      return run;
     }
 
-    loadUser();
+    void loadUser();
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    } = supabase.auth.onAuthStateChange((event, session) => {
       if (!session) {
         setProfile(null);
         setWallet(null);
+        setLoading(false);
+        return;
+      }
+      if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") {
+        void loadUser();
       }
     });
 
@@ -118,7 +106,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
             refetchOnWindowFocus: false,
           },
         },
-      })
+      }),
   );
 
   return (

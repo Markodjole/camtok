@@ -49,7 +49,6 @@ import { useViewerChromeStore } from "@/stores/viewer-chrome-store";
 import type { BetTypeV2 } from "@bettok/live";
 import { isEngineMarketType } from "@/lib/live/betting/engineMarketOptions";
 import { useUserStore } from "@/stores/user-store";
-import { ensureWalletLiveBalance } from "@/actions/wallet";
 import { walletLiveBalance } from "@/lib/live/walletBalance";
 
 const LiveMap = dynamic(() => import("./LiveMap").then((m) => m.LiveMap), {
@@ -101,17 +100,6 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const walletLoading = useUserStore((s) => s.isLoading);
   const setWallet = useUserStore((s) => s.setWallet);
   const liveBalance = walletLiveBalance(wallet);
-
-  useEffect(() => {
-    let cancelled = false;
-    void ensureWalletLiveBalance().then((result) => {
-      if (cancelled || "error" in result || !result.wallet) return;
-      setWallet(result.wallet as Parameters<typeof setWallet>[0]);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [setWallet]);
   const [placingOptionId, setPlacingOptionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [mapSheetError, setMapSheetError] = useState<string | null>(null);
@@ -171,7 +159,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   destinationRouteRef.current = destinationRoute;
   const [destinationEtaSec, setDestinationEtaSec] = useState<number | null>(null);
   const [destinationDistanceM, setDestinationDistanceM] = useState<number | null>(null);
-  const [nowTick, setNowTick] = useState(() => Date.now());
+  /** Start at 0 so SSR and first client paint match; tick after mount (avoids hydration #418). */
+  const [nowTick, setNowTick] = useState(0);
   const [myOpenBetMarketIds, setMyOpenBetMarketIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -1298,6 +1287,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   }, []);
 
   useEffect(() => {
+    setNowTick(Date.now());
     const id = setInterval(() => setNowTick(Date.now()), 500);
     return () => clearInterval(id);
   }, []);

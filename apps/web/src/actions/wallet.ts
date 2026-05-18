@@ -87,7 +87,7 @@ export async function ensureProfileAndWallet(): Promise<
  * - Main balance funded but demo lane empty (legacy rows): copy main → demo.
  */
 export async function ensureWalletLiveBalance(): Promise<
-  { wallet: unknown } | { error: string }
+  { profile: unknown; wallet: unknown } | { error: string }
 > {
   const ensured = await ensureProfileAndWallet();
   if ("error" in ensured) return ensured;
@@ -153,7 +153,13 @@ export async function ensureWalletLiveBalance(): Promise<
     .eq("user_id", user.id)
     .maybeSingle();
 
-  return { wallet: wallet ?? null };
+  const { data: profile } = await serviceClient
+    .from("profiles")
+    .select("*")
+    .eq("id", user.id)
+    .maybeSingle();
+
+  return { profile: profile ?? null, wallet: wallet ?? null };
 }
 
 export async function getWallet() {
