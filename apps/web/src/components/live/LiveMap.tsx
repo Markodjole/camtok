@@ -202,6 +202,14 @@ const VIEWER_MAP_ROTATION_TAU_SEC = 2;
 /** One-shot zoom transition when visible width tier changes (ms). */
 const VIEWER_ZOOM_ANIM_MS = 2400;
 
+/**
+ * Leaflet reloads OSM tiles on every `setView` — cap recenters (~15 Hz) so the map
+ * does not stutter (LCP / stop-go on `leaflet-tile`).
+ */
+const MAP_VIEW_SYNC_MIN_MS = 66;
+const MAP_VIEW_SYNC_MIN_MOVE_M = 0.85;
+const MAP_VIEW_SYNC_MIN_ZOOM_DELTA = 0.035;
+
 function easeInOutCubic(t: number): number {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
@@ -352,10 +360,64 @@ export function LiveMap({
   const viewerMapRotationTargetRef = useRef<number>(0);
   const rotateWithHeadingRef = useRef(false);
   const viewerTurnPinRef = useRef<{ lat: number; lng: number } | null>(null);
+  const rotationShellRef = useRef<HTMLDivElement | null>(null);
+  const lastMapViewSyncRef = useRef({
+    atMs: 0,
+    lat: 0,
+    lng: 0,
+    z: 0,
+  });
   const [mapReady, setMapReady] = useState(0);
-  const [rotationDeg, setRotationDeg] = useState(0);
   const rotationDegRef = useRef(0);
-  rotationDegRef.current = rotationDeg;
+
+  const applyMapShellRotation = (deg: number) => {
+    rotationDegRef.current = deg;
+    const shell = rotationShellRef.current;
+    if (shell) {
+      shell.style.transform = `rotate(${deg}deg)`;
+    }
+    const root = containerRef.current;
+    if (root) {
+      const flatDeg = -deg;
+      root
+        .querySelectorAll<HTMLElement>(".camtok-dest-screen-flat")
+        .forEach((node) => {
+          node.style.transform = `rotate(${flatDeg}deg)`;
+          node.style.transformOrigin = "50% 100%";
+        });
+    }
+  };
+
+  const syncMapViewIfNeeded = (
+    m: import("leaflet").Map,
+    center: { lat: number; lng: number },
+    z: number,
+    force = false,
+  ) => {
+    const nowMs = performance.now();
+    const prev = lastMapViewSyncRef.current;
+    const elapsed = nowMs - prev.atMs;
+    const movedM = metersBetween(
+      { lat: prev.lat, lng: prev.lng },
+      center,
+    );
+    const zoomDelta = Math.abs(z - prev.z);
+    if (
+      !force &&
+      elapsed < MAP_VIEW_SYNC_MIN_MS &&
+      movedM < MAP_VIEW_SYNC_MIN_MOVE_M &&
+      zoomDelta < MAP_VIEW_SYNC_MIN_ZOOM_DELTA
+    ) {
+      return;
+    }
+    m.setView([center.lat, center.lng], z, { animate: false });
+    lastMapViewSyncRef.current = {
+      atMs: nowMs,
+      lat: center.lat,
+      lng: center.lng,
+      z,
+    };
+  };
   const layoutViewportWidthRef = useRef<number | null>(null);
   layoutViewportWidthRef.current = layoutViewportWidthPx ?? null;
   const streamer = audienceRole === "streamer";
@@ -390,25 +452,18 @@ export function LiveMap({
     : profile.zoom + VIEWER_FOLLOW_ZOOM_EXTRA;
 
   useLayoutEffect(() => {
-    const root = containerRef.current;
-    if (!root) return;
-    const deg =
-      rotateWithHeading && followMode ? -rotationDeg : 0;
-    root.querySelectorAll<HTMLElement>(".camtok-dest-screen-flat").forEach((node) => {
-      node.style.transform = `rotate(${deg}deg)`;
-      node.style.transformOrigin = "50% 100%";
-    });
-  }, [rotationDeg, rotateWithHeading, followMode, mapReady, destination]);
-
-  useLayoutEffect(() => {
     const el = containerRef.current;
     if (!el) return;
     if (!rotateWithHeading || !followMode) {
       el.style.setProperty("--camtok-map-rotation", "0deg");
+      applyMapShellRotation(0);
       return;
     }
-    el.style.setProperty("--camtok-map-rotation", `${rotationDeg}deg`);
-  }, [rotationDeg, rotateWithHeading, followMode]);
+    el.style.setProperty(
+      "--camtok-map-rotation",
+      `${rotationDegRef.current}deg`,
+    );
+  }, [rotateWithHeading, followMode, mapReady, destination]);
 
   useEffect(() => {
     if (!followMode) hasAppliedInitialZoomRef.current = false;
@@ -544,8 +599,9 @@ export function LiveMap({
       const t = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
         maxZoom: 19,
         opacity: 0.4,
-        keepBuffer: 8,
+        keepBuffer: 3,
         updateWhenIdle: false,
+        updateWhenZooming: false,
       });
       t.addTo(m);
       zoneLayerRef.current = L.layerGroup().addTo(m);
@@ -1057,33 +1113,14 @@ export function LiveMap({
           smoothHeadingRef.current = normalizeAngleDeg(
             smoothHeadingRef.current + delta * rotationEase,
           );
-          setRotationDeg(smoothHeadingRef.current);
-          const root = containerRef.current;
-          if (root) {
-            const deg = -smoothHeadingRef.current;
-            root
-              .querySelectorAll<HTMLElement>(".camtok-dest-screen-flat")
-              .forEach((node) => {
-                node.style.transform = `rotate(${deg}deg)`;
-                node.style.transformOrigin = "50% 100%";
-              });
-          }
+          applyMapShellRotation(smoothHeadingRef.current);
         } else {
           viewerMapRotationTargetRef.current = target;
         }
       } else if (followMode) {
         smoothHeadingRef.current = 0;
         viewerMapRotationTargetRef.current = 0;
-        setRotationDeg(0);
-        const root = containerRef.current;
-        if (root) {
-          root
-            .querySelectorAll<HTMLElement>(".camtok-dest-screen-flat")
-            .forEach((node) => {
-              node.style.transform = "rotate(0deg)";
-              node.style.transformOrigin = "50% 100%";
-            });
-        }
+        applyMapShellRotation(0);
       }
     })();
   }, [
@@ -1245,7 +1282,11 @@ export function LiveMap({
         const rotRad = isMapRotating ? (rotationDegRef.current * Math.PI) / 180 : 0;
         const driverPt = m.latLngToLayerPoint(livePos);
         const cPt = { x: driverPt.x - S * Math.sin(rotRad), y: driverPt.y - S * Math.cos(rotRad) };
-        m.setView(m.layerPointToLatLng(cPt as import("leaflet").Point), m.getZoom(), { animate: false });
+        syncMapViewIfNeeded(
+          m,
+          m.layerPointToLatLng(cPt as import("leaflet").Point),
+          m.getZoom(),
+        );
       }
 
       if (t < totalMs) {
@@ -1324,17 +1365,7 @@ export function LiveMap({
         smoothHeadingRef.current = normalizeAngleDeg(
           smoothHeadingRef.current + rotDelta * rotAlpha,
         );
-        setRotationDeg(smoothHeadingRef.current);
-        const root = containerRef.current;
-        if (root) {
-          const deg = -smoothHeadingRef.current;
-          root
-            .querySelectorAll<HTMLElement>(".camtok-dest-screen-flat")
-            .forEach((node) => {
-              node.style.transform = `rotate(${deg}deg)`;
-              node.style.transformOrigin = "50% 100%";
-            });
-        }
+        applyMapShellRotation(smoothHeadingRef.current);
       }
 
       const target = viewerPollTargetRef.current;
@@ -1500,7 +1531,12 @@ export function LiveMap({
         }
       }
 
-      mm.setView(centerLatLng, z, { animate: false });
+      syncMapViewIfNeeded(
+        mm,
+        centerLatLng,
+        z,
+        viewerZoomAnimRef.current != null,
+      );
 
       viewerSmoothRafRef.current = requestAnimationFrame(loop);
     };
@@ -1543,22 +1579,21 @@ export function LiveMap({
     <div className="relative h-full w-full" style={{ background: "rgba(10,10,20,0.4)" }}>
       <div className="absolute inset-0 overflow-hidden">
         <div
+          ref={rotationShellRef}
           style={
             {
               position: "absolute",
-              "--camtok-map-rotation":
-                rotateWithHeading && followMode ? `${rotationDeg}deg` : "0deg",
+              transform: "rotate(0deg)",
+              transformOrigin: "50% 50%",
               ...(rotateWithHeading && followMode
                 ? {
                     inset: "-50% -80%",
-                    transform: `rotate(${rotationDeg}deg)`,
-                    transformOrigin: "50% 50%",
                     transition: streamer
-                      ? "transform 1100ms cubic-bezier(0.22,0.61,0.36,1), --camtok-map-rotation 1100ms cubic-bezier(0.22,0.61,0.36,1)"
-                      : "none",
+                      ? "transform 1100ms cubic-bezier(0.22,0.61,0.36,1)"
+                      : undefined,
                   }
                 : { inset: 0 }),
-            } as CSSProperties & { "--camtok-map-rotation"?: string }
+            } as CSSProperties
           }
         >
           <div

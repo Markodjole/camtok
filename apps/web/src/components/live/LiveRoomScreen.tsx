@@ -49,6 +49,7 @@ import { useViewerChromeStore } from "@/stores/viewer-chrome-store";
 import type { BetTypeV2 } from "@bettok/live";
 import { isEngineMarketType } from "@/lib/live/betting/engineMarketOptions";
 import { useUserStore } from "@/stores/user-store";
+import { getWallet } from "@/actions/wallet";
 import { walletLiveBalance } from "@/lib/live/walletBalance";
 
 const LiveMap = dynamic(() => import("./LiveMap").then((m) => m.LiveMap), {
@@ -227,11 +228,16 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     },
     [],
   );
+  const syncWalletFromServer = useCallback(async () => {
+    const fresh = await getWallet();
+    if (fresh) setWallet(fresh as Parameters<typeof setWallet>[0]);
+  }, [setWallet]);
+
   const pulseBalanceChange = useCallback(
-    (delta: number, updateWallet: boolean) => {
+    (delta: number) => {
       if (!Number.isFinite(delta) || delta === 0) return;
       const from = walletLiveBalance(wallet);
-      const to = updateWallet ? from + delta : from;
+      const to = from + delta;
 
       setBalanceChangeSplash({
         from,
@@ -241,11 +247,11 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       });
       if (delta > 0) playMoneySound(isMuted);
 
-      if (wallet && updateWallet) {
+      if (wallet) {
         setWallet({
           ...wallet,
           balance_demo: to,
-          total_won: Number(wallet.total_won ?? 0) + Math.max(0, delta),
+          balance: to,
         });
       }
     },
@@ -521,18 +527,17 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       setZoneExitPending((prev) =>
         prev?.marketId === data.marketId ? null : prev,
       );
-      if (data.won) {
-        // Stake was already deducted at placement. Credit payout (which includes
-        // the returned stake + winnings), so net change = payout - stake.
+      if (data.won || data.payoutAmount > 0) {
+        // Stake already deducted on bet. Server credits full payoutAmount (parimutuel share).
         pulseCenterMoney("win", data.payoutAmount, targetLabel);
-        pulseBalanceChange(data.payoutAmount - data.stakeAmount, true);
+        pulseBalanceChange(data.payoutAmount);
       } else {
-        // Stake already gone from the store at placement — just show the flash.
+        // Loss: stake already removed on bet — no second deduction.
         pulseCenterMoney("loss", data.stakeAmount, targetLabel);
-        pulseBalanceChange(-data.stakeAmount, false);
       }
+      void syncWalletFromServer();
     },
-    [pulseBalanceChange, pulseCenterMoney],
+    [pulseBalanceChange, pulseCenterMoney, syncWalletFromServer],
   );
 
   const onViewerRoomActivity = useCallback(
@@ -694,7 +699,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             null;
         }
         // Immediately deduct stake from the displayed balance — server already did it.
-        pulseBalanceChange(-lastStakeAmount, true);
+        pulseBalanceChange(-lastStakeAmount);
+        void syncWalletFromServer();
         pulseCenterMoney("stake", lastStakeAmount, pickedLabel);
         setSelectedMapOptionId(null);
         setLastBetMarketId(market.id);
