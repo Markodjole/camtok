@@ -171,6 +171,15 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [lastBetOptionLabel, setLastBetOptionLabel] = useState<string | null>(null);
   // Set immediately on bet press — hides the popup before the server even responds.
   const [betJustPlaced, setBetJustPlaced] = useState(false);
+  const betJustPlacedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Show the pressed button for 1 s, then close the sheet.
+  const scheduleBetClose = useCallback(() => {
+    if (betJustPlacedTimerRef.current) clearTimeout(betJustPlacedTimerRef.current);
+    betJustPlacedTimerRef.current = setTimeout(() => {
+      setBetJustPlaced(true);
+      betJustPlacedTimerRef.current = null;
+    }, 1000);
+  }, []);
   /** Active zone_exit_time bet waiting for countdown / zone exit / settlement. */
   const [zoneExitPending, setZoneExitPending] = useState<{
     marketId: string;
@@ -328,6 +337,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
   const currentZoneCellKey = useMemo(() => {
     if (!currentZoneId) return null;
+    // currentZoneId is "grid:r{row}:c{col}"; server stores startCellKey as "cell:r{row}:c{col}".
+    // Parse the row/col and rebuild with the "cell:" prefix to match the server format.
     const p = parseGridOptionId(currentZoneId);
     if (!p) return null;
     return `cell:r${p.row}:c${p.col}`;
@@ -723,6 +734,10 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         });
         setError(message);
         setMapSheetError(message);
+        if (betJustPlacedTimerRef.current) {
+          clearTimeout(betJustPlacedTimerRef.current);
+          betJustPlacedTimerRef.current = null;
+        }
         setBetJustPlaced(false);
         return { ok: false as const, error: message };
       }
@@ -862,27 +877,21 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     viewerBetOfferType === "next_zone" ? "pick_zone" : zoneEngineBetActive ? "muted" : "default";
 
   /**
-   * Visible width targets (metres) — tuned so mobile actually feels the step.
-   * Mobile uses real screen width for zoom math; zone pick = 700 m on phone.
+   * Two zoom widths only:
+   *   • default  → always show 700 m on mobile (900 m on desktop)
+   *   • next_turn bet popup open → 450 m on mobile (600 m on desktop)
+   * Everything else (zone, time-in-zone, cruising) stays at the default.
    */
-  const ZOOM_TIER_DEFAULT_M = isMobileViewport ? 480 : 600;
-  const ZOOM_TIER_APPROACH_M = isMobileViewport ? 200 : 250;
-  const ZOOM_TIER_ZONE_M = isMobileViewport ? 700 : 900;
+  const ZOOM_DEFAULT_M = isMobileViewport ? 700 : 900;
+  const ZOOM_NEXT_TURN_M = isMobileViewport ? 450 : 600;
 
-  const nextPinDistForZoom = driverPins?.[0]?.distanceMeters ?? null;
-  const approachingTurn =
-    nextPinDistForZoom != null &&
-    nextPinDistForZoom >= NEXT_TURN_PIN_MIN_M &&
-    nextPinDistForZoom <= NEXT_TURN_PIN_MAX_M;
+  // Zoom tightens when there is an open next_turn market and no bet placed yet.
+  // betJustPlaced is declared early enough; viewerHasBetOnCurrentMarket/betWindowClosed
+  // are derived later but when true the sheet is already gone so zoom reverts naturally.
+  const nextTurnSheetOpen =
+    currentMarket?.marketType === "next_turn" && !betJustPlaced;
 
-  const targetWidthMeters = (() => {
-    if (
-      mapBetTypeForCamera === "next_zone" ||
-      mapBetTypeForCamera === "zone_exit_time"
-    ) return ZOOM_TIER_ZONE_M;
-    if (mapBetTypeForCamera === "next_turn" || approachingTurn) return ZOOM_TIER_APPROACH_M;
-    return ZOOM_TIER_DEFAULT_M;
-  })();
+  const targetWidthMeters = nextTurnSheetOpen ? ZOOM_NEXT_TURN_M : ZOOM_DEFAULT_M;
   // Smooth the zoom target over ~1.5 s so bet transitions are gradual.
   const smoothedWidthRef = useRef<number>(targetWidthMeters);
   const smoothWidthRafRef = useRef<number | null>(null);
@@ -890,7 +899,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [smoothedWidth, setSmoothedWidth] = useState<number>(targetWidthMeters);
 
   useEffect(() => {
-    const DURATION_MS = isMobileViewport ? 700 : 1500;
+    const DURATION_MS = isMobileViewport ? 1800 : 2200;
     const from = smoothedWidthRef.current;
     const to = targetWidthMeters;
     if (Math.abs(to - from) < 1) return;
@@ -1094,7 +1103,17 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         setLastBetOptionLabel(null);
       }
     }
+    if (betJustPlacedTimerRef.current) {
+      clearTimeout(betJustPlacedTimerRef.current);
+      betJustPlacedTimerRef.current = null;
+    }
     setBetJustPlaced(false);
+    // Clear zone-exit pending when the market it was tracking is no longer active.
+    setZoneExitPending((prev) => {
+      if (!prev) return null;
+      if (!currentMarket || currentMarket.id !== prev.marketId) return null;
+      return prev;
+    });
   }, [currentMarket?.id, lastBetMarketId]);
   const checkpoints = osmCheckpoints;
   const selectedZone = zones.find((z) => z.id === selectedZoneId) ?? null;
@@ -1545,7 +1564,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
                 !placingOptionId &&
                 !viewerHasBetOnCurrentMarket
               ) {
-                setBetJustPlaced(true);
+                scheduleBetClose();
                 void placeBet(id).then((result) => {
                   if (result?.ok) {
                     setSelectedZoneId(null);
@@ -1797,7 +1816,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               });
               return;
             }
-            setBetJustPlaced(true);
+            scheduleBetClose();
             void placeBet(id).then((result) => {
               if (result?.ok) {
                 setSelectedZoneId(null);
@@ -1821,7 +1840,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           }}
           onPlaceBet={async () => {
             if (!selectedMapOptionId || sheetBettingClosed) return;
-            setBetJustPlaced(true);
+            scheduleBetClose();
             const result = await placeBet(selectedMapOptionId);
             if (result?.ok) {
               setSelectedZoneId(null);
