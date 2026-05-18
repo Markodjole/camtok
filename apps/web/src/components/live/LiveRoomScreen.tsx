@@ -192,6 +192,11 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   } | null>(null);
   /** Market IDs whose countdown already finished — prevents sync effect from restoring them. */
   const zoneExitDismissedRef = useRef<Set<string>>(new Set());
+  /** Active next_zone (city_grid) bet — tracks start cell to detect border crossing. */
+  const [cityGridBetPending, setCityGridBetPending] = useState<{
+    marketId: string;
+    startCellKey: string;
+  } | null>(null);
   const pipLongPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pipDragRef = useRef<{
     pointerId: number | null;
@@ -370,9 +375,18 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     zoneExitPending && (zoneExitInRoundSec === 0 || zoneExitLeftZone),
   );
 
+  /** True once the vehicle has left the start cell for a next_zone bet. */
+  const cityGridBetCrossed = Boolean(
+    cityGridBetPending &&
+      currentZoneCellKey &&
+      currentZoneCellKey !== cityGridBetPending.startCellKey,
+  );
+
   const urgentSettlementMarketId = zoneExitResolving
     ? zoneExitPending!.marketId
-    : null;
+    : cityGridBetCrossed
+      ? cityGridBetPending!.marketId
+      : null;
 
   // Countdown stays visible until the server confirms settlement via handleSettlement.
   // zoneExitResolving only switches the widget to a spinner — it never clears it.
@@ -536,6 +550,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         }
         return prev;
       });
+      setCityGridBetPending((prev) =>
+        prev?.marketId === data.marketId ? null : prev,
+      );
       if (data.won || data.payoutAmount > 0) {
         // Stake already deducted on bet. Server credits full payoutAmount (parimutuel share).
         pulseCenterMoney("win", data.payoutAmount, targetLabel);
@@ -709,6 +726,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         });
       }
     }
+    if (market.marketType === "city_grid" && currentZoneCellKey) {
+      setCityGridBetPending({ marketId: market.id, startCellKey: currentZoneCellKey });
+    }
     // ──────────────────────────────────────────────────────────────────────
 
     viewerLiveLog("place_bet_request", {
@@ -748,6 +768,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         // Roll back optimistic balance deduction.
         pulseBalanceChange(+stake);
         setZoneExitPending(null);
+        setCityGridBetPending(null);
         setError(message);
         setMapSheetError(message);
         if (betJustPlacedTimerRef.current) {
@@ -1094,6 +1115,11 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         zoneExitDismissedRef.current.add(prev.marketId);
         return null;
       }
+      return prev;
+    });
+    setCityGridBetPending((prev) => {
+      if (!prev) return null;
+      if (!currentMarket || currentMarket.id !== prev.marketId) return null;
       return prev;
     });
   }, [currentMarket?.id, lastBetMarketId]);

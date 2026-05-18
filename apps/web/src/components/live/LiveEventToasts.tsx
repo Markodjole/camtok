@@ -20,7 +20,7 @@ function queueToast(
 type EnrichedSettlement = {
   market_id: string;
   title: string;
-  won: boolean;
+  won: boolean | null;
   stake_amount: number;
   payout_amount: number;
   status: string;
@@ -135,8 +135,11 @@ export function LiveEventToasts({
               payoutAmount: s.payout_amount,
             });
             // Toast so the result is always visible regardless of z-index issues.
+            const isRefund = s.status === "refunded";
             if (s.won) {
               queueToast(setToasts, `+$${s.payout_amount} Won!`, "ok");
+            } else if (isRefund) {
+              queueToast(setToasts, `↩ $${s.stake_amount} Refunded`, "info");
             } else {
               queueToast(setToasts, `-$${s.stake_amount} Lost`, "bad");
             }
@@ -146,7 +149,7 @@ export function LiveEventToasts({
               options: s.options,
               myOptionId: s.my_option_id,
               winningOptionId: s.winning_option_id,
-              won: s.won,
+              won: s.won ?? false,
               stakeAmount: s.stake_amount,
               payoutAmount: s.payout_amount,
             });

@@ -69,9 +69,9 @@ export async function GET(
       .select("market_id, won, stake_amount, payout_amount, status, settled_at, option_id")
       .eq("room_id", roomId)
       .eq("user_id", user.id)
-      .in("status", ["settled_win", "settled_loss"])
+      .in("status", ["settled_win", "settled_loss", "refunded"])
       .order("settled_at", { ascending: false })
-      .limit(8);
+      .limit(10);
 
     const myBets = (betRows ?? []) as Array<{
       market_id: string;
