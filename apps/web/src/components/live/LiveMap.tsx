@@ -199,10 +199,15 @@ function normalizeAngleDeg(deg: number): number {
 /** Viewer bearing blend toward GPS heading (~Google Maps navigation feel). */
 const VIEWER_MAP_ROTATION_TAU_SEC = 2;
 
-/** Zoom target approaches this fraction of the remaining delta per animation frame (~60fps). */
-const VIEWER_ZOOM_BLEND_PER_FRAME = 0.11;
-/** Faster blend when tier jump is large (mobile must feel the step). */
-const VIEWER_ZOOM_BLEND_LARGE_DELTA = 0.32;
+/**
+ * Zoom target approaches this fraction of the remaining delta per animation frame (~60fps).
+ * The incoming `viewerTargetWidthMeters` is already eased upstream
+ * (LiveRoomScreen smooths width over ~1.8 s), so this blend should be tight to
+ * avoid double-smoothing lag while still hiding any sub-pixel jitter.
+ */
+const VIEWER_ZOOM_BLEND_PER_FRAME = 0.28;
+/** Used only for unusually large jumps (e.g. recovering from manual zoom). */
+const VIEWER_ZOOM_BLEND_LARGE_DELTA = 0.38;
 
 /** With `viewerFollowLatLngBounds`, never go wider than this (higher = closer). */
 const VIEWER_FOLLOW_BOUNDS_ZOOM_FLOOR = 14;
@@ -909,8 +914,28 @@ export function LiveMap({
       const pos: [number, number] = [last.lat, last.lng];
       const latlngs: [number, number][] = routePoints.map((p) => [p.lat, p.lng]);
       const isFirstFollowFrame = !hasAppliedInitialZoomRef.current;
+      // Viewer width-based zoom is AUTHORITATIVE when set: compute initial zoom from
+      // the desired visible width so the first frame already matches the target
+      // (instead of snapping to profile zoom ~17.3 and blending down for seconds).
+      const widthTarget = viewerTargetWidthMeters;
+      const widthBasedInitialZoom =
+        !streamer &&
+        widthTarget != null &&
+        widthTarget > 0 &&
+        layoutViewportWidthPx != null &&
+        layoutViewportWidthPx > 0
+          ? (() => {
+              const cosLat = Math.max(0.01, Math.cos((last.lat * Math.PI) / 180));
+              const z = Math.log2(
+                (layoutViewportWidthPx * 40075017 * cosLat) /
+                  (256 * widthTarget),
+              );
+              return Math.max(12, Math.min(20, z));
+            })()
+          : null;
       const viewerTurnPinActive =
         !streamer &&
+        widthBasedInitialZoom == null &&
         viewerFollowLatLngBounds == null &&
         (viewerFollowZoom == null || !Number.isFinite(viewerFollowZoom)) &&
         (turnTarget != null ||
@@ -921,9 +946,12 @@ export function LiveMap({
         ? Math.max(viewerFollowProfileZoom, 17.5)
         : viewerFollowProfileZoom;
       viewerTurnNavZoomRef.current = viewerTurnPinActive ? navZoomFloor : null;
-      const baseZoom = viewerFollowLatLngBounds
-        ? viewerBoundsZoomRef.current ?? viewerFollowProfileZoom
-        : viewerFollowZoom ?? navZoomFloor;
+      const baseZoom =
+        widthBasedInitialZoom != null
+          ? widthBasedInitialZoom
+          : viewerFollowLatLngBounds
+            ? viewerBoundsZoomRef.current ?? viewerFollowProfileZoom
+            : viewerFollowZoom ?? navZoomFloor;
       const targetZoom = interactive
         ? hasAppliedInitialZoomRef.current
           ? m.getZoom()
