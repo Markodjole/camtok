@@ -169,6 +169,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   }, [room.roomId]);
   const [lastBetMarketId, setLastBetMarketId] = useState<string | null>(null);
   const [lastBetOptionLabel, setLastBetOptionLabel] = useState<string | null>(null);
+  // Set immediately on bet press — hides the popup before the server even responds.
+  const [betJustPlaced, setBetJustPlaced] = useState(false);
   /** Active zone_exit_time bet waiting for countdown / zone exit / settlement. */
   const [zoneExitPending, setZoneExitPending] = useState<{
     marketId: string;
@@ -507,11 +509,14 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         prev?.marketId === data.marketId ? null : prev,
       );
       if (data.won) {
+        // Stake was already deducted at placement. Credit payout (which includes
+        // the returned stake + winnings), so net change = payout - stake.
         pulseCenterMoney("win", data.payoutAmount, targetLabel);
-        pulseBalanceChange(data.payoutAmount, true);
+        pulseBalanceChange(data.payoutAmount - data.stakeAmount, true);
       } else {
+        // Stake already gone from the store at placement — just show the flash.
         pulseCenterMoney("loss", data.stakeAmount, targetLabel);
-        pulseBalanceChange(-data.stakeAmount, true);
+        pulseBalanceChange(-data.stakeAmount, false);
       }
     },
     [pulseBalanceChange, pulseCenterMoney],
@@ -675,6 +680,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             market.options.find((o) => o.id === optionId)?.label ??
             null;
         }
+        // Immediately deduct stake from the displayed balance — server already did it.
+        pulseBalanceChange(-lastStakeAmount, true);
         pulseCenterMoney("stake", lastStakeAmount, pickedLabel);
         setSelectedMapOptionId(null);
         setLastBetMarketId(market.id);
@@ -716,6 +723,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         });
         setError(message);
         setMapSheetError(message);
+        setBetJustPlaced(false);
         return { ok: false as const, error: message };
       }
       return { ok: false as const, error: "Bet failed" };
@@ -1078,7 +1086,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     routePoints.length > 0
       ? { lat: routePoints[routePoints.length - 1]!.lat, lng: routePoints[routePoints.length - 1]!.lng }
       : null;
-  // Keep the "your pick" tag only while the market you bet on is still live.
+  // Clear the "just placed" flag and pick label when market changes.
   useEffect(() => {
     if (!currentMarket || currentMarket.id !== lastBetMarketId) {
       if (lastBetMarketId && currentMarket?.id !== lastBetMarketId) {
@@ -1086,6 +1094,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         setLastBetOptionLabel(null);
       }
     }
+    setBetJustPlaced(false);
   }, [currentMarket?.id, lastBetMarketId]);
   const checkpoints = osmCheckpoints;
   const selectedZone = zones.find((z) => z.id === selectedZoneId) ?? null;
@@ -1170,6 +1179,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     showLiveBets &&
     currentMarket != null &&
     !viewerHasBetOnCurrentMarket &&
+    !betJustPlaced &&
     !betWindowClosed;
   void isLocked;
   void betPanelDismissed;
@@ -1535,6 +1545,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
                 !placingOptionId &&
                 !viewerHasBetOnCurrentMarket
               ) {
+                setBetJustPlaced(true);
                 void placeBet(id).then((result) => {
                   if (result?.ok) {
                     setSelectedZoneId(null);
@@ -1786,6 +1797,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               });
               return;
             }
+            setBetJustPlaced(true);
             void placeBet(id).then((result) => {
               if (result?.ok) {
                 setSelectedZoneId(null);
@@ -1809,6 +1821,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           }}
           onPlaceBet={async () => {
             if (!selectedMapOptionId || sheetBettingClosed) return;
+            setBetJustPlaced(true);
             const result = await placeBet(selectedMapOptionId);
             if (result?.ok) {
               setSelectedZoneId(null);
@@ -1962,21 +1975,20 @@ function BalanceBadge({
   /** Gold glow / coins only during the 1 s win animation, never after. */
   const showWinFx = animating && isWin;
 
-  /** Slot-machine rolling number for wins. */
+  /** Animated rolling number — runs for both wins (up) and deductions (down). */
   const [rolling, setRolling] = useState<number>(balance);
   useEffect(() => {
-    if (!splash || splash.delta <= 0) {
+    if (!splash || splash.from === splash.to) {
       setRolling(balance);
       return;
     }
     const fromVal = splash.from;
     const toVal = splash.to;
     const startMs = performance.now();
-    const dur = 700;
+    const dur = splash.delta > 0 ? 700 : 350;
     let raf = 0;
     const tick = () => {
       const t = Math.min(1, (performance.now() - startMs) / dur);
-      // ease-out cubic
       const eased = 1 - Math.pow(1 - t, 3);
       setRolling(fromVal + (toVal - fromVal) * eased);
       if (t < 1) raf = requestAnimationFrame(tick);
@@ -2030,7 +2042,7 @@ function BalanceBadge({
         ) : null}
 
         <span className="relative z-10">
-          ${fmtUsdWhole(showWinFx ? rolling : balance)}
+          ${fmtUsdWhole(animating && splash!.from !== splash!.to ? rolling : balance)}
         </span>
 
         <style jsx>{`

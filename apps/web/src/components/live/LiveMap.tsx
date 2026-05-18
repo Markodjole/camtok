@@ -337,6 +337,7 @@ export function LiveMap({
   rotationDegRef.current = rotationDeg;
   const layoutViewportWidthRef = useRef<number | null>(null);
   layoutViewportWidthRef.current = layoutViewportWidthPx ?? null;
+  const streamer = audienceRole === "streamer";
   // Keep width ref in sync every render.
   viewerTargetWidthRef.current = viewerTargetWidthMeters ?? 250;
   // When the target width changes (bet type changed) → clear any user zoom override
@@ -355,7 +356,6 @@ export function LiveMap({
   viewerFollowZoomRef.current = viewerFollowZoom ?? null;
   smoothGridFramingRef.current = viewerFollowLatLngBounds != null;
   rotateWithHeadingRef.current = rotateWithHeading;
-  const streamer = audienceRole === "streamer";
   const showHistoryPath = true;
   const smoothMotion = true;
   const col = streamer ? C.streamer : C.viewer;
