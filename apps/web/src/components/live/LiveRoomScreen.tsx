@@ -666,12 +666,57 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     if (!room.currentMarket) return;
     if (placingOptionId) return;
     const market = room.currentMarket;
+    const stake = lastStakeAmount;
+
+    // Resolve the label from local data — no network needed.
+    let pickedLabel: string | null = null;
+    if (market.marketType === "city_grid") {
+      const spec = market.cityGridSpec;
+      const p = parseGridOptionId(optionId);
+      pickedLabel = p && spec ? cellLabel(p.row, p.col) : optionId;
+    } else if (market.marketType === "zone_exit_time") {
+      pickedLabel =
+        zoneTimeOptionLabel(optionId, estimatedZoneSecondsRemaining(market, Date.now())) ??
+        market.options.find((o) => o.id === optionId)?.shortLabel ??
+        market.options.find((o) => o.id === optionId)?.label ??
+        null;
+    } else {
+      pickedLabel =
+        market.options.find((o) => o.id === optionId)?.shortLabel ??
+        market.options.find((o) => o.id === optionId)?.label ??
+        null;
+    }
+
+    // ── Optimistic UI — fire immediately, before the network call ──────────
+    pulseBalanceChange(-stake);
+    pulseCenterMoney("stake", stake, pickedLabel);
+    setSelectedMapOptionId(null);
+    setLastBetMarketId(market.id);
+    setLastBetOptionLabel(pickedLabel);
+    if (market.marketType === "zone_exit_time") {
+      const parsed = parseZoneExitMarketMeta(market);
+      const startCellKey = parsed?.startCellKey ?? currentZoneCellKey;
+      if (parsed && startCellKey) {
+        const now = Date.now();
+        const elapsedSinceOpen = Math.max(0, (now - parsed.opensAtMs) / 1000);
+        const remaining = Math.max(1, parsed.estimatedSec - elapsedSinceOpen);
+        zoneExitDismissedRef.current.delete(market.id);
+        setZoneExitPending({
+          marketId: market.id,
+          betPlacedAtMs: now,
+          remainingAtBetSec: remaining,
+          startCellKey,
+        });
+      }
+    }
+    // ──────────────────────────────────────────────────────────────────────
+
     viewerLiveLog("place_bet_request", {
       roomId: room.roomId,
       marketId: market.id,
       marketType: market.marketType,
       optionId,
-      stakeAmount: lastStakeAmount,
+      stakeAmount: stake,
     });
     setError(null);
     setMapSheetError(null);
@@ -680,62 +725,15 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       const res = await fetch(`/api/live/rooms/${room.roomId}/bet`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          marketId: market.id,
-          optionId,
-          stakeAmount: lastStakeAmount,
-        }),
+        body: JSON.stringify({ marketId: market.id, optionId, stakeAmount: stake }),
       });
       if (res.ok) {
-        let pickedLabel: string | null = null;
-        if (market.marketType === "city_grid") {
-          const spec = market.cityGridSpec;
-          const p = parseGridOptionId(optionId);
-          pickedLabel = p && spec ? cellLabel(p.row, p.col) : optionId;
-        } else if (market.marketType === "zone_exit_time") {
-          pickedLabel =
-            zoneTimeOptionLabel(
-              optionId,
-              estimatedZoneSecondsRemaining(market, Date.now()),
-            ) ??
-            market.options.find((o) => o.id === optionId)?.shortLabel ??
-            market.options.find((o) => o.id === optionId)?.label ??
-            null;
-        } else {
-          pickedLabel =
-            market.options.find((o) => o.id === optionId)?.shortLabel ??
-            market.options.find((o) => o.id === optionId)?.label ??
-            null;
-        }
-        // Immediately deduct stake from the displayed balance — server already did it.
-        pulseBalanceChange(-lastStakeAmount);
-        void syncWalletFromServer();
-        pulseCenterMoney("stake", lastStakeAmount, pickedLabel);
-        setSelectedMapOptionId(null);
-        setLastBetMarketId(market.id);
-        setLastBetOptionLabel(pickedLabel);
-        if (market.marketType === "zone_exit_time") {
-          const parsed = parseZoneExitMarketMeta(market);
-          const startCellKey = parsed?.startCellKey ?? currentZoneCellKey;
-          if (parsed && startCellKey) {
-            const now = Date.now();
-            const elapsedSinceOpen = Math.max(0, (now - parsed.opensAtMs) / 1000);
-            const remaining = Math.max(1, parsed.estimatedSec - elapsedSinceOpen);
-            zoneExitDismissedRef.current.delete(market.id);
-            setZoneExitPending({
-              marketId: market.id,
-              betPlacedAtMs: now,
-              remainingAtBetSec: remaining,
-              startCellKey,
-            });
-          }
-        }
         setMyOpenBetMarketIds((prev) => new Set(prev).add(market.id));
         viewerLiveLog("place_bet_ok", {
           marketId: market.id,
           optionId,
           pickedLabel,
-          stakeAmount: lastStakeAmount,
+          stakeAmount: stake,
         });
         return { ok: true as const };
       } else {
@@ -747,6 +745,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           marketId: market.id,
           optionId,
         });
+        // Roll back optimistic balance deduction.
+        pulseBalanceChange(+stake);
+        setZoneExitPending(null);
         setError(message);
         setMapSheetError(message);
         if (betJustPlacedTimerRef.current) {
@@ -756,7 +757,6 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         setBetJustPlaced(false);
         return { ok: false as const, error: message };
       }
-      return { ok: false as const, error: "Bet failed" };
     } finally {
       setPlacingOptionId(null);
     }
