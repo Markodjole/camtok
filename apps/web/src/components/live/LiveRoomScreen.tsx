@@ -186,10 +186,12 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   /** Active zone_exit_time bet waiting for countdown / zone exit / settlement. */
   const [zoneExitPending, setZoneExitPending] = useState<{
     marketId: string;
-    opensAtMs: number;
-    estimatedSec: number;
+    betPlacedAtMs: number;
+    remainingAtBetSec: number;
     startCellKey: string;
   } | null>(null);
+  /** Market IDs whose countdown already finished — prevents sync effect from restoring them. */
+  const zoneExitDismissedRef = useRef<Set<string>>(new Set());
   const pipLongPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pipDragRef = useRef<{
     pointerId: number | null;
@@ -354,8 +356,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
   const zoneExitInRoundSec = useMemo(() => {
     if (!zoneExitPending) return null;
-    const elapsed = Math.floor((nowTick - zoneExitPending.opensAtMs) / 1000);
-    return Math.max(0, Math.round(zoneExitPending.estimatedSec) - elapsed);
+    const elapsed = Math.floor((nowTick - zoneExitPending.betPlacedAtMs) / 1000);
+    return Math.max(0, Math.round(zoneExitPending.remainingAtBetSec) - elapsed);
   }, [zoneExitPending, nowTick]);
 
   const zoneExitLeftZone = Boolean(
@@ -371,6 +373,13 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const urgentSettlementMarketId = zoneExitResolving
     ? zoneExitPending!.marketId
     : null;
+
+  // Auto-dismiss countdown when it reaches 0 or streamer left the zone.
+  useEffect(() => {
+    if (!zoneExitResolving || !zoneExitPending) return;
+    zoneExitDismissedRef.current.add(zoneExitPending.marketId);
+    setZoneExitPending(null);
+  }, [zoneExitResolving, zoneExitPending]);
 
   /**
    * "Zone" for rotation = named region from streamer session OR current grid cell id.
@@ -709,10 +718,14 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           const parsed = parseZoneExitMarketMeta(market);
           const startCellKey = parsed?.startCellKey ?? currentZoneCellKey;
           if (parsed && startCellKey) {
+            const now = Date.now();
+            const elapsedSinceOpen = Math.max(0, (now - parsed.opensAtMs) / 1000);
+            const remaining = Math.max(1, parsed.estimatedSec - elapsedSinceOpen);
+            zoneExitDismissedRef.current.delete(market.id);
             setZoneExitPending({
               marketId: market.id,
-              opensAtMs: parsed.opensAtMs,
-              estimatedSec: parsed.estimatedSec,
+              betPlacedAtMs: now,
+              remainingAtBetSec: remaining,
               startCellKey,
             });
           }
@@ -1083,33 +1096,27 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   }, [currentMarket?.id, lastBetMarketId]);
 
   // Keep right-column countdown in sync after a zone-exit bet (incl. page refresh / feed tick).
+  // Note: once dismissed (countdown hit 0 or zone left), we do NOT restore the widget.
   useEffect(() => {
     if (!currentMarket || currentMarket.marketType !== "zone_exit_time") return;
-    if (lastBetMarketId !== currentMarket.id && zoneExitPending?.marketId !== currentMarket.id) {
-      return;
-    }
+    // Only show if we actually bet on this market.
+    if (lastBetMarketId !== currentMarket.id) return;
+    // Never restore a dismissed countdown.
+    if (zoneExitDismissedRef.current.has(currentMarket.id)) return;
+    // Already tracking this market — don't reset betPlacedAtMs (would restart the timer).
+    if (zoneExitPending?.marketId === currentMarket.id) return;
     const parsed = parseZoneExitMarketMeta(currentMarket);
     if (!parsed) return;
-    const startCellKey =
-      zoneExitPending?.marketId === currentMarket.id
-        ? zoneExitPending.startCellKey
-        : parsed.startCellKey ?? currentZoneCellKey;
+    const startCellKey = parsed.startCellKey ?? currentZoneCellKey;
     if (!startCellKey) return;
-    setZoneExitPending((prev) => {
-      if (
-        prev?.marketId === currentMarket.id &&
-        prev.opensAtMs === parsed.opensAtMs &&
-        prev.estimatedSec === parsed.estimatedSec &&
-        prev.startCellKey === startCellKey
-      ) {
-        return prev;
-      }
-      return {
-        marketId: currentMarket.id,
-        opensAtMs: parsed.opensAtMs,
-        estimatedSec: parsed.estimatedSec,
-        startCellKey,
-      };
+    const now = Date.now();
+    const elapsedSinceOpen = Math.max(0, (now - parsed.opensAtMs) / 1000);
+    const remaining = Math.max(1, parsed.estimatedSec - elapsedSinceOpen);
+    setZoneExitPending({
+      marketId: currentMarket.id,
+      betPlacedAtMs: now,
+      remainingAtBetSec: remaining,
+      startCellKey,
     });
   }, [
     currentMarket,
@@ -1120,7 +1127,6 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     currentZoneCellKey,
     lastBetMarketId,
     zoneExitPending?.marketId,
-    zoneExitPending?.startCellKey,
   ]);
 
   const checkpoints = osmCheckpoints;
@@ -1681,10 +1687,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           </div>
         ) : null}
         {zoneExitPending ? (
-          <ZoneExitCountdownWidget
-            remainingSec={zoneExitInRoundSec ?? 0}
-            resolving={zoneExitResolving}
-          />
+          <ZoneExitCountdownWidget remainingSec={zoneExitInRoundSec ?? 0} />
         ) : null}
       </div>
       {mapExpanded && !mapFollow ? (
@@ -1991,23 +1994,18 @@ function ViewerCenterMoneyFlash({
   );
 }
 
-function ZoneExitCountdownWidget({
-  remainingSec,
-  resolving = false,
-}: {
-  remainingSec: number;
-  resolving?: boolean;
-}) {
+function ZoneExitCountdownWidget({ remainingSec }: { remainingSec: number }) {
+  const urgent = remainingSec <= 5;
   return (
     <div
-      className="pointer-events-none flex h-11 w-11 items-center justify-center rounded-full border border-white/15 bg-black/30 text-sm font-semibold tabular-nums text-white/85 backdrop-blur"
-      title={resolving ? "Resolving bet" : "Time in zone"}
+      className={`pointer-events-none flex h-11 w-11 items-center justify-center rounded-full border text-sm font-bold tabular-nums backdrop-blur transition-colors ${
+        urgent
+          ? "border-red-400/60 bg-red-600/40 text-red-100"
+          : "border-white/15 bg-black/30 text-white/85"
+      }`}
+      title="Time left in zone"
     >
-      {resolving ? (
-        <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-      ) : (
-        remainingSec
-      )}
+      {remainingSec}
     </div>
   );
 }
