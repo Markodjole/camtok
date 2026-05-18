@@ -97,6 +97,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const isMuted = useViewerChromeStore((s) => s.isMuted);
   const wallet = useUserStore((s) => s.wallet);
   const setWallet = useUserStore((s) => s.setWallet);
+  // Live bets debit/credit balance_demo; use it as the display balance in this screen.
+  const liveBalance = Number(wallet?.balance_demo ?? wallet?.balance ?? 0);
   const [placingOptionId, setPlacingOptionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [mapSheetError, setMapSheetError] = useState<string | null>(null);
@@ -127,6 +129,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [showZones, setShowZones] = useState(false);
   const [showCheckpoints, setShowCheckpoints] = useState(true);
   const [mapFollow, setMapFollow] = useState(true);
+  const mapFollowRestoreRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [osmCheckpoints, setOsmCheckpoints] = useState<MapCheckpoint[]>([]);
   const [pipPos, setPipPos] = useState({ top: 48, left: 12 });
   const [pipDragReady, setPipDragReady] = useState(false);
@@ -198,7 +201,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const pulseBalanceChange = useCallback(
     (delta: number, updateWallet: boolean) => {
       if (!Number.isFinite(delta) || delta === 0) return;
-      const from = Number(wallet?.balance ?? 0);
+      const from = Number(wallet?.balance_demo ?? wallet?.balance ?? 0);
       const to = updateWallet ? from + delta : from;
 
       setBalanceChangeSplash({
@@ -212,7 +215,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       if (wallet && updateWallet) {
         setWallet({
           ...wallet,
-          balance: to,
+          balance_demo: to,
           total_won: Number(wallet.total_won ?? 0) + Math.max(0, delta),
         });
       }
@@ -1095,6 +1098,10 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   useEffect(() => {
     if (currentMarket?.id) {
       console.log("[LiveRoomScreen] mapFollow → true (new market)", currentMarket.id, currentMarket.marketType);
+      if (mapFollowRestoreRef.current) {
+        clearTimeout(mapFollowRestoreRef.current);
+        mapFollowRestoreRef.current = null;
+      }
       setMapFollow(true);
     }
   }, [currentMarket?.id]);
@@ -1248,9 +1255,13 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         // Only update when we have an actual Google road polyline.
         // Keep last valid route on transient misses; retry until Google returns again.
         if (j.route?.polyline && j.route.polyline.length > 1) {
+          console.log("[LiveRoomScreen] destinationRoute received", j.route.polyline.length, "pts", "dist:", j.route.distanceMeters, "m");
           setDestinationRoute(j.route.polyline);
-        } else if (j.reason === "no_destination" || j.reason === "arrived") {
-          setDestinationRoute(null);
+        } else {
+          console.log("[LiveRoomScreen] destinationRoute none", j.reason ?? "unknown");
+          if (j.reason === "no_destination" || j.reason === "arrived") {
+            setDestinationRoute(null);
+          }
         }
         setDestinationDistanceM(
           j.route?.distanceMeters ?? j.distanceToDestinationMeters ?? null,
@@ -1438,7 +1449,14 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             transportMode={room.transportMode}
             rotateWithHeading={true}
             followMode={mapFollow}
-            onUserInteract={() => setMapFollow(false)}
+            onUserInteract={() => {
+              setMapFollow(false);
+              if (mapFollowRestoreRef.current) clearTimeout(mapFollowRestoreRef.current);
+              mapFollowRestoreRef.current = setTimeout(() => {
+                setMapFollow(true);
+                mapFollowRestoreRef.current = null;
+              }, 5000);
+            }}
             tileOpacity={1}
             mapCaption={
               viewerCurrentBetHeadline ?? currentMarket?.title ?? undefined
@@ -1551,7 +1569,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
       <div className="absolute right-4 top-32 z-40 flex flex-col items-end gap-3">
         <BalanceBadge
-          balance={Number(wallet?.balance ?? 0)}
+          balance={liveBalance}
           splash={balanceChangeSplash}
           onSplashDone={() => setBalanceChangeSplash(null)}
         />
@@ -2080,15 +2098,15 @@ function RouteOverviewMap({
   return (
     <div
       className="pointer-events-none fixed left-3 top-8 z-[61] overflow-hidden rounded-xl border border-white/20 shadow-xl"
-      style={{ width: 72, height: 200, transform: "rotate(180deg)" }}
+      style={{ width: 88, height: 220 }}
     >
       <LiveMap
         routePoints={routePoints}
         className="h-full w-full"
         interactive={false}
         audienceRole="viewer"
-        showCourseArrow={false}
-        rotateWithHeading={false}
+        showCourseArrow={true}
+        rotateWithHeading={true}
         followMode={true}
         tileOpacity={0.85}
         destination={destination}

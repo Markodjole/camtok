@@ -110,7 +110,7 @@ export function LiveEventToasts({
           seenEvent.current.add(e.id);
         }
 
-        if (role === "viewer" && onSettlement) {
+        if (role === "viewer") {
           for (const s of j.mySettlements ?? []) {
             if (!s.settled_at) continue;
             const k = `${s.market_id}|${s.settled_at}`;
@@ -125,7 +125,13 @@ export function LiveEventToasts({
               stakeAmount: s.stake_amount,
               payoutAmount: s.payout_amount,
             });
-            onSettlement({
+            // Toast so the result is always visible regardless of z-index issues.
+            if (s.won) {
+              queueToast(setToasts, `+$${s.payout_amount} Won!`, "ok");
+            } else {
+              queueToast(setToasts, `-$${s.stake_amount} Lost`, "bad");
+            }
+            onSettlement?.({
               marketId: s.market_id,
               title: s.title,
               options: s.options,
@@ -149,7 +155,7 @@ export function LiveEventToasts({
   if (!toasts.length) return null;
   return (
     <div
-      className="pointer-events-none fixed left-0 right-0 z-[200] flex flex-col items-stretch gap-1.5 px-3"
+      className="pointer-events-none fixed left-0 right-0 z-[300] flex flex-col items-stretch gap-1.5 px-3"
       style={{ top: "3.4rem" }}
     >
       {toasts.map((t) => (

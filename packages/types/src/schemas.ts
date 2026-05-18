@@ -63,6 +63,7 @@ export const walletSchema = z.object({
   id: z.string().uuid(),
   user_id: z.string().uuid(),
   balance: z.number().default(0),
+  balance_demo: z.number().default(0),
   total_deposited: z.number().default(0),
   total_withdrawn: z.number().default(0),
   total_won: z.number().default(0),
