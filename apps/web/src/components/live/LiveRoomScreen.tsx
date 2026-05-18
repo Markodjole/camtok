@@ -374,12 +374,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     ? zoneExitPending!.marketId
     : null;
 
-  // Auto-dismiss countdown when it reaches 0 or streamer left the zone.
-  useEffect(() => {
-    if (!zoneExitResolving || !zoneExitPending) return;
-    zoneExitDismissedRef.current.add(zoneExitPending.marketId);
-    setZoneExitPending(null);
-  }, [zoneExitResolving, zoneExitPending]);
+  // Countdown stays visible until the server confirms settlement via handleSettlement.
+  // zoneExitResolving only switches the widget to a spinner — it never clears it.
 
   /**
    * "Zone" for rotation = named region from streamer session OR current grid cell id.
@@ -533,9 +529,13 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         payoutAmount: data.payoutAmount,
         stakeAmount: data.stakeAmount,
       });
-      setZoneExitPending((prev) =>
-        prev?.marketId === data.marketId ? null : prev,
-      );
+      setZoneExitPending((prev) => {
+        if (prev?.marketId === data.marketId) {
+          zoneExitDismissedRef.current.add(data.marketId);
+          return null;
+        }
+        return prev;
+      });
       if (data.won || data.payoutAmount > 0) {
         // Stake already deducted on bet. Server credits full payoutAmount (parimutuel share).
         pulseCenterMoney("win", data.payoutAmount, targetLabel);
@@ -1090,7 +1090,10 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     // Clear zone-exit pending when the market it was tracking is no longer active.
     setZoneExitPending((prev) => {
       if (!prev) return null;
-      if (!currentMarket || currentMarket.id !== prev.marketId) return null;
+      if (!currentMarket || currentMarket.id !== prev.marketId) {
+        zoneExitDismissedRef.current.add(prev.marketId);
+        return null;
+      }
       return prev;
     });
   }, [currentMarket?.id, lastBetMarketId]);
@@ -1687,7 +1690,10 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           </div>
         ) : null}
         {zoneExitPending ? (
-          <ZoneExitCountdownWidget remainingSec={zoneExitInRoundSec ?? 0} />
+          <ZoneExitCountdownWidget
+            remainingSec={zoneExitInRoundSec ?? 0}
+            resolving={zoneExitResolving}
+          />
         ) : null}
       </div>
       {mapExpanded && !mapFollow ? (
@@ -1981,7 +1987,7 @@ function ViewerCenterMoneyFlash({
       aria-live="polite"
     >
       <div
-        className={`text-5xl font-black tabular-nums tracking-tight [text-shadow:0_0_28px_rgba(0,0,0,0.92)] sm:text-6xl ${colorClass}`}
+        className={`text-2xl font-bold tabular-nums tracking-tight [text-shadow:0_0_16px_rgba(0,0,0,0.92)] sm:text-3xl ${colorClass}`}
       >
         {main}
       </div>
@@ -1994,18 +2000,30 @@ function ViewerCenterMoneyFlash({
   );
 }
 
-function ZoneExitCountdownWidget({ remainingSec }: { remainingSec: number }) {
-  const urgent = remainingSec <= 5;
+function ZoneExitCountdownWidget({
+  remainingSec,
+  resolving = false,
+}: {
+  remainingSec: number;
+  resolving?: boolean;
+}) {
+  const urgent = !resolving && remainingSec <= 5;
   return (
     <div
       className={`pointer-events-none flex h-11 w-11 items-center justify-center rounded-full border text-sm font-bold tabular-nums backdrop-blur transition-colors ${
-        urgent
-          ? "border-red-400/60 bg-red-600/40 text-red-100"
-          : "border-white/15 bg-black/30 text-white/85"
+        resolving
+          ? "border-amber-400/50 bg-amber-600/30 text-amber-100"
+          : urgent
+            ? "border-red-400/60 bg-red-600/40 text-red-100"
+            : "border-white/15 bg-black/30 text-white/85"
       }`}
-      title="Time left in zone"
+      title={resolving ? "Awaiting result…" : "Time left in zone"}
     >
-      {remainingSec}
+      {resolving ? (
+        <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-amber-300/40 border-t-amber-200" />
+      ) : (
+        remainingSec
+      )}
     </div>
   );
 }
