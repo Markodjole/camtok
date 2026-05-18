@@ -468,7 +468,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         pulseBalanceChange(data.payoutAmount, true);
       } else {
         pulseCenterMoney("loss", data.stakeAmount, targetLabel);
-        pulseBalanceChange(-data.stakeAmount, false);
+        pulseBalanceChange(-data.stakeAmount, true);
       }
     },
     [pulseBalanceChange, pulseCenterMoney],
@@ -810,7 +810,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
    *  - TURN = APPROACH (no separate tight turn tier).
    */
   const ZOOM_TIER_DEFAULT_M  = 600;
-  const ZOOM_TIER_APPROACH_M = 420;
+  const ZOOM_TIER_APPROACH_M = 250;
   const ZOOM_TIER_ZONE_M     = 900;
 
   const nextPinDistForZoom = driverPins?.[0]?.distanceMeters ?? null;
@@ -827,6 +827,15 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     if (mapBetTypeForCamera === "next_turn" || approachingTurn) return ZOOM_TIER_APPROACH_M;
     return ZOOM_TIER_DEFAULT_M;
   })();
+  const prevTargetWidthRef = useRef<number>(targetWidthMeters);
+  if (prevTargetWidthRef.current !== targetWidthMeters) {
+    console.log("[LiveRoomScreen] zoom tier →", targetWidthMeters, "m", {
+      betType: mapBetTypeForCamera,
+      approachingTurn,
+      prev: prevTargetWidthRef.current,
+    });
+    prevTargetWidthRef.current = targetWidthMeters;
+  }
 
   // Smooth the zoom target over ~1.5 s so bet transitions are gradual.
   const smoothedWidthRef = useRef<number>(targetWidthMeters);
@@ -1081,6 +1090,14 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   useEffect(() => {
     if (displayBetType) setMapFollow(true);
   }, [displayBetType]);
+  // Re-engage follow + auto-zoom on every new market so a previous pan/drag
+  // doesn't permanently disable zoom switching between bet rounds.
+  useEffect(() => {
+    if (currentMarket?.id) {
+      console.log("[LiveRoomScreen] mapFollow → true (new market)", currentMarket.id, currentMarket.marketType);
+      setMapFollow(true);
+    }
+  }, [currentMarket?.id]);
 
   /**
    * Product rule: every bet stays on screen for at most 7 seconds, or until
@@ -2063,7 +2080,7 @@ function RouteOverviewMap({
   return (
     <div
       className="pointer-events-none fixed left-3 top-8 z-[61] overflow-hidden rounded-xl border border-white/20 shadow-xl"
-      style={{ width: 72, height: 200 }}
+      style={{ width: 72, height: 200, transform: "rotate(180deg)" }}
     >
       <LiveMap
         routePoints={routePoints}

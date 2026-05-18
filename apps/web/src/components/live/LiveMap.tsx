@@ -1396,16 +1396,26 @@ export function LiveMap({
         z = Math.abs(dz) < 0.01 ? targetZ : curZ + dz * VIEWER_ZOOM_BLEND_PER_FRAME;
       }
 
+      if (Math.abs(z - curZ) > 0.05) {
+        console.log("[LiveMap] zoom", {
+          from: +curZ.toFixed(3),
+          to: +z.toFixed(3),
+          target: +targetZ.toFixed(3),
+          widthTarget: viewerTargetWidthRef.current,
+          widthZ: +clampedWidthZ.toFixed(3),
+          boundsZ: boundsZ != null ? +boundsZ.toFixed(3) : null,
+          userOverride: userZoomOverrideRef.current,
+        });
+      }
+
       mm.setView(centerLatLng, z, { animate: false });
 
       viewerSmoothRafRef.current = requestAnimationFrame(loop);
     };
 
-    // Detect user-initiated zoom by watching for touch/wheel BEFORE the zoom
-    // happens, then recording the resulting zoom in zoomend.
-    // Using touch+wheel rather than a flag around setView avoids the race where
-    // zoomend fires asynchronously after our setView has already reset the flag,
-    // which would permanently lock auto-zoom to the current level.
+    // Detect user-initiated zoom gestures (pinch on mobile, wheel on desktop).
+    // Single-finger touch is panning — must NOT mark as interacting or every pan
+    // will lock auto-zoom via the RAF loop's own zoomend event.
     let userIsInteracting = false;
     let interactTimeout: ReturnType<typeof setTimeout> | null = null;
     const markInteracting = () => {
@@ -1413,11 +1423,15 @@ export function LiveMap({
       if (interactTimeout) clearTimeout(interactTimeout);
       interactTimeout = setTimeout(() => { userIsInteracting = false; }, 600);
     };
+    const onTouchStart = (e: TouchEvent) => {
+      // Only pinch (2+ fingers) is a zoom gesture on mobile.
+      if (e.touches.length >= 2) markInteracting();
+    };
     const onZoomEnd = () => {
       if (userIsInteracting) userZoomOverrideRef.current = m.getZoom();
     };
     const container = m.getContainer();
-    container.addEventListener("touchstart", markInteracting, { passive: true });
+    container.addEventListener("touchstart", onTouchStart, { passive: true });
     container.addEventListener("wheel", markInteracting, { passive: true });
     m.on("zoomend", onZoomEnd);
 
@@ -1427,7 +1441,7 @@ export function LiveMap({
     return () => {
       cancelViewerLoop();
       if (interactTimeout) clearTimeout(interactTimeout);
-      container.removeEventListener("touchstart", markInteracting);
+      container.removeEventListener("touchstart", onTouchStart);
       container.removeEventListener("wheel", markInteracting);
       m.off("zoomend", onZoomEnd);
     };
