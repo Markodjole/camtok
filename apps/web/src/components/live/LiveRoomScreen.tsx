@@ -711,19 +711,13 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         setLastBetMarketId(market.id);
         setLastBetOptionLabel(pickedLabel);
         if (market.marketType === "zone_exit_time") {
-          const estimatedSec = market.meta?.estimatedSec;
-          const startCellKey =
-            typeof market.meta?.cellKey === "string" ? market.meta.cellKey : null;
-          const opensAtMs = Date.parse(market.opensAt);
-          if (
-            typeof estimatedSec === "number" &&
-            startCellKey &&
-            Number.isFinite(opensAtMs)
-          ) {
+          const parsed = parseZoneExitMarketMeta(market);
+          const startCellKey = parsed?.startCellKey ?? currentZoneCellKey;
+          if (parsed && startCellKey) {
             setZoneExitPending({
               marketId: market.id,
-              opensAtMs,
-              estimatedSec,
+              opensAtMs: parsed.opensAtMs,
+              estimatedSec: parsed.estimatedSec,
               startCellKey,
             });
           }
@@ -1092,6 +1086,48 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       return prev;
     });
   }, [currentMarket?.id, lastBetMarketId]);
+
+  // Keep right-column countdown in sync after a zone-exit bet (incl. page refresh / feed tick).
+  useEffect(() => {
+    if (!currentMarket || currentMarket.marketType !== "zone_exit_time") return;
+    if (lastBetMarketId !== currentMarket.id && zoneExitPending?.marketId !== currentMarket.id) {
+      return;
+    }
+    const parsed = parseZoneExitMarketMeta(currentMarket);
+    if (!parsed) return;
+    const startCellKey =
+      zoneExitPending?.marketId === currentMarket.id
+        ? zoneExitPending.startCellKey
+        : parsed.startCellKey ?? currentZoneCellKey;
+    if (!startCellKey) return;
+    setZoneExitPending((prev) => {
+      if (
+        prev?.marketId === currentMarket.id &&
+        prev.opensAtMs === parsed.opensAtMs &&
+        prev.estimatedSec === parsed.estimatedSec &&
+        prev.startCellKey === startCellKey
+      ) {
+        return prev;
+      }
+      return {
+        marketId: currentMarket.id,
+        opensAtMs: parsed.opensAtMs,
+        estimatedSec: parsed.estimatedSec,
+        startCellKey,
+      };
+    });
+  }, [
+    currentMarket,
+    currentMarket?.id,
+    currentMarket?.marketType,
+    currentMarket?.opensAt,
+    currentMarket?.meta,
+    currentZoneCellKey,
+    lastBetMarketId,
+    zoneExitPending?.marketId,
+    zoneExitPending?.startCellKey,
+  ]);
+
   const checkpoints = osmCheckpoints;
   const selectedZone = zones.find((z) => z.id === selectedZoneId) ?? null;
   const selectedCheckpoint = checkpoints.find((c) => c.id === selectedCheckpointId) ?? null;
@@ -1650,9 +1686,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         ) : null}
         {zoneExitPending ? (
           <ZoneExitCountdownWidget
-            opensAtMs={zoneExitPending.opensAtMs}
-            estimatedSec={zoneExitPending.estimatedSec}
-            nowMs={nowTick}
+            remainingSec={zoneExitInRoundSec ?? 0}
             resolving={zoneExitResolving}
           />
         ) : null}
@@ -1962,19 +1996,12 @@ function ViewerCenterMoneyFlash({
 }
 
 function ZoneExitCountdownWidget({
-  opensAtMs,
-  estimatedSec,
-  nowMs,
+  remainingSec,
   resolving = false,
 }: {
-  opensAtMs: number;
-  estimatedSec: number;
-  nowMs: number;
+  remainingSec: number;
   resolving?: boolean;
 }) {
-  const elapsed = Math.floor((nowMs - opensAtMs) / 1000);
-  const remaining = Math.max(0, Math.round(estimatedSec) - elapsed);
-
   return (
     <div
       className="pointer-events-none flex h-11 w-11 items-center justify-center rounded-full border border-white/15 bg-black/30 text-sm font-semibold tabular-nums text-white/85 backdrop-blur"
@@ -1983,7 +2010,7 @@ function ZoneExitCountdownWidget({
       {resolving ? (
         <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
       ) : (
-        remaining
+        remainingSec
       )}
     </div>
   );
@@ -2173,17 +2200,44 @@ function formatEta(sec: number): string {
   return r === 0 ? `${h} h` : `${h} h ${r} min`;
 }
 
+function parseZoneExitMarketMeta(
+  market: NonNullable<LiveFeedRow["currentMarket"]>,
+): {
+  estimatedSec: number;
+  startCellKey: string | null;
+  opensAtMs: number;
+} | null {
+  if (market.marketType !== "zone_exit_time") return null;
+  const rawT = market.meta?.estimatedSec;
+  const estimatedSec =
+    typeof rawT === "number"
+      ? rawT
+      : typeof rawT === "string"
+        ? Number(rawT)
+        : Number.NaN;
+  if (!Number.isFinite(estimatedSec) || estimatedSec <= 0) return null;
+  const cellRaw = market.meta?.cellKey;
+  const startCellKey =
+    typeof cellRaw === "string" && cellRaw.length > 0 ? cellRaw : null;
+  const opensAtMs = Date.parse(market.opensAt);
+  if (!Number.isFinite(opensAtMs)) return null;
+  return {
+    estimatedSec: Math.round(estimatedSec),
+    startCellKey,
+    opensAtMs,
+  };
+}
+
 function estimatedZoneSecondsRemaining(
   market: NonNullable<LiveFeedRow["currentMarket"]>,
   nowMs: number,
 ): number | null {
-  if (market.marketType !== "zone_exit_time") return null;
-  const T = market.meta?.estimatedSec;
-  if (typeof T !== "number") return null;
-  const Tsec = Math.round(T);
-  const opensAtMs = Date.parse(market.opensAt);
-  if (!Number.isFinite(opensAtMs)) return Tsec;
-  return Math.max(0, Tsec - Math.floor((nowMs - opensAtMs) / 1000));
+  const parsed = parseZoneExitMarketMeta(market);
+  if (!parsed) return null;
+  return Math.max(
+    0,
+    parsed.estimatedSec - Math.floor((nowMs - parsed.opensAtMs) / 1000),
+  );
 }
 
 function zoneTimeOptionLabel(optionId: string, remainingSec: number | null): string | null {
