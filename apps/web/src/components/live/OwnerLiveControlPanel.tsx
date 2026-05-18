@@ -113,6 +113,7 @@ export function OwnerLiveControlPanel({
   const [marketRevealAt, setMarketRevealAt] = useState<string | null>(null);
   const [nowTick, setNowTick] = useState(() => Date.now());
   const [mapExpanded, setMapExpanded] = useState(true);
+  const [mapFollow, setMapFollow] = useState(true);
   const [osmZones, setOsmZones] = useState<MapZone[]>([]);
   const [osmCheckpoints, setOsmCheckpoints] = useState<MapCheckpoint[]>([]);
   const [pipPos, setPipPos] = useState({ top: 48, left: 12 });
@@ -665,7 +666,8 @@ export function OwnerLiveControlPanel({
               audienceRole="streamer"
               transportMode={DRIVER_TRANSPORT}
               rotateWithHeading={true}
-              followMode={true}
+              followMode={mapFollow}
+              onUserInteract={() => setMapFollow(false)}
               tileOpacity={1}
               mapCaption={
                 destination
@@ -726,6 +728,13 @@ export function OwnerLiveControlPanel({
           <span className="text-white/85" aria-label={DRIVER_TRANSPORT} title={DRIVER_TRANSPORT}>
             <TransportModeIcon mode={DRIVER_TRANSPORT} className="h-6 w-6" />
           </span>
+          <IconRailButton
+            active={mapFollow}
+            onClick={() => setMapFollow(true)}
+            title={mapFollow ? "Following your position" : "Recenter on your position"}
+          >
+            <IconCrosshair />
+          </IconRailButton>
         </div>
 
 
@@ -806,6 +815,18 @@ export function OwnerLiveControlPanel({
             </svg>
           </button>
         </div>
+
+        {mapExpanded && !mapFollow ? (
+          <button
+            type="button"
+            onClick={() => setMapFollow(true)}
+            className="absolute bottom-48 right-4 z-50 flex items-center gap-1.5 rounded-full border border-amber-300/50 bg-amber-500/30 px-3 py-1.5 text-[11px] font-semibold text-amber-50 shadow-lg backdrop-blur active:bg-amber-500/50"
+            title="Recenter on your position"
+          >
+            <span className="text-base leading-none">◎</span>
+            Center on you
+          </button>
+        ) : null}
 
         <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-48 bg-gradient-to-t from-black/80 to-transparent" />
 

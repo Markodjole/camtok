@@ -130,7 +130,18 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [showCheckpoints, setShowCheckpoints] = useState(true);
   const [mapFollow, setMapFollow] = useState(true);
   const mapFollowRestoreRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastZoomLogKeyRef = useRef<string>("");
+  const [layoutViewportW, setLayoutViewportW] = useState(390);
+  useEffect(() => {
+    const sync = () => setLayoutViewportW(window.innerWidth);
+    sync();
+    window.addEventListener("resize", sync);
+    window.addEventListener("orientationchange", sync);
+    return () => {
+      window.removeEventListener("resize", sync);
+      window.removeEventListener("orientationchange", sync);
+    };
+  }, []);
+  const isMobileViewport = layoutViewportW < 768;
   const [osmCheckpoints, setOsmCheckpoints] = useState<MapCheckpoint[]>([]);
   const [pipPos, setPipPos] = useState({ top: 48, left: 12 });
   const [pipDragReady, setPipDragReady] = useState(false);
@@ -154,13 +165,17 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
   useEffect(() => {
     setMyOpenBetMarketIds(new Set());
+    setZoneExitPending(null);
   }, [room.roomId]);
   const [lastBetMarketId, setLastBetMarketId] = useState<string | null>(null);
   const [lastBetOptionLabel, setLastBetOptionLabel] = useState<string | null>(null);
-  /** One entry per live zone_exit_time bet; keyed by marketId. */
-  const [zoneExitCountdowns, setZoneExitCountdowns] = useState<
-    Record<string, { opensAtMs: number; estimatedSec: number }>
-  >({});
+  /** Active zone_exit_time bet waiting for countdown / zone exit / settlement. */
+  const [zoneExitPending, setZoneExitPending] = useState<{
+    marketId: string;
+    opensAtMs: number;
+    estimatedSec: number;
+    startCellKey: string;
+  } | null>(null);
   const pipLongPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pipDragRef = useRef<{
     pointerId: number | null;
@@ -308,6 +323,33 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     const last = routePoints[routePoints.length - 1]!;
     return cellIdForPosition(spec, last.lat, last.lng);
   }, [cityGridSpec, latestCityGridSpec, routePoints]);
+
+  const currentZoneCellKey = useMemo(() => {
+    if (!currentZoneId) return null;
+    const p = parseGridOptionId(currentZoneId);
+    if (!p) return null;
+    return `cell:r${p.row}:c${p.col}`;
+  }, [currentZoneId]);
+
+  const zoneExitInRoundSec = useMemo(() => {
+    if (!zoneExitPending) return null;
+    const elapsed = Math.floor((nowTick - zoneExitPending.opensAtMs) / 1000);
+    return Math.max(0, Math.round(zoneExitPending.estimatedSec) - elapsed);
+  }, [zoneExitPending, nowTick]);
+
+  const zoneExitLeftZone = Boolean(
+    zoneExitPending &&
+      currentZoneCellKey &&
+      currentZoneCellKey !== zoneExitPending.startCellKey,
+  );
+
+  const zoneExitResolving = Boolean(
+    zoneExitPending && (zoneExitInRoundSec === 0 || zoneExitLeftZone),
+  );
+
+  const urgentSettlementMarketId = zoneExitResolving
+    ? zoneExitPending!.marketId
+    : null;
 
   /**
    * "Zone" for rotation = named region from streamer session OR current grid cell id.
@@ -461,12 +503,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         payoutAmount: data.payoutAmount,
         stakeAmount: data.stakeAmount,
       });
-      setZoneExitCountdowns((prev) => {
-        if (!prev[data.marketId]) return prev;
-        const next = { ...prev };
-        delete next[data.marketId];
-        return next;
-      });
+      setZoneExitPending((prev) =>
+        prev?.marketId === data.marketId ? null : prev,
+      );
       if (data.won) {
         pulseCenterMoney("win", data.payoutAmount, targetLabel);
         pulseBalanceChange(data.payoutAmount, true);
@@ -640,14 +679,23 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         setSelectedMapOptionId(null);
         setLastBetMarketId(market.id);
         setLastBetOptionLabel(pickedLabel);
-        if (market.marketType === "zone_exit_time" && market.meta?.estimatedSec != null) {
-          setZoneExitCountdowns((prev) => ({
-            ...prev,
-            [market.id]: {
-              opensAtMs: Date.parse(market.opensAt),
-              estimatedSec: market.meta!.estimatedSec as number,
-            },
-          }));
+        if (market.marketType === "zone_exit_time") {
+          const estimatedSec = market.meta?.estimatedSec;
+          const startCellKey =
+            typeof market.meta?.cellKey === "string" ? market.meta.cellKey : null;
+          const opensAtMs = Date.parse(market.opensAt);
+          if (
+            typeof estimatedSec === "number" &&
+            startCellKey &&
+            Number.isFinite(opensAtMs)
+          ) {
+            setZoneExitPending({
+              marketId: market.id,
+              opensAtMs,
+              estimatedSec,
+              startCellKey,
+            });
+          }
         }
         setMyOpenBetMarketIds((prev) => new Set(prev).add(market.id));
         viewerLiveLog("place_bet_ok", {
@@ -795,27 +843,23 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       ? "next_zone"
       : bettableDisplayBetType;
   /**
-   * Map zoom follows the **open market** when a bet popup is live; between
-   * markets use pill pick or heuristics. Avoids engine-pill rotation fighting
-   * the active round.
+   * Map zoom follows only the **open market** — not engine-pill rotation between
+   * rounds (that was flipping 900↔250 m without a visible change on mobile).
    */
   const mapBetTypeForCamera: BetTypeV2 | null = currentMarket
     ? marketAnchoredBetType
-    : viewerEnginePillType ?? effectiveEngineType ?? null;
+    : null;
 
   const zonesVisualStyleForBet =
     viewerBetOfferType === "next_zone" ? "pick_zone" : zoneEngineBetActive ? "muted" : "default";
 
   /**
-   * Width-only zoom tiers (mobile-first — wider so more context is visible):
-   *  - DEFAULT (~600 m): cruising, see neighbourhood + route.
-   *  - APPROACH (~420 m): entering turn window (90-150m to pin) — gentle zoom-in.
-   *  - ZONE (~900 m): next_zone / zone_exit_time — show full cell + adjacent cells.
-   *  - TURN = APPROACH (no separate tight turn tier).
+   * Visible width targets (metres) — tuned so mobile actually feels the step.
+   * Mobile uses real screen width for zoom math; zone pick = 700 m on phone.
    */
-  const ZOOM_TIER_DEFAULT_M  = 600;
-  const ZOOM_TIER_APPROACH_M = 250;
-  const ZOOM_TIER_ZONE_M     = 900;
+  const ZOOM_TIER_DEFAULT_M = isMobileViewport ? 480 : 600;
+  const ZOOM_TIER_APPROACH_M = isMobileViewport ? 200 : 250;
+  const ZOOM_TIER_ZONE_M = isMobileViewport ? 700 : 900;
 
   const nextPinDistForZoom = driverPins?.[0]?.distanceMeters ?? null;
   const approachingTurn =
@@ -838,7 +882,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [smoothedWidth, setSmoothedWidth] = useState<number>(targetWidthMeters);
 
   useEffect(() => {
-    const DURATION_MS = 1500;
+    const DURATION_MS = isMobileViewport ? 700 : 1500;
     const from = smoothedWidthRef.current;
     const to = targetWidthMeters;
     if (Math.abs(to - from) < 1) return;
@@ -866,22 +910,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     return () => {
       if (smoothWidthRafRef.current != null) cancelAnimationFrame(smoothWidthRafRef.current);
     };
-  }, [targetWidthMeters]);
+  }, [targetWidthMeters, isMobileViewport]);
 
   const viewerTargetWidthMeters = smoothedWidth;
-
-  // Log only when bet-driven zoom tier changes (not every smoothed-width animation frame).
-  useEffect(() => {
-    const key = `${mapBetTypeForCamera ?? "none"}:${targetWidthMeters}`;
-    if (lastZoomLogKeyRef.current === key) return;
-    lastZoomLogKeyRef.current = key;
-    console.log("[LiveRoomScreen] zoom tier", {
-      betType: mapBetTypeForCamera,
-      widthM: targetWidthMeters,
-      marketId: currentMarket?.id ?? null,
-      marketType: currentMarket?.marketType ?? null,
-    });
-  }, [mapBetTypeForCamera, targetWidthMeters, currentMarket?.id, currentMarket?.marketType]);
 
   const marketTurnPassKey =
     currentMarket != null && currentMarket.marketType !== "city_grid"
@@ -1398,21 +1429,27 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         turnPoint={viewerDecisionLatLng}
         driverPos={viewerDriverPos}
         betOptionLabel={
-          currentMarket && lastBetMarketId === currentMarket.id
+          zoneExitPending
             ? lastBetOptionLabel
-            : null
+            : currentMarket && lastBetMarketId === currentMarket.id
+              ? lastBetOptionLabel
+              : null
         }
         currentBetHeadline={viewerCurrentBetHeadline}
         nowTick={nowTick}
         eligibleRoundPlans={activeBettingRound?.eligibleRoundPlans ?? []}
         highlightedEngineType={
-          displayBetType && displayBetType !== viewerBetOfferType
-            ? displayBetType
-            : null
+          zoneExitPending
+            ? null
+            : displayBetType && displayBetType !== viewerBetOfferType
+              ? displayBetType
+              : null
         }
         onSelectEngineType={(t) => {
           setViewerEnginePillType((prev) => (prev === t ? null : t));
         }}
+        zoneExitInRoundSec={zoneExitPending ? zoneExitInRoundSec : null}
+        zoneExitResolving={zoneExitResolving}
       />
       <BottomNav />
       <LiveEventToasts
@@ -1420,6 +1457,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         role="viewer"
         onSettlement={handleSettlement}
         onRoomActivity={onViewerRoomActivity}
+        urgentSettlementMarketId={urgentSettlementMarketId}
       />
       {centerMoneyFlash ? (
         <ViewerCenterMoneyFlash
@@ -1480,6 +1518,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             viewerFollowBoundsMinZoom={null}
             viewerTargetWidthMeters={viewerTargetWidthMeters}
             viewerZoomRuleKey={`zoom:${Math.round(viewerTargetWidthMeters)}:${currentMarket?.id ?? "nomarket"}`}
+            layoutViewportWidthPx={layoutViewportW}
             onZoneSelect={(id) => {
               /**
                * For a live `city_grid` (`next_zone`) market, tapping a cell
@@ -1606,21 +1645,6 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           </IconRailButton>
           </div>
         ) : null}
-        {Object.entries(zoneExitCountdowns).map(([mid, c]) => (
-          <ZoneExitCountdownWidget
-            key={mid}
-            opensAtMs={c.opensAtMs}
-            estimatedSec={c.estimatedSec}
-            nowMs={nowTick}
-            onExpired={() =>
-              setZoneExitCountdowns((prev) => {
-                const next = { ...prev };
-                delete next[mid];
-                return next;
-              })
-            }
-          />
-        ))}
       </div>
       {mapExpanded && !mapFollow ? (
         <button
@@ -1693,6 +1717,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               viewerFollowBoundsMinZoom={null}
               viewerTargetWidthMeters={viewerTargetWidthMeters}
               viewerZoomRuleKey={`zoom:${Math.round(viewerTargetWidthMeters)}:${currentMarket?.id ?? "nomarket"}`}
+              layoutViewportWidthPx={layoutViewportW}
             />
             {routePoints.length === 0 && (
               <div className="absolute inset-0 flex items-center justify-center bg-black/30 text-[9px] text-white/70">
@@ -1919,32 +1944,6 @@ function ViewerCenterMoneyFlash({
           on {target}
         </div>
       ) : null}
-    </div>
-  );
-}
-
-function ZoneExitCountdownWidget({
-  opensAtMs,
-  estimatedSec,
-  nowMs,
-  onExpired,
-}: {
-  opensAtMs: number;
-  estimatedSec: number;
-  nowMs: number;
-  onExpired: () => void;
-}) {
-  const elapsed = Math.floor((nowMs - opensAtMs) / 1000);
-  const remaining = Math.max(0, Math.round(estimatedSec) - elapsed);
-  const pastZero = elapsed > estimatedSec + 3;
-
-  useEffect(() => {
-    if (pastZero) onExpired();
-  }, [pastZero, onExpired]);
-
-  return (
-    <div className="pointer-events-none flex h-11 w-11 items-center justify-center rounded-full border border-white/15 bg-black/30 text-sm font-semibold tabular-nums text-white/85 backdrop-blur">
-      {remaining}
     </div>
   );
 }

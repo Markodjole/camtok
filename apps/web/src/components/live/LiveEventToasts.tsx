@@ -35,12 +35,15 @@ export function LiveEventToasts({
   role,
   onSettlement,
   onRoomActivity,
+  /** When set, poll activity rapidly and nudge room tick until this market settles. */
+  urgentSettlementMarketId = null,
 }: {
   roomId: string;
   role: "viewer" | "streamer";
   onSettlement?: (data: SkillFeedbackData) => void;
   /** Called with every successful activity poll (markets where this user already has an open live bet). */
   onRoomActivity?: (summary: { myOpenBetMarketIds: string[] }) => void;
+  urgentSettlementMarketId?: string | null;
 }) {
   const [toasts, setToasts] = useState<TItem[]>([]);
   const seenEvent = useRef<Set<string>>(new Set());
@@ -56,6 +59,12 @@ export function LiveEventToasts({
   useEffect(() => {
     const run = async () => {
       try {
+        if (urgentSettlementMarketId) {
+          await fetch(`/api/live/rooms/${roomId}/tick`, {
+            method: "POST",
+            cache: "no-store",
+          }).catch(() => undefined);
+        }
         const res = await fetch(`/api/live/rooms/${roomId}/activity`, {
           cache: "no-store",
         });
@@ -148,9 +157,10 @@ export function LiveEventToasts({
       }
     };
     void run();
-    const id = setInterval(run, 3000);
+    const pollMs = urgentSettlementMarketId ? 450 : 3000;
+    const id = setInterval(run, pollMs);
     return () => clearInterval(id);
-  }, [roomId, role, onSettlement, onRoomActivity]);
+  }, [roomId, role, onSettlement, onRoomActivity, urgentSettlementMarketId]);
 
   if (!toasts.length) return null;
   return (

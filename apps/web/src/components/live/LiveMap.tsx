@@ -138,6 +138,12 @@ export interface LiveMapProps {
   viewerTargetWidthMeters?: number | null;
   /** Changes when bet framing rules change; clears any latched user zoom override. */
   viewerZoomRuleKey?: string | null;
+  /**
+   * Visible layout width in CSS px (e.g. `window.innerWidth` on mobile). When the
+   * map wrapper is oversized for heading rotation, Leaflet `getSize().x` is much
+   * larger than what the user sees — pass this so width→zoom matches the screen.
+   */
+  layoutViewportWidthPx?: number | null;
   /** Muted polygons for engine-highlighted zone overlays. */
   zonesVisualStyle?: "default" | "muted" | "pick_zone";
 }
@@ -195,6 +201,8 @@ const VIEWER_MAP_ROTATION_TAU_SEC = 2;
 
 /** Zoom target approaches this fraction of the remaining delta per animation frame (~60fps). */
 const VIEWER_ZOOM_BLEND_PER_FRAME = 0.11;
+/** Faster blend when tier jump is large (mobile must feel the step). */
+const VIEWER_ZOOM_BLEND_LARGE_DELTA = 0.32;
 
 /** With `viewerFollowLatLngBounds`, never go wider than this (higher = closer). */
 const VIEWER_FOLLOW_BOUNDS_ZOOM_FLOOR = 14;
@@ -268,6 +276,7 @@ export function LiveMap({
   viewerFollowBoundsMinZoom = null,
   viewerTargetWidthMeters = null,
   viewerZoomRuleKey = null,
+  layoutViewportWidthPx = null,
   zonesVisualStyle = "default" as "default" | "muted" | "pick_zone",
 }: LiveMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -326,13 +335,18 @@ export function LiveMap({
   const [rotationDeg, setRotationDeg] = useState(0);
   const rotationDegRef = useRef(0);
   rotationDegRef.current = rotationDeg;
+  const layoutViewportWidthRef = useRef<number | null>(null);
+  layoutViewportWidthRef.current = layoutViewportWidthPx ?? null;
   // Keep width ref in sync every render.
   viewerTargetWidthRef.current = viewerTargetWidthMeters ?? 250;
   // When the target width changes (bet type changed) → clear any user zoom override
   // so auto-zoom kicks in for the new bet's zoom level.
   useEffect(() => {
     userZoomOverrideRef.current = null;
-  }, [viewerTargetWidthMeters, viewerZoomRuleKey]);
+    if (!streamer && followMode) {
+      hasAppliedInitialZoomRef.current = false;
+    }
+  }, [viewerTargetWidthMeters, viewerZoomRuleKey, followMode, streamer]);
   useEffect(() => {
     onUserInteractRef.current = onUserInteract;
   }, [onUserInteract]);
@@ -740,14 +754,14 @@ export function LiveMap({
           (p) => [p.lat, p.lng] as [number, number],
         );
         const line = L.polyline(pts, {
-          color: "#3b82f6",
-          weight: 5,
-          opacity: 0.85,
-          dashArray: "10 8",
+          color: "#ef4444",
+          weight: 3,
+          opacity: 0.38,
+          dashArray: "7 9",
           lineCap: "round",
           lineJoin: "round",
         }).addTo(group);
-        line.bringToFront?.();
+        line.bringToBack?.();
       }
 
       if (
@@ -1360,10 +1374,16 @@ export function LiveMap({
       // We move the map centre by the negative of that offset so the driver ends up
       // at (screen_cx, screen_cy + S) — horizontally centred, vertically offset.
       const sz = mm.getSize();
-      // Container is expanded 40% on each side when rotating; recover viewport dimensions.
+      // Container is expanded when rotating; use layout width so zoom matches the phone screen.
       const isMapRotating = rotateWithHeadingRef.current && followModeRef.current;
+      const layoutW = layoutViewportWidthRef.current;
       const viewportH = isMapRotating ? sz.y / 2.0 : sz.y;
-      const viewportW = isMapRotating ? sz.x / 2.6 : sz.x;
+      const viewportW =
+        layoutW != null && layoutW > 0
+          ? layoutW
+          : isMapRotating
+            ? sz.x / 2.6
+            : sz.x;
       const S = viewportH * 0.10;                                   // 10% below centre = 60% from top
       const rotRad = isMapRotating ? (smoothHeadingRef.current * Math.PI) / 180 : 0;
       const driverPt = mm.latLngToLayerPoint([nLat, nLng]);
@@ -1393,7 +1413,11 @@ export function LiveMap({
       let z = curZ;
       if (followMode) {
         const dz = targetZ - curZ;
-        z = Math.abs(dz) < 0.01 ? targetZ : curZ + dz * VIEWER_ZOOM_BLEND_PER_FRAME;
+        const blend =
+          Math.abs(dz) > 1.25
+            ? VIEWER_ZOOM_BLEND_LARGE_DELTA
+            : VIEWER_ZOOM_BLEND_PER_FRAME;
+        z = Math.abs(dz) < 0.01 ? targetZ : curZ + dz * blend;
       }
 
       mm.setView(centerLatLng, z, { animate: false });
