@@ -92,35 +92,37 @@ export async function GET(req: NextRequest) {
 
     type Enriched = TrafficCamera & { _diff: number };
 
-    const enriched: Enriched[] = all
-      .map((c) => {
-        const cLat = c.lat;
-        const cLng = c.lon;
-        if (!Number.isFinite(cLat) || !Number.isFinite(cLng)) return null;
+    const enriched: Enriched[] = (
+      all
+        .map((c) => {
+          const cLat = c.lat;
+          const cLng = c.lon;
+          if (!Number.isFinite(cLat) || !Number.isFinite(cLng)) return null;
 
-        const dist = distanceM(lat, lng, cLat, cLng);
-        if (dist > SEARCH_RADIUS_M) return null;
+          const dist = distanceM(lat, lng, cLat, cLng);
+          if (dist > SEARCH_RADIUS_M) return null;
 
-        const props = Object.fromEntries(c.additionalProperties.map((p) => [p.key, p.value]));
-        if (props.available === "false") return null;
+          const props = Object.fromEntries(c.additionalProperties.map((p) => [p.key, p.value]));
+          if (props.available === "false") return null;
 
-        const bear = bearingDeg(lat, lng, cLat, cLng);
-        const diff = angleDiff(bear, heading);
+          const bear = bearingDeg(lat, lng, cLat, cLng);
+          const diff = angleDiff(bear, heading);
 
-        return {
-          id: c.id,
-          name: c.commonName,
-          lat: cLat,
-          lng: cLng,
-          direction: props.view ?? null,
-          imageUrl: props.imageUrl ?? null,
-          videoUrl: props.videoUrl ?? null,
-          isNearest: false,
-          distanceM: dist,
-          _diff: diff,
-        };
-      })
-      .filter((c): c is Enriched => c !== null)
+          return {
+            id: c.id,
+            name: c.commonName,
+            lat: cLat,
+            lng: cLng,
+            direction: props.view ?? null,
+            imageUrl: props.imageUrl ?? null,
+            videoUrl: props.videoUrl ?? null,
+            isNearest: false,
+            distanceM: dist,
+            _diff: diff,
+          } satisfies Enriched;
+        })
+        .filter((c): c is Enriched => c !== null)
+    )
       .sort((a, b) => a.distanceM - b.distanceM)
       .slice(0, 10);
 

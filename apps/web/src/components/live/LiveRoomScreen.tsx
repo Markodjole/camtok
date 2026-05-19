@@ -196,13 +196,19 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         const a = route[i - 1]!;
         const b = route[i]!;
         const segLen = hav(a, b);
-        const dx = b.lng - a.lng;
-        const dy = b.lat - a.lat;
-        const len2 = dx * dx + dy * dy;
-        const t = len2 > 0
-          ? Math.max(0, Math.min(1, ((cam.lng - a.lng) * dx + (cam.lat - a.lat) * dy) / len2))
+
+        // Correct for longitude compression at this latitude so the
+        // perpendicular projection is accurate in metric space.
+        const cosLat = Math.cos(rad((a.lat + b.lat) / 2));
+        const dxM = (b.lng - a.lng) * cosLat;
+        const dyM = b.lat - a.lat;
+        const len2M = dxM * dxM + dyM * dyM;
+        const camDxM = (cam.lng - a.lng) * cosLat;
+        const camDyM = cam.lat - a.lat;
+        const t = len2M > 0
+          ? Math.max(0, Math.min(1, (camDxM * dxM + camDyM * dyM) / len2M))
           : 0;
-        const proj = { lat: a.lat + t * dy, lng: a.lng + t * dx };
+        const proj = { lat: a.lat + t * (b.lat - a.lat), lng: a.lng + t * (b.lng - a.lng) };
         const off = hav(cam, proj);
         if (off < minOff) {
           minOff = off;
@@ -210,11 +216,10 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         }
         accDist += segLen;
       }
-      // Camera must be within 400 m laterally of the route AND within the
-      // next 400 m of route distance ahead. Cameras behind or too far ahead
-      // are ignored — the square stays hidden until one qualifies.
+      // Camera must be within 50 m of the route polyline (same road, not a
+      // parallel street) AND within the next 400 m of route distance ahead.
       if (
-        minOff < 400 &&
+        minOff < 50 &&
         routeDistAtClosest > 0 &&
         routeDistAtClosest < 400 &&
         routeDistAtClosest < bestRouteDist
