@@ -431,15 +431,17 @@ export async function revealAndSettleMarket(marketId: string) {
     const countdownElapsed =
       Number.isFinite(opensAtMs) && nowMs >= opensAtMs + estimatedSec * 1000;
     if (!currentCellKey || currentCellKey === startCellKey) {
-      if (countdownElapsed) {
-        return await settleMarketWithWinner(
-          marketId,
-          "exit_over",
-          `zone_exit_countdown_elapsed_est${estimatedSec}s`,
-        );
-      }
-      await refundMarket(marketId, "zone_exit_still_in_zone");
-      return { status: "ambiguous", reason: "zone_exit_still_in_zone" };
+      // Countdown elapsed (the trigger condition) → driver took longer than T → "exit_over".
+      // If somehow called before countdown elapsed (should not happen), also settle as
+      // "exit_over" rather than refunding, because at reveal_at the driver has clearly
+      // been in the zone for a very long time.
+      return await settleMarketWithWinner(
+        marketId,
+        "exit_over",
+        countdownElapsed
+          ? `zone_exit_countdown_elapsed_est${estimatedSec}s`
+          : `zone_exit_reveal_at_still_in_zone_est${estimatedSec}s`,
+      );
     }
 
     const exitAtMs = new Date(g.recorded_at).getTime();

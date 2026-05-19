@@ -399,6 +399,21 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   // Countdown stays visible until the server confirms settlement via handleSettlement.
   // zoneExitResolving only switches the widget to a spinner — it never clears it.
 
+  // Safety valve: if the spinner has been showing for > 20 s with no server response,
+  // force a wallet sync and clear the pending state so the UI doesn't hang forever.
+  useEffect(() => {
+    if (!zoneExitResolving || !zoneExitPending) return;
+    const t = setTimeout(() => {
+      setZoneExitPending((prev) => {
+        if (!prev) return prev;
+        zoneExitDismissedRef.current.add(prev.marketId);
+        return null;
+      });
+      void syncWalletFromServer();
+    }, 20_000);
+    return () => clearTimeout(t);
+  }, [zoneExitResolving, zoneExitPending, syncWalletFromServer]);
+
   /**
    * "Zone" for rotation = named region from streamer session OR current grid cell id.
    * We do **not** have polygon crossing on the client; server sets `region_label` on heartbeat.

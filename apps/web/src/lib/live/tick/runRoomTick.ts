@@ -584,6 +584,45 @@ async function sweepPendingSettlements(
   service: Awaited<ReturnType<typeof createServiceClient>>,
   roomId: string,
 ): Promise<Array<{ marketId: string; reason: string }>> {
+  // Fetch both locked AND open zone_exit_time markets so we can lock+settle
+  // in one tick when the estimated time has elapsed (avoids a 2-tick round-trip
+  // that causes the spinner to hang in dev / low-tick environments).
+  const { data: candidates } = await service
+    .from("live_betting_markets")
+    .select(
+      "id, status, opens_at, locks_at, reveal_at, market_type, city_grid_spec, lock_evidence_json, live_session_id, turn_point_lat, turn_point_lng, subtitle",
+    )
+    .eq("room_id", roomId)
+    .in("status", ["locked", "open"])
+    .limit(20);
+
+  // Lock any open zone_exit_time markets whose estimated countdown has elapsed.
+  const nowMs = Date.now();
+  for (const row of candidates ?? []) {
+    if ((row as { status: string }).status !== "open") continue;
+    const mType = (row as { market_type: string }).market_type;
+    if (!isEngineMarketType(mType)) continue;
+    const mid = (row as { id: string }).id;
+    const sessionId = (row as { live_session_id: string | null }).live_session_id;
+    const shouldSettle = await shouldSettleEngineMarket(service, {
+      marketId: mid,
+      marketType: mType,
+      liveSessionId: sessionId,
+      roomId,
+    });
+    if (!shouldSettle) continue;
+    // Lock first, then fall through to settle below (status will be "locked").
+    const lockResult = await lockMarket(mid);
+    if (!("commitHash" in lockResult)) continue;
+    // Update room phase if it was still tracking this market.
+    await service
+      .from("live_rooms")
+      .update({ phase: "waiting_for_next_market", current_market_id: null, last_event_at: new Date().toISOString() })
+      .eq("id", roomId)
+      .eq("current_market_id", mid);
+  }
+
+  // Re-fetch only locked markets to settle.
   const { data: locked } = await service
     .from("live_betting_markets")
     .select(
@@ -594,7 +633,6 @@ async function sweepPendingSettlements(
     .limit(20);
 
   const notes: Array<{ marketId: string; reason: string }> = [];
-  const nowMs = Date.now();
 
   for (const row of locked ?? []) {
     const mid = (row as { id: string }).id;
