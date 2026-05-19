@@ -9,8 +9,6 @@ interface Props {
   size: number;
 }
 
-/** Append a cache-busting timestamp so the browser re-fetches the Windy
- *  snapshot on every interval tick, giving a "live" feel. */
 function bustUrl(url: string, t: number): string {
   const sep = url.includes("?") ? "&" : "?";
   return `${url}${sep}_t=${t}`;
@@ -29,7 +27,6 @@ export function TrafficCameraPanel({ camera, size }: Props) {
       setSrc(null);
       return;
     }
-    // Load immediately, then refresh every REFRESH_MS.
     const load = () => {
       setLoaded(false);
       setError(false);
@@ -38,73 +35,45 @@ export function TrafficCameraPanel({ camera, size }: Props) {
     load();
     const id = setInterval(load, REFRESH_MS);
     return () => clearInterval(id);
-  // Re-run only when the camera changes (new cam or new base URL from 20s poll)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [camera.id, camera.imageUrl]);
 
   void tickRef;
-
-  const label = [camera.name, camera.direction]
-    .filter(Boolean)
-    .join(" · ");
 
   return (
     <div
       className="relative overflow-hidden bg-black shadow-2xl"
       style={{ width: size, height: size }}
     >
-      {/* Camera feed */}
       {src && !error ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img
           key={src}
           src={src}
-          alt={label}
+          alt=""
           className="h-full w-full object-cover"
           onLoad={() => setLoaded(true)}
           onError={() => setError(true)}
         />
       ) : null}
 
-      {/* Spinner while loading */}
       {(!loaded || !src) && !error && (
         <div className="absolute inset-0 flex items-center justify-center bg-black/60">
           <span className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-white/20 border-t-white/80" />
         </div>
       )}
 
-      {/* Error / no feed */}
       {error && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-black/80">
-          <span className="text-lg opacity-60">📷</span>
-          <span className="text-[9px] text-white/50">No feed</span>
+        <div className="absolute inset-0 flex items-center justify-center bg-black/80">
+          <span className="text-lg opacity-40">📷</span>
         </div>
       )}
 
-      {/* Label bar */}
-      <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent px-1.5 py-1">
-        <p className="truncate text-[8px] font-medium leading-tight text-white/85">
-          {label || "Traffic Cam"}
-        </p>
-        {camera.distanceM < 1000 ? (
-          <p className="text-[7px] text-white/50">
-            {Math.round(camera.distanceM)} m ahead
-          </p>
-        ) : (
-          <p className="text-[7px] text-white/50">
-            {(camera.distanceM / 1000).toFixed(1)} km ahead
-          </p>
-        )}
-      </div>
-
-      {/* Live indicator */}
-      <div className="absolute left-1.5 top-1.5 flex items-center gap-1 rounded-full bg-black/50 px-1.5 py-0.5">
+      {/* Minimal live dot — top-left */}
+      <div className="absolute left-1.5 top-1.5">
         <span className="relative flex h-1.5 w-1.5">
           <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-sky-400 opacity-60" />
           <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-sky-400" />
-        </span>
-        <span className="text-[7px] font-semibold uppercase tracking-wide text-sky-200">
-          Cam
         </span>
       </div>
     </div>

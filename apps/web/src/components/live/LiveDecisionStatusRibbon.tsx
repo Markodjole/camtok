@@ -21,6 +21,8 @@ interface LiveDecisionStatusRibbonProps {
   eligibleRoundPlans?: RoundPlanV2[];
   highlightedEngineType?: BetTypeV2 | null;
   onSelectEngineType?: (type: BetTypeV2) => void;
+  /** Shift the ribbon right by this many px (e.g. to clear a side panel). */
+  leftOffsetPx?: number;
 }
 
 function haversineMeters(
@@ -50,6 +52,7 @@ export function LiveDecisionStatusRibbon({
   eligibleRoundPlans = [],
   highlightedEngineType = null,
   onSelectEngineType,
+  leftOffsetPx = 0,
 }: LiveDecisionStatusRibbonProps) {
   const distanceM =
     turnPoint && driverPos ? haversineMeters(driverPos, turnPoint) : null;
@@ -67,7 +70,7 @@ export function LiveDecisionStatusRibbon({
     mainLabel = `Bets open · lock ${secToLock}s${distLabel}`;
     dotTone = "open";
   } else if (phase === "pending") {
-    mainLabel = `Decision ahead${distLabel}`;
+    mainLabel = `Decision${distLabel}`;
     dotTone = "open";
   } else if (phase === "active") {
     const secToTurn = revealAt
@@ -94,7 +97,10 @@ export function LiveDecisionStatusRibbon({
   })();
 
   return (
-    <div className="pointer-events-none absolute left-1/2 top-[6.75rem] z-[60] w-full max-w-[min(94vw,20rem)] -translate-x-1/2 px-2">
+    <div
+      className="pointer-events-none absolute top-[6.75rem] z-[60] w-full max-w-[min(94vw,20rem)] px-2 transition-all duration-200"
+      style={{ left: `calc(50% + ${leftOffsetPx / 2}px)`, transform: "translateX(-50%)" }}
+    >
       <div className="flex flex-col items-center gap-1.5">
         <div className="flex max-w-full items-center justify-center gap-1 rounded-full border border-emerald-500/20 bg-emerald-950/30 px-2 py-0.5 text-[9px] font-medium leading-snug text-emerald-50/80 shadow-sm backdrop-blur-sm [text-shadow:0_1px_2px_rgba(0,0,0,0.55)]">
           <span

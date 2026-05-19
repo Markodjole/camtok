@@ -177,9 +177,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const nearestCamera = useMemo(() => {
     if (trafficCameras.length === 0) return null;
     const route = destinationRoute;
-    if (!route || route.length < 2) {
-      return trafficCameras.find((c) => c.isNearest) ?? null;
-    }
+    if (!route || route.length < 2) return null;
     const R = 6_371_000;
     const rad = (d: number) => (d * Math.PI) / 180;
     const hav = (a: { lat: number; lng: number }, b: { lat: number; lng: number }) => {
@@ -212,14 +210,20 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         }
         accDist += segLen;
       }
-      // Camera must be within 400 m of the route laterally AND have a
-      // positive route-distance so we only pick cameras ahead, not behind.
-      if (minOff < 400 && routeDistAtClosest > 0 && routeDistAtClosest < bestRouteDist) {
+      // Camera must be within 400 m laterally of the route AND within the
+      // next 400 m of route distance ahead. Cameras behind or too far ahead
+      // are ignored — the square stays hidden until one qualifies.
+      if (
+        minOff < 400 &&
+        routeDistAtClosest > 0 &&
+        routeDistAtClosest < 400 &&
+        routeDistAtClosest < bestRouteDist
+      ) {
         bestRouteDist = routeDistAtClosest;
         bestCam = cam;
       }
     }
-    return bestCam ?? trafficCameras.find((c) => c.isNearest) ?? null;
+    return bestCam;
   }, [trafficCameras, destinationRoute]);
   /** Start at 0 so SSR and first client paint match; tick after mount (avoids hydration #418). */
   const [nowTick, setNowTick] = useState(0);
@@ -1618,6 +1622,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         onSelectEngineType={(t) => {
           setViewerEnginePillType((prev) => (prev === t ? null : t));
         }}
+        leftOffsetPx={nearestCamera ? pipSizePx : 0}
       />
       <BottomNav />
       <LiveEventToasts
@@ -1685,6 +1690,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             driverRouteBadges={driverRouteBadges}
             trafficCameras={trafficCameras}
             activeCameraId={nearestCamera?.id ?? null}
+            leftInsetPx={nearestCamera ? pipSizePx : 0}
             viewerFollowLatLngBounds={null}
             viewerFollowBoundsMinZoom={null}
             viewerTargetWidthMeters={viewerTargetWidthMeters}
@@ -1849,20 +1855,20 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       <div
         className="absolute z-30 overflow-hidden border-y border-l border-white/15 shadow-2xl"
         style={{
-          top: nearestCamera ? pipSizePx : pipPos.top,
-          left: nearestCamera ? 0 : pipPos.left,
+          top: pipPos.top,
+          left: pipPos.left,
           width: "34vw",
           height: "34vw",
           maxWidth: 180,
           maxHeight: 180,
           opacity: 0.95,
           touchAction: "none",
-          cursor: nearestCamera ? "default" : pipDragReady ? "grabbing" : "grab",
+          cursor: pipDragReady ? "grabbing" : "grab",
         }}
-        onPointerDown={nearestCamera ? undefined : onPipPointerDown}
-        onPointerMove={nearestCamera ? undefined : onPipPointerMove}
-        onPointerUp={nearestCamera ? undefined : onPipPointerUp}
-        onPointerCancel={nearestCamera ? undefined : onPipPointerUp}
+        onPointerDown={onPipPointerDown}
+        onPointerMove={onPipPointerMove}
+        onPointerUp={onPipPointerUp}
+        onPointerCancel={onPipPointerUp}
       >
         {mapExpanded ? (
           /* PiP shows the camera stream when map is fullscreen */

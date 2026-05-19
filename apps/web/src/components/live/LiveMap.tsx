@@ -133,6 +133,8 @@ export interface LiveMapProps {
   }> | null;
   /** ID of the camera whose feed is currently showing — drives the active pin highlight. */
   activeCameraId?: string | null;
+  /** Pixels to inset from the left edge — used to push badges clear of the traffic camera panel. */
+  leftInsetPx?: number;
   /**
    * Viewer + followMode: fixed zoom when not using `viewerFollowLatLngBounds`.
    */
@@ -314,6 +316,7 @@ export function LiveMap({
   driverRouteBadges = null,
   trafficCameras = null,
   activeCameraId = null,
+  leftInsetPx = 0,
   viewerFollowZoom = null,
   viewerFollowLatLngBounds = null,
   viewerFollowBoundsMinZoom = null,
@@ -1750,7 +1753,10 @@ export function LiveMap({
           </p>
         </div>
       )}
-      <div className="pointer-events-none absolute left-2 right-12 top-11 z-[2000] flex flex-wrap items-start justify-between gap-1.5 sm:right-2 sm:top-2 sm:gap-2">
+      <div
+        className="pointer-events-none absolute right-12 top-11 z-[2000] flex flex-wrap items-start justify-between gap-1.5 sm:right-2 sm:top-2 sm:gap-2"
+        style={{ left: leftInsetPx + 8 }}
+      >
         <div className="flex flex-wrap items-center gap-1">
           {destinationRoute && destinationRoute.length > 1 ? (
             <span
