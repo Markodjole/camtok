@@ -90,41 +90,32 @@ export async function GET(req: NextRequest) {
   try {
     const all = await fetchTflCameras();
 
-    type Enriched = TrafficCamera & { _diff: number };
+    type Enriched = {
+      id: string; name: string; lat: number; lng: number;
+      direction: string | null; imageUrl: string | null; videoUrl: string | null;
+      isNearest: boolean; distanceM: number; _diff: number;
+    };
 
-    const enriched: Enriched[] = (
-      all
-        .map((c) => {
-          const cLat = c.lat;
-          const cLng = c.lon;
-          if (!Number.isFinite(cLat) || !Number.isFinite(cLng)) return null;
-
-          const dist = distanceM(lat, lng, cLat, cLng);
-          if (dist > SEARCH_RADIUS_M) return null;
-
-          const props = Object.fromEntries(c.additionalProperties.map((p) => [p.key, p.value]));
-          if (props.available === "false") return null;
-
-          const bear = bearingDeg(lat, lng, cLat, cLng);
-          const diff = angleDiff(bear, heading);
-
-          return {
-            id: c.id,
-            name: c.commonName,
-            lat: cLat,
-            lng: cLng,
-            direction: props.view ?? null,
-            imageUrl: props.imageUrl ?? null,
-            videoUrl: props.videoUrl ?? null,
-            isNearest: false,
-            distanceM: dist,
-            _diff: diff,
-          } satisfies Enriched;
-        })
-        .filter((c): c is Enriched => c !== null)
-    )
-      .sort((a, b) => a.distanceM - b.distanceM)
-      .slice(0, 10);
+    const enrichedRaw: Enriched[] = [];
+    for (const c of all) {
+      const cLat = c.lat;
+      const cLng = c.lon;
+      if (!Number.isFinite(cLat) || !Number.isFinite(cLng)) continue;
+      const dist = distanceM(lat, lng, cLat, cLng);
+      if (dist > SEARCH_RADIUS_M) continue;
+      const props = Object.fromEntries(c.additionalProperties.map((p) => [p.key, p.value]));
+      if (props.available === "false") continue;
+      const bear = bearingDeg(lat, lng, cLat, cLng);
+      const diff = angleDiff(bear, heading);
+      enrichedRaw.push({
+        id: c.id, name: c.commonName, lat: cLat, lng: cLng,
+        direction: props.view ?? null,
+        imageUrl: props.imageUrl ?? null,
+        videoUrl: props.videoUrl ?? null,
+        isNearest: false, distanceM: dist, _diff: diff,
+      });
+    }
+    const enriched = enrichedRaw.sort((a, b) => a.distanceM - b.distanceM).slice(0, 10);
 
     // Feed activation: most directly ahead within ACTIVE_RADIUS_M.
     const feedCandidates = enriched.filter(
