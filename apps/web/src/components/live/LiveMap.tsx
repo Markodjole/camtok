@@ -158,8 +158,8 @@ export interface LiveMapProps {
 }
 
 const C = {
-  streamer: { line: "#2563eb", lineOp: 0.7, fill: "#4ade80", r: 7 },
-  viewer: { line: "#2563eb", lineOp: 0.7, fill: "#4ade80", r: 7 },
+  streamer: { line: "#2563eb", lineOp: 0.35, fill: "#4ade80", r: 7 },
+  viewer: { line: "#2563eb", lineOp: 0.35, fill: "#4ade80", r: 7 },
 };
 
 function headingDivIcon(
@@ -841,23 +841,19 @@ export function LiveMap({
           (p) => Number.isFinite(p.lat) && Number.isFinite(p.lng),
         )
       ) {
-        // Traffic colors: deliberately distinct from the blue past-path.
-        // NORMAL = light sky-blue (route w/ good flow), SLOW = amber, JAM = red.
-        // Matches Google Maps traffic density semantics without clashing with
-        // the #3b82f6 blue driven-history polyline.
+        // Traffic density colors (Google Maps convention):
+        //   NORMAL  = green (free flow)
+        //   SLOW    = amber (moderate)
+        //   JAM     = red   (heavy)
+        // All drawn at reduced opacity so they read as an overlay, not the main route.
         const TRAFFIC_COLOR: Record<string, string> = {
-          NORMAL: "#7dd3fc",      // sky-300 — clear road, subtle
-          SLOW: "#f59e0b",        // amber-400 — moderate congestion
-          TRAFFIC_JAM: "#ef4444", // red-500  — heavy traffic
+          NORMAL: "#22c55e",      // green-500
+          SLOW: "#f59e0b",        // amber-400
+          TRAFFIC_JAM: "#ef4444", // red-500
         };
-        const ROUTE_WEIGHT_NORMAL = 3;
-        const ROUTE_WEIGHT_BAD = 5;
-        const ROUTE_OPACITY_NORMAL = 0.30;
-        const ROUTE_OPACITY_BAD = 0.55;
 
         const segments = destinationRouteTraffic;
         if (segments && segments.length > 0) {
-          // Draw one polyline per traffic segment, colored by speed.
           for (const seg of segments) {
             const start = Math.max(0, seg.startIndex);
             const end = Math.min(destinationRoute.length - 1, seg.endIndex);
@@ -870,25 +866,24 @@ export function LiveMap({
             const isBad = seg.speed === "SLOW" || seg.speed === "TRAFFIC_JAM";
             L.polyline(pts, {
               color,
-              weight: isBad ? ROUTE_WEIGHT_BAD : ROUTE_WEIGHT_NORMAL,
-              opacity: isBad ? ROUTE_OPACITY_BAD : ROUTE_OPACITY_NORMAL,
+              weight: isBad ? 5 : 4,
+              opacity: isBad ? 0.60 : 0.40,
               lineCap: "round",
               lineJoin: "round",
-            }).addTo(group).bringToBack?.();
+            }).addTo(group);
           }
         } else {
-          // No traffic data — draw a subtle dashed route line (Google Maps blue).
+          // No traffic data — solid semi-transparent blue route line.
           const pts = destinationRoute.map(
             (p) => [p.lat, p.lng] as [number, number],
           );
           L.polyline(pts, {
-            color: "#93c5fd",
-            weight: 3,
-            opacity: 0.30,
-            dashArray: "6 8",
+            color: "#3b82f6",
+            weight: 4,
+            opacity: 0.55,
             lineCap: "round",
             lineJoin: "round",
-          }).addTo(group).bringToBack?.();
+          }).addTo(group);
         }
       }
 

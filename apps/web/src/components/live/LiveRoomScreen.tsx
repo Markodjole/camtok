@@ -708,7 +708,6 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     }
 
     // ── Optimistic UI — fire immediately, before the network call ──────────
-    pulseBalanceChange(-stake);
     pulseCenterMoney("stake", stake, pickedLabel);
     setSelectedMapOptionId(null);
     setLastBetMarketId(market.id);
@@ -768,8 +767,6 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           marketId: market.id,
           optionId,
         });
-        // Roll back optimistic balance deduction.
-        pulseBalanceChange(+stake);
         setZoneExitPending(null);
         setCityGridBetPending(null);
         setError(message);
@@ -1111,15 +1108,6 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       betJustPlacedTimerRef.current = null;
     }
     setBetJustPlaced(false);
-    // Clear zone-exit pending when the market it was tracking is no longer active.
-    setZoneExitPending((prev) => {
-      if (!prev) return null;
-      if (!currentMarket || currentMarket.id !== prev.marketId) {
-        zoneExitDismissedRef.current.add(prev.marketId);
-        return null;
-      }
-      return prev;
-    });
     setCityGridBetPending((prev) => {
       if (!prev) return null;
       if (!currentMarket || currentMarket.id !== prev.marketId) return null;

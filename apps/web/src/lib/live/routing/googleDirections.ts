@@ -143,7 +143,7 @@ export async function fetchGoogleDirectionsRoute(
           "Content-Type": "application/json",
           "X-Goog-Api-Key": key,
           "X-Goog-FieldMask":
-            "routes.distanceMeters,routes.duration,routes.polyline.encodedPolyline,routes.travelAdvisory.speedReadingIntervals,routes.legs.travelAdvisory.speedReadingIntervals",
+            "routes.distanceMeters,routes.duration,routes.polyline.encodedPolyline,routes.travelAdvisory.speedReadingIntervals",
         },
         body: JSON.stringify(body),
         cache: "no-store",
@@ -166,9 +166,6 @@ export async function fetchGoogleDirectionsRoute(
         duration?: string;
         polyline?: { encodedPolyline?: string };
         travelAdvisory?: { speedReadingIntervals?: SpeedInterval[] };
-        legs?: Array<{
-          travelAdvisory?: { speedReadingIntervals?: SpeedInterval[] };
-        }>;
       }>;
       error?: { code?: number; message?: string; status?: string };
     };
@@ -197,11 +194,7 @@ export async function fetchGoogleDirectionsRoute(
 
     // Parse traffic speed intervals. The API returns contiguous segments covering
     // the full polyline. startPolylinePointIndex defaults to 0 when absent.
-    // Intervals may appear at the route level or leg level depending on API version.
-    const rawIntervals =
-      route.travelAdvisory?.speedReadingIntervals ??
-      route.legs?.[0]?.travelAdvisory?.speedReadingIntervals ??
-      [];
+    const rawIntervals = route.travelAdvisory?.speedReadingIntervals ?? [];
     if (process.env.NODE_ENV === "development") {
       console.log(
         "[googleDirections] speedReadingIntervals count:",
