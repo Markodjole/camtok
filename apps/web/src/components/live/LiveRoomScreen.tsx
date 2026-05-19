@@ -51,6 +51,8 @@ import { isEngineMarketType } from "@/lib/live/betting/engineMarketOptions";
 import { useUserStore } from "@/stores/user-store";
 import { getWallet } from "@/actions/wallet";
 import { walletLiveBalance } from "@/lib/live/walletBalance";
+import type { TrafficCamera } from "@/app/api/live/traffic-cameras/route";
+import { TrafficCameraPanel } from "./TrafficCameraPanel";
 
 const LiveMap = dynamic(() => import("./LiveMap").then((m) => m.LiveMap), {
   ssr: false,
@@ -144,6 +146,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     };
   }, []);
   const isMobileViewport = layoutViewportW < 768;
+  const pipSizePx = Math.min(Math.round(layoutViewportW * 0.34), 180);
   const [osmCheckpoints, setOsmCheckpoints] = useState<MapCheckpoint[]>([]);
   const [pipPos, setPipPos] = useState({ top: 48, left: 12 });
   const [pipDragReady, setPipDragReady] = useState(false);
@@ -163,6 +166,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   >(null);
   const [destinationEtaSec, setDestinationEtaSec] = useState<number | null>(null);
   const [destinationDistanceM, setDestinationDistanceM] = useState<number | null>(null);
+  const [trafficCameras, setTrafficCameras] = useState<TrafficCamera[]>([]);
+  const nearestCamera = trafficCameras.find((c) => c.isNearest) ?? null;
   /** Start at 0 so SSR and first client paint match; tick after mount (avoids hydration #418). */
   const [nowTick, setNowTick] = useState(0);
   const [myOpenBetMarketIds, setMyOpenBetMarketIds] = useState<Set<string>>(
@@ -1422,6 +1427,40 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     };
   }, [room.roomId]);
 
+  // ── Traffic cameras — fetch nearby cameras based on position + heading ────
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let cancelled = false;
+
+    const fetchCameras = async () => {
+      const pts = routePoints;
+      const last = pts[pts.length - 1];
+      if (!last) return;
+      const heading = last.heading ?? 0;
+      try {
+        const res = await fetch(
+          `/api/live/traffic-cameras?lat=${last.lat}&lng=${last.lng}&heading=${heading}`,
+          { cache: "no-store" },
+        );
+        if (!res.ok || cancelled) return;
+        const j = (await res.json()) as { cameras: TrafficCamera[] };
+        if (!cancelled) setTrafficCameras(j.cameras ?? []);
+      } catch {
+        /* transient */
+      } finally {
+        if (!cancelled) timer = setTimeout(fetchCameras, 20_000);
+      }
+    };
+
+    void fetchCameras();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  // Re-kick when room changes; routePoints are NOT in deps (we read latest via closure inside).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [room.roomId]);
+
   const onPipPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;
     if (target.closest("[data-pip-no-drag]")) return;
@@ -1576,6 +1615,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             destinationRouteTraffic={destinationRouteTraffic}
             destinationRouteLabel="Google suggested route"
             driverRouteBadges={driverRouteBadges}
+            trafficCameras={trafficCameras}
             viewerFollowLatLngBounds={null}
             viewerFollowBoundsMinZoom={null}
             viewerTargetWidthMeters={viewerTargetWidthMeters}
@@ -1728,6 +1768,19 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           Center on streamer
         </button>
       ) : null}
+      {/* ── Traffic camera panel — appears above PiP when a cam is within range ── */}
+      {nearestCamera ? (
+        <div
+          className="absolute z-30"
+          style={{
+            top: Math.max(0, pipPos.top - pipSizePx - 4),
+            left: pipPos.left,
+          }}
+        >
+          <TrafficCameraPanel camera={nearestCamera} size={pipSizePx} />
+        </div>
+      ) : null}
+
       {/* ── PiP corner: swapped view + expand toggle ── */}
       <div
         className="absolute z-30 overflow-hidden border-y border-l border-white/15 shadow-2xl"
@@ -1785,6 +1838,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               destinationRouteTraffic={destinationRouteTraffic}
               destinationRouteLabel="Google suggested route"
               driverRouteBadges={driverRouteBadges}
+              trafficCameras={trafficCameras}
               viewerFollowLatLngBounds={null}
               viewerFollowBoundsMinZoom={null}
               viewerTargetWidthMeters={viewerTargetWidthMeters}

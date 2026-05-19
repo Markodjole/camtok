@@ -122,6 +122,15 @@ export interface LiveMapProps {
   destinationRouteLabel?: string | null;
   /** Short labels derived from `driving_route_style` (shown to viewers & streamer). */
   driverRouteBadges?: string[] | null;
+  /** Nearby traffic cameras from Road511 — shown as pins on the map. */
+  trafficCameras?: Array<{
+    id: string;
+    lat: number;
+    lng: number;
+    name: string;
+    direction: string | null;
+    isNearest: boolean;
+  }> | null;
   /**
    * Viewer + followMode: fixed zoom when not using `viewerFollowLatLngBounds`.
    */
@@ -301,6 +310,7 @@ export function LiveMap({
   destinationRouteTraffic = null,
   destinationRouteLabel = "Google suggested route",
   driverRouteBadges = null,
+  trafficCameras = null,
   viewerFollowZoom = null,
   viewerFollowLatLngBounds = null,
   viewerFollowBoundsMinZoom = null,
@@ -320,6 +330,7 @@ export function LiveMap({
   const turnLayerRef = useRef<import("leaflet").LayerGroup | null>(null);
   const railLayerRef = useRef<import("leaflet").LayerGroup | null>(null);
   const destLayerRef = useRef<import("leaflet").LayerGroup | null>(null);
+  const camLayerRef = useRef<import("leaflet").LayerGroup | null>(null);
   const hasAppliedInitialZoomRef = useRef(false);
   const onUserInteractRef = useRef<(() => void) | undefined>(undefined);
   const motionRafRef = useRef<number | null>(null);
@@ -617,6 +628,7 @@ export function LiveMap({
       zoneLayerRef.current = L.layerGroup().addTo(m);
       checkpointLayerRef.current = L.layerGroup().addTo(m);
       destLayerRef.current = L.layerGroup().addTo(m);
+      camLayerRef.current = L.layerGroup().addTo(m);
       railLayerRef.current = L.layerGroup().addTo(m);
       turnLayerRef.current = L.layerGroup().addTo(m);
       // Vehicle pane sits above all polylines, markers, and turn pins (z-index 640 >
@@ -646,6 +658,7 @@ export function LiveMap({
       zoneLayerRef.current = null;
       checkpointLayerRef.current = null;
       destLayerRef.current = null;
+      camLayerRef.current = null;
       railLayerRef.current = null;
       turnLayerRef.current = null;
       mapRef.current?.remove();
@@ -946,6 +959,45 @@ export function LiveMap({
     mapReady,
     streamer,
   ]);
+
+  // ── Traffic camera pins ────────────────────────────────────────────────────
+  useEffect(() => {
+    const group = camLayerRef.current;
+    if (!group) return;
+    let aborted = false;
+    (async () => {
+      const L = (await import("leaflet")).default;
+      if (aborted) return;
+      group.clearLayers();
+      if (!trafficCameras || trafficCameras.length === 0) return;
+
+      for (const cam of trafficCameras) {
+        if (!Number.isFinite(cam.lat) || !Number.isFinite(cam.lng)) continue;
+        const isNearest = cam.isNearest;
+        const html = `<div style="
+          display:flex;align-items:center;justify-content:center;
+          width:${isNearest ? 28 : 22}px;height:${isNearest ? 28 : 22}px;
+          border-radius:50%;
+          background:${isNearest ? "rgba(14,165,233,0.92)" : "rgba(0,0,0,0.60)"};
+          border:${isNearest ? "2px solid rgba(255,255,255,0.9)" : "1.5px solid rgba(255,255,255,0.35)"};
+          box-shadow:${isNearest ? "0 0 10px rgba(14,165,233,0.7)" : "0 1px 4px rgba(0,0,0,0.5)"};
+          font-size:${isNearest ? 14 : 11}px;
+          line-height:1;
+        ">📷</div>`;
+        const icon = L.divIcon({
+          html,
+          className: "",
+          iconSize: [isNearest ? 28 : 22, isNearest ? 28 : 22],
+          iconAnchor: [isNearest ? 14 : 11, isNearest ? 14 : 11],
+        });
+        const label = [cam.name, cam.direction].filter(Boolean).join(" · ");
+        L.marker([cam.lat, cam.lng], { icon, interactive: false, zIndexOffset: 200 })
+          .bindTooltip(label, { permanent: false, direction: "top", offset: [0, -14] })
+          .addTo(group);
+      }
+    })();
+    return () => { aborted = true; };
+  }, [trafficCameras, mapReady]);
 
   useEffect(() => {
     const group = turnLayerRef.current;
