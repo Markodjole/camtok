@@ -122,7 +122,7 @@ export interface LiveMapProps {
   destinationRouteLabel?: string | null;
   /** Short labels derived from `driving_route_style` (shown to viewers & streamer). */
   driverRouteBadges?: string[] | null;
-  /** Nearby traffic cameras from Road511 — shown as pins on the map. */
+  /** Nearby traffic cameras — shown as pins on the map. */
   trafficCameras?: Array<{
     id: string;
     lat: number;
@@ -131,6 +131,8 @@ export interface LiveMapProps {
     direction: string | null;
     isNearest: boolean;
   }> | null;
+  /** ID of the camera whose feed is currently showing — drives the active pin highlight. */
+  activeCameraId?: string | null;
   /**
    * Viewer + followMode: fixed zoom when not using `viewerFollowLatLngBounds`.
    */
@@ -311,6 +313,7 @@ export function LiveMap({
   destinationRouteLabel = "Google suggested route",
   driverRouteBadges = null,
   trafficCameras = null,
+  activeCameraId = null,
   viewerFollowZoom = null,
   viewerFollowLatLngBounds = null,
   viewerFollowBoundsMinZoom = null,
@@ -973,53 +976,43 @@ export function LiveMap({
 
       for (const cam of trafficCameras) {
         if (!Number.isFinite(cam.lat) || !Number.isFinite(cam.lng)) continue;
-        const isNearest = cam.isNearest;
-        // Nearest cam: large pulsing sky-blue pin with an outer ring animation.
-        // Other cams: small dark pin.
-        const html = isNearest
-          ? `<div style="position:relative;width:36px;height:36px;display:flex;align-items:center;justify-content:center;">
-               <div style="
-                 position:absolute;inset:0;border-radius:50%;
-                 background:rgba(14,165,233,0.25);
-                 animation:cam-ping 1.4s cubic-bezier(0,0,0.2,1) infinite;
-               "></div>
-               <div style="
-                 position:relative;z-index:1;
-                 display:flex;align-items:center;justify-content:center;
-                 width:28px;height:28px;border-radius:50%;
-                 background:rgba(14,165,233,0.95);
-                 border:2.5px solid #fff;
-                 box-shadow:0 0 12px rgba(14,165,233,0.8),0 2px 6px rgba(0,0,0,0.5);
-                 font-size:14px;line-height:1;
-               ">📷</div>
-             </div>
-             <style>@keyframes cam-ping{0%{transform:scale(1);opacity:.8}70%{transform:scale(1.9);opacity:0}100%{transform:scale(1.9);opacity:0}}</style>`
-          : `<div style="
-               display:flex;align-items:center;justify-content:center;
-               width:22px;height:22px;border-radius:50%;
-               background:rgba(0,0,0,0.65);
-               border:1.5px solid rgba(255,255,255,0.35);
-               box-shadow:0 1px 4px rgba(0,0,0,0.5);
-               font-size:11px;line-height:1;
-             ">📷</div>`;
-        const icon = L.divIcon({
-          html,
-          className: "",
-          iconSize: isNearest ? [36, 36] : [22, 22],
-          iconAnchor: isNearest ? [18, 18] : [11, 11],
-        });
-        const label = [cam.name, cam.direction].filter(Boolean).join(" · ");
+        const isActive = cam.id === activeCameraId;
+        const label = cam.name.trim();
+
+        let html: string;
+        let w: number, h: number, anchorX: number, anchorY: number;
+
+        if (isActive) {
+          // Active camera: destination-pin style — pill label above, pulsing icon dot below.
+          const labelHtml = label
+            ? `<div style="box-sizing:border-box;max-width:min(220px,60vw);margin-bottom:4px;padding:2px 8px;border-radius:9999px;background:rgba(14,165,233,0.92);border:1px solid rgba(255,255,255,0.6);color:#fff;font-size:11px;font-weight:600;letter-spacing:0.01em;box-shadow:0 4px 14px rgba(0,0,0,0.45);line-height:1.3;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${label}</div>`
+            : "";
+          html = `<div style="display:flex;flex-direction:column;align-items:center;">
+            ${labelHtml}
+            <div style="position:relative;width:28px;height:28px;display:flex;align-items:center;justify-content:center;">
+              <div style="position:absolute;inset:0;border-radius:50%;background:rgba(14,165,233,0.28);animation:cam-ping 1.4s cubic-bezier(0,0,0.2,1) infinite;"></div>
+              <div style="position:relative;z-index:1;display:flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:rgba(14,165,233,0.95);border:2px solid #fff;box-shadow:0 0 10px rgba(14,165,233,0.8),0 2px 6px rgba(0,0,0,0.5);font-size:12px;line-height:1;">📷</div>
+            </div>
+          </div>
+          <style>@keyframes cam-ping{0%{transform:scale(1);opacity:.8}70%{transform:scale(1.9);opacity:0}100%{transform:scale(1.9);opacity:0}}</style>`;
+          w = 230; h = (label ? 28 : 0) + 30;
+          anchorX = w / 2; anchorY = h;
+        } else {
+          // Inactive cameras: small, subtle icon pin only.
+          html = `<div style="display:flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;background:rgba(0,0,0,0.55);border:1px solid rgba(255,255,255,0.28);box-shadow:0 1px 3px rgba(0,0,0,0.5);font-size:10px;line-height:1;">📷</div>`;
+          w = 18; h = 18; anchorX = 9; anchorY = 9;
+        }
+
+        const icon = L.divIcon({ html, className: "", iconSize: [w, h], iconAnchor: [anchorX, anchorY] });
         L.marker([cam.lat, cam.lng], {
           icon,
           interactive: false,
-          zIndexOffset: isNearest ? 2000 : 200,
-        })
-          .bindTooltip(label, { permanent: isNearest, direction: "top", offset: [0, isNearest ? -20 : -14] })
-          .addTo(group);
+          zIndexOffset: isActive ? 2000 : 150,
+        }).addTo(group);
       }
     })();
     return () => { aborted = true; };
-  }, [trafficCameras, mapReady]);
+  }, [trafficCameras, activeCameraId, mapReady]);
 
   useEffect(() => {
     const group = turnLayerRef.current;

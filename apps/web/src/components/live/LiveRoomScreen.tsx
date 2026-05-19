@@ -169,7 +169,56 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [destinationEtaSec, setDestinationEtaSec] = useState<number | null>(null);
   const [destinationDistanceM, setDestinationDistanceM] = useState<number | null>(null);
   const [trafficCameras, setTrafficCameras] = useState<TrafficCamera[]>([]);
-  const nearestCamera = trafficCameras.find((c) => c.isNearest) ?? null;
+
+  // Pick the first camera ahead on the Google Maps route polyline.
+  // Projects each camera onto the route, keeps only those within 400 m of it,
+  // and returns whichever has the smallest route-distance from the driver.
+  // Falls back to API-flagged isNearest when no route is available.
+  const nearestCamera = useMemo(() => {
+    if (trafficCameras.length === 0) return null;
+    const route = destinationRoute;
+    if (!route || route.length < 2) {
+      return trafficCameras.find((c) => c.isNearest) ?? null;
+    }
+    const R = 6_371_000;
+    const rad = (d: number) => (d * Math.PI) / 180;
+    const hav = (a: { lat: number; lng: number }, b: { lat: number; lng: number }) => {
+      const dLat = rad(b.lat - a.lat);
+      const dLng = rad(b.lng - a.lng);
+      const s = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2;
+      return R * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1 - s));
+    };
+    let bestCam: TrafficCamera | null = null;
+    let bestRouteDist = Infinity;
+    for (const cam of trafficCameras) {
+      let minOff = Infinity;
+      let routeDistAtClosest = 0;
+      let accDist = 0;
+      for (let i = 1; i < route.length; i++) {
+        const a = route[i - 1]!;
+        const b = route[i]!;
+        const segLen = hav(a, b);
+        const dx = b.lng - a.lng;
+        const dy = b.lat - a.lat;
+        const len2 = dx * dx + dy * dy;
+        const t = len2 > 0
+          ? Math.max(0, Math.min(1, ((cam.lng - a.lng) * dx + (cam.lat - a.lat) * dy) / len2))
+          : 0;
+        const proj = { lat: a.lat + t * dy, lng: a.lng + t * dx };
+        const off = hav(cam, proj);
+        if (off < minOff) {
+          minOff = off;
+          routeDistAtClosest = accDist + t * segLen;
+        }
+        accDist += segLen;
+      }
+      if (minOff < 400 && routeDistAtClosest < bestRouteDist) {
+        bestRouteDist = routeDistAtClosest;
+        bestCam = cam;
+      }
+    }
+    return bestCam ?? trafficCameras.find((c) => c.isNearest) ?? null;
+  }, [trafficCameras, destinationRoute]);
   /** Start at 0 so SSR and first client paint match; tick after mount (avoids hydration #418). */
   const [nowTick, setNowTick] = useState(0);
   const [myOpenBetMarketIds, setMyOpenBetMarketIds] = useState<Set<string>>(
@@ -1633,6 +1682,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             destinationRouteLabel="Google suggested route"
             driverRouteBadges={driverRouteBadges}
             trafficCameras={trafficCameras}
+            activeCameraId={nearestCamera?.id ?? null}
             viewerFollowLatLngBounds={null}
             viewerFollowBoundsMinZoom={null}
             viewerTargetWidthMeters={viewerTargetWidthMeters}
@@ -1785,15 +1835,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           Center on streamer
         </button>
       ) : null}
-      {/* ── Traffic camera panel — appears above PiP when a cam is within range ── */}
+      {/* ── Traffic camera panel — top-left corner when a cam is within range ── */}
       {nearestCamera ? (
-        <div
-          className="absolute z-30"
-          style={{
-            top: Math.max(0, pipPos.top - pipSizePx - 4),
-            left: pipPos.left,
-          }}
-        >
+        <div className="absolute left-2 top-2 z-30">
           <TrafficCameraPanel camera={nearestCamera} size={pipSizePx} />
         </div>
       ) : null}
@@ -1856,6 +1900,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               destinationRouteLabel="Google suggested route"
               driverRouteBadges={driverRouteBadges}
               trafficCameras={trafficCameras}
+              activeCameraId={nearestCamera?.id ?? null}
               viewerFollowLatLngBounds={null}
               viewerFollowBoundsMinZoom={null}
               viewerTargetWidthMeters={viewerTargetWidthMeters}
