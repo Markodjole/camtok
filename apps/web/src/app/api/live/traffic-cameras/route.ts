@@ -24,11 +24,10 @@ export type TrafficCamera = {
 const WINDY_BASE = "https://api.windy.com/webcams/api/v3/webcams";
 // Windy's nearby filter is quirky at exactly 2.5 km (returns 0 in Belgrade); 3 km is reliable.
 const SEARCH_RADIUS_KM = 3;
-/** Cameras inside this distance show the feed panel. */
+/** Cameras within this distance AND most aligned to heading show the feed panel. */
 const ACTIVE_RADIUS_M = 1500;
-/** Half-angle of the forward heading cone for map pins. Kept wide so pins
- *  appear even when heading data is imprecise. */
-const FORWARD_CONE_DEG = 150;
+/** Half-angle of the heading cone for feed activation — camera must be roughly ahead. */
+const FEED_CONE_DEG = 90;
 
 function bearingDeg(
   fromLat: number,
@@ -116,10 +115,17 @@ export async function GET(req: NextRequest) {
 
     const raw = json.webcams ?? [];
 
-    const cameras: TrafficCamera[] = raw
+    type Enriched = {
+      id: string; name: string; lat: number; lng: number;
+      direction: null; imageUrl: string | null;
+      isNearest: boolean; distanceM: number; _diff: number;
+    };
+
+    const enriched: Enriched[] = raw
       .map((w) => {
         const cLat = w.location?.latitude ?? 0;
         const cLng = w.location?.longitude ?? 0;
+        if (cLat === 0 && cLng === 0) return null;
         const dist = distanceM(lat, lng, cLat, cLng);
         const bear = bearingDeg(lat, lng, cLat, cLng);
         const diff = angleDiff(bear, heading);
@@ -128,28 +134,28 @@ export async function GET(req: NextRequest) {
         return {
           id: w.webcamId != null ? String(w.webcamId) : String(Math.random()),
           name: w.title ?? w.location?.city ?? "Webcam",
-          lat: cLat,
-          lng: cLng,
-          direction: null,
-          imageUrl,
-          isNearest: false,
-          distanceM: dist,
-          _diff: diff,
+          lat: cLat, lng: cLng, direction: null as null,
+          imageUrl, isNearest: false, distanceM: dist, _diff: diff,
         };
       })
-      .filter((c) => c._diff < FORWARD_CONE_DEG && c.lat !== 0 && c.lng !== 0)
+      .filter((c): c is Enriched => c !== null)
       .sort((a, b) => a.distanceM - b.distanceM)
-      .slice(0, 8)
-      .map((c, i) => ({
-        id: c.id,
-        name: c.name,
-        lat: c.lat,
-        lng: c.lng,
-        direction: c.direction,
-        imageUrl: c.imageUrl,
-        isNearest: i === 0 && c.distanceM <= ACTIVE_RADIUS_M,
-        distanceM: c.distanceM,
-      }));
+      .slice(0, 10);
+
+    // Feed activation: pick the camera most directly ahead within ACTIVE_RADIUS_M.
+    // "Most directly ahead" = smallest angleDiff within the forward cone.
+    const feedCandidates = enriched.filter(
+      (c) => c.distanceM <= ACTIVE_RADIUS_M && c._diff <= FEED_CONE_DEG,
+    );
+    feedCandidates.sort((a, b) => a._diff - b._diff);
+    const feedCamId = feedCandidates[0]?.id ?? null;
+
+    const cameras: TrafficCamera[] = enriched.map((c) => ({
+      id: c.id, name: c.name, lat: c.lat, lng: c.lng,
+      direction: c.direction, imageUrl: c.imageUrl,
+      isNearest: c.id === feedCamId,
+      distanceM: c.distanceM,
+    }));
 
     return NextResponse.json({ cameras });
   } catch (err) {

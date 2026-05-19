@@ -974,25 +974,47 @@ export function LiveMap({
       for (const cam of trafficCameras) {
         if (!Number.isFinite(cam.lat) || !Number.isFinite(cam.lng)) continue;
         const isNearest = cam.isNearest;
-        const html = `<div style="
-          display:flex;align-items:center;justify-content:center;
-          width:${isNearest ? 28 : 22}px;height:${isNearest ? 28 : 22}px;
-          border-radius:50%;
-          background:${isNearest ? "rgba(14,165,233,0.92)" : "rgba(0,0,0,0.60)"};
-          border:${isNearest ? "2px solid rgba(255,255,255,0.9)" : "1.5px solid rgba(255,255,255,0.35)"};
-          box-shadow:${isNearest ? "0 0 10px rgba(14,165,233,0.7)" : "0 1px 4px rgba(0,0,0,0.5)"};
-          font-size:${isNearest ? 14 : 11}px;
-          line-height:1;
-        ">📷</div>`;
+        // Nearest cam: large pulsing sky-blue pin with an outer ring animation.
+        // Other cams: small dark pin.
+        const html = isNearest
+          ? `<div style="position:relative;width:36px;height:36px;display:flex;align-items:center;justify-content:center;">
+               <div style="
+                 position:absolute;inset:0;border-radius:50%;
+                 background:rgba(14,165,233,0.25);
+                 animation:cam-ping 1.4s cubic-bezier(0,0,0.2,1) infinite;
+               "></div>
+               <div style="
+                 position:relative;z-index:1;
+                 display:flex;align-items:center;justify-content:center;
+                 width:28px;height:28px;border-radius:50%;
+                 background:rgba(14,165,233,0.95);
+                 border:2.5px solid #fff;
+                 box-shadow:0 0 12px rgba(14,165,233,0.8),0 2px 6px rgba(0,0,0,0.5);
+                 font-size:14px;line-height:1;
+               ">📷</div>
+             </div>
+             <style>@keyframes cam-ping{0%{transform:scale(1);opacity:.8}70%{transform:scale(1.9);opacity:0}100%{transform:scale(1.9);opacity:0}}</style>`
+          : `<div style="
+               display:flex;align-items:center;justify-content:center;
+               width:22px;height:22px;border-radius:50%;
+               background:rgba(0,0,0,0.65);
+               border:1.5px solid rgba(255,255,255,0.35);
+               box-shadow:0 1px 4px rgba(0,0,0,0.5);
+               font-size:11px;line-height:1;
+             ">📷</div>`;
         const icon = L.divIcon({
           html,
           className: "",
-          iconSize: [isNearest ? 28 : 22, isNearest ? 28 : 22],
-          iconAnchor: [isNearest ? 14 : 11, isNearest ? 14 : 11],
+          iconSize: isNearest ? [36, 36] : [22, 22],
+          iconAnchor: isNearest ? [18, 18] : [11, 11],
         });
         const label = [cam.name, cam.direction].filter(Boolean).join(" · ");
-        L.marker([cam.lat, cam.lng], { icon, interactive: false, zIndexOffset: 200 })
-          .bindTooltip(label, { permanent: false, direction: "top", offset: [0, -14] })
+        L.marker([cam.lat, cam.lng], {
+          icon,
+          interactive: false,
+          zIndexOffset: isNearest ? 2000 : 200,
+        })
+          .bindTooltip(label, { permanent: isNearest, direction: "top", offset: [0, isNearest ? -20 : -14] })
           .addTo(group);
       }
     })();

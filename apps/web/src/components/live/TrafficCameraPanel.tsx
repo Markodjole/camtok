@@ -9,25 +9,40 @@ interface Props {
   size: number;
 }
 
+/** Append a cache-busting timestamp so the browser re-fetches the Windy
+ *  snapshot on every interval tick, giving a "live" feel. */
+function bustUrl(url: string, t: number): string {
+  const sep = url.includes("?") ? "&" : "?";
+  return `${url}${sep}_t=${t}`;
+}
+
+const REFRESH_MS = 5_000;
+
 export function TrafficCameraPanel({ camera, size }: Props) {
   const [src, setSrc] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(false);
-  const nonce = useRef(0);
+  const tickRef = useRef(0);
 
-  // Windy signed image URLs expire after 10 min; LiveRoomScreen refetches
-  // cameras every 20 s, so camera.imageUrl is always a fresh signed URL.
-  // We just load it whenever it changes — no manual interval needed.
   useEffect(() => {
     if (!camera.imageUrl) {
       setSrc(null);
       return;
     }
-    nonce.current++;
-    setLoaded(false);
-    setError(false);
-    setSrc(camera.imageUrl);
+    // Load immediately, then refresh every REFRESH_MS.
+    const load = () => {
+      setLoaded(false);
+      setError(false);
+      setSrc(bustUrl(camera.imageUrl!, Date.now()));
+    };
+    load();
+    const id = setInterval(load, REFRESH_MS);
+    return () => clearInterval(id);
+  // Re-run only when the camera changes (new cam or new base URL from 20s poll)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [camera.id, camera.imageUrl]);
+
+  void tickRef;
 
   const label = [camera.name, camera.direction]
     .filter(Boolean)
