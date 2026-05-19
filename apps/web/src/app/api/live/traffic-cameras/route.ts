@@ -8,6 +8,7 @@ export type TrafficCamera = {
   name: string;
   lat: number;
   lng: number;
+  direction: string | null;
   imageUrl: string | null;
   /** True when within ACTIVE_RADIUS_M of driver and roughly ahead. */
   isNearest: boolean;
@@ -21,7 +22,8 @@ export type TrafficCamera = {
  * Set WINDY_API_KEY in env; no key → returns empty list gracefully.
  */
 const WINDY_BASE = "https://api.windy.com/webcams/api/v3/webcams";
-const SEARCH_RADIUS_KM = 2.5;
+// Windy's nearby filter is quirky at exactly 2.5 km (returns 0 in Belgrade); 3 km is reliable.
+const SEARCH_RADIUS_KM = 3;
 /** Cameras inside this distance show the feed panel. */
 const ACTIVE_RADIUS_M = 800;
 /** Half-angle of the forward heading cone. */
@@ -127,6 +129,7 @@ export async function GET(req: NextRequest) {
           name: w.title ?? w.location?.city ?? "Webcam",
           lat: cLat,
           lng: cLng,
+          direction: null,
           imageUrl,
           isNearest: false,
           distanceM: dist,
@@ -141,6 +144,7 @@ export async function GET(req: NextRequest) {
         name: c.name,
         lat: c.lat,
         lng: c.lng,
+        direction: c.direction,
         imageUrl: c.imageUrl,
         isNearest: i === 0 && c.distanceM <= ACTIVE_RADIUS_M,
         distanceM: c.distanceM,
