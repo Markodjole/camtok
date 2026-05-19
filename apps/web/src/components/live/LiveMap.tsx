@@ -109,6 +109,15 @@ export interface LiveMapProps {
    * Server recomputes whenever the driver deviates more than ~40 m.
    */
   destinationRoute?: Array<{ lat: number; lng: number }> | null;
+  /**
+   * Traffic speed per polyline segment, from Google Routes TRAFFIC_ON_POLYLINE.
+   * Each entry covers [startIndex, endIndex] inclusive into `destinationRoute`.
+   */
+  destinationRouteTraffic?: Array<{
+    startIndex: number;
+    endIndex: number;
+    speed: "NORMAL" | "SLOW" | "TRAFFIC_JAM";
+  }> | null;
   /** UI label for destination route badge. */
   destinationRouteLabel?: string | null;
   /** Short labels derived from `driving_route_style` (shown to viewers & streamer). */
@@ -289,6 +298,7 @@ export function LiveMap({
   railPhase = "none",
   destination = null,
   destinationRoute = null,
+  destinationRouteTraffic = null,
   destinationRouteLabel = "Google suggested route",
   driverRouteBadges = null,
   viewerFollowZoom = null,
@@ -831,18 +841,48 @@ export function LiveMap({
           (p) => Number.isFinite(p.lat) && Number.isFinite(p.lng),
         )
       ) {
-        const pts = destinationRoute.map(
-          (p) => [p.lat, p.lng] as [number, number],
-        );
-        const line = L.polyline(pts, {
-          color: "#ef4444",
-          weight: 3,
-          opacity: 0.38,
-          dashArray: "7 9",
-          lineCap: "round",
-          lineJoin: "round",
-        }).addTo(group);
-        line.bringToBack?.();
+        // Traffic color map matching Google Maps UI.
+        const TRAFFIC_COLOR: Record<string, string> = {
+          NORMAL: "#22c55e",      // green
+          SLOW: "#f59e0b",        // amber / yellow
+          TRAFFIC_JAM: "#ef4444", // red
+        };
+        const ROUTE_OPACITY = 0.45;
+
+        const segments = destinationRouteTraffic;
+        if (segments && segments.length > 0) {
+          // Draw one polyline per traffic segment, colored by speed.
+          for (const seg of segments) {
+            const start = Math.max(0, seg.startIndex);
+            const end = Math.min(destinationRoute.length - 1, seg.endIndex);
+            if (end <= start) continue;
+            const pts = destinationRoute
+              .slice(start, end + 1)
+              .map((p) => [p.lat, p.lng] as [number, number]);
+            if (pts.length < 2) continue;
+            const color = TRAFFIC_COLOR[seg.speed] ?? TRAFFIC_COLOR.NORMAL;
+            L.polyline(pts, {
+              color,
+              weight: 4,
+              opacity: ROUTE_OPACITY,
+              lineCap: "round",
+              lineJoin: "round",
+            }).addTo(group).bringToBack?.();
+          }
+        } else {
+          // No traffic data — fall back to a single red dashed line.
+          const pts = destinationRoute.map(
+            (p) => [p.lat, p.lng] as [number, number],
+          );
+          L.polyline(pts, {
+            color: "#ef4444",
+            weight: 3,
+            opacity: ROUTE_OPACITY,
+            dashArray: "7 9",
+            lineCap: "round",
+            lineJoin: "round",
+          }).addTo(group).bringToBack?.();
+        }
       }
 
       if (
@@ -900,6 +940,7 @@ export function LiveMap({
     destination?.lng,
     destination?.label,
     destinationRoute,
+    destinationRouteTraffic,
     mapReady,
     streamer,
   ]);

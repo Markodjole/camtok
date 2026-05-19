@@ -158,6 +158,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   >(null);
   const destinationRouteRef = useRef(destinationRoute);
   destinationRouteRef.current = destinationRoute;
+  const [destinationRouteTraffic, setDestinationRouteTraffic] = useState<
+    Array<{ startIndex: number; endIndex: number; speed: "NORMAL" | "SLOW" | "TRAFFIC_JAM" }> | null
+  >(null);
   const [destinationEtaSec, setDestinationEtaSec] = useState<number | null>(null);
   const [destinationDistanceM, setDestinationDistanceM] = useState<number | null>(null);
   /** Start at 0 so SSR and first client paint match; tick after mount (avoids hydration #418). */
@@ -1354,6 +1357,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             polyline: Array<{ lat: number; lng: number }>;
             distanceMeters: number;
             durationSec: number;
+            trafficSegments?: Array<{ startIndex: number; endIndex: number; speed: "NORMAL" | "SLOW" | "TRAFFIC_JAM" }>;
           } | null;
           distanceToDestinationMeters?: number;
           reason?: "no_room" | "no_destination" | "no_position" | "arrived";
@@ -1363,8 +1367,10 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         // Keep last valid route on transient misses; retry until Google returns again.
         if (j.route?.polyline && j.route.polyline.length > 1) {
           setDestinationRoute(j.route.polyline);
+          setDestinationRouteTraffic(j.route.trafficSegments ?? null);
         } else if (j.reason === "no_destination" || j.reason === "arrived") {
           setDestinationRoute(null);
+          setDestinationRouteTraffic(null);
         }
         setDestinationDistanceM(
           j.route?.distanceMeters ?? j.distanceToDestinationMeters ?? null,
@@ -1579,6 +1585,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             railPhase={viewerRailPhase}
             destination={room.destination}
             destinationRoute={destinationRoute}
+            destinationRouteTraffic={destinationRouteTraffic}
             destinationRouteLabel="Google suggested route"
             driverRouteBadges={driverRouteBadges}
             viewerFollowLatLngBounds={null}
@@ -1787,6 +1794,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               railPhase={viewerRailPhase}
               destination={room.destination}
               destinationRoute={destinationRoute}
+              destinationRouteTraffic={destinationRouteTraffic}
               destinationRouteLabel="Google suggested route"
               driverRouteBadges={driverRouteBadges}
               viewerFollowLatLngBounds={null}

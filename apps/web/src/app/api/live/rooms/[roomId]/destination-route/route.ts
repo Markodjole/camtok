@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getLiveRoomDetail } from "@/actions/live-feed";
-import { fetchGoogleDirectionsRoute } from "@/lib/live/routing/googleDirections";
+import {
+  fetchGoogleDirectionsRoute,
+  type TrafficSegment,
+} from "@/lib/live/routing/googleDirections";
 import {
   metersBetween,
   projectOntoPolyline,
@@ -27,6 +30,7 @@ type Cached = {
   polyline: LatLng[];
   distanceMeters: number;
   durationSec: number;
+  trafficSegments: TrafficSegment[];
   destinationLat: number;
   destinationLng: number;
   fetchedAtMs: number;
@@ -97,6 +101,7 @@ export async function GET(
         polyline: cached.polyline,
         distanceMeters: cached.distanceMeters,
         durationSec: cached.durationSec,
+        trafficSegments: cached.trafficSegments,
       }
     : null;
 
@@ -111,11 +116,17 @@ export async function GET(
         polyline: fresh.polyline,
         distanceMeters: fresh.distanceMeters,
         durationSec: fresh.durationSec,
+        trafficSegments: fresh.trafficSegments,
         destinationLat: dest.lat,
         destinationLng: dest.lng,
         fetchedAtMs: Date.now(),
       });
-      route = fresh;
+      route = {
+        polyline: fresh.polyline,
+        distanceMeters: fresh.distanceMeters,
+        durationSec: fresh.durationSec,
+        trafficSegments: fresh.trafficSegments,
+      };
     } else {
       lastFetchOk = false;
       console.warn("[destination-route] Google route fetch failed", {

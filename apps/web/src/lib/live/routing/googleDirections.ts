@@ -62,6 +62,14 @@ const ROUTES_TRAVEL_MODE: Record<string, string> = {
  * because the legacy `maps.googleapis.com/maps/api/directions/json` API is
  * disabled by default for new Google Cloud projects.
  */
+export type TrafficSpeed = "NORMAL" | "SLOW" | "TRAFFIC_JAM";
+
+export type TrafficSegment = {
+  startIndex: number;
+  endIndex: number;
+  speed: TrafficSpeed;
+};
+
 export async function fetchGoogleDirectionsRoute(
   from: LatLng,
   to: LatLng,
@@ -75,6 +83,7 @@ export async function fetchGoogleDirectionsRoute(
   polyline: LatLng[];
   distanceMeters: number;
   durationSec: number;
+  trafficSegments: TrafficSegment[];
 } | null> {
   const key =
     process.env.GOOGLE_MAPS_API_KEY ??
@@ -106,6 +115,9 @@ export async function fetchGoogleDirectionsRoute(
       ? tuning.routeModifiers
       : undefined;
 
+  // TRAFFIC_ON_POLYLINE is only supported for motorized travel modes.
+  const supportsTraffic = travelMode === "DRIVE" || travelMode === "TWO_WHEELER";
+
   const body = {
     origin: {
       location: { latLng: { latitude: from.lat, longitude: from.lng } },
@@ -114,10 +126,12 @@ export async function fetchGoogleDirectionsRoute(
       location: { latLng: { latitude: to.lat, longitude: to.lng } },
     },
     travelMode,
-    polylineQuality: "OVERVIEW",
+    // HIGH_QUALITY gives denser polyline points that index correctly with speedReadingIntervals.
+    polylineQuality: "HIGH_QUALITY",
     polylineEncoding: "ENCODED_POLYLINE",
     ...(routingPreference ? { routingPreference } : {}),
     ...(routeModifiers ? { routeModifiers } : {}),
+    ...(supportsTraffic ? { extraComputations: ["TRAFFIC_ON_POLYLINE"] } : {}),
   };
 
   try {
@@ -129,7 +143,7 @@ export async function fetchGoogleDirectionsRoute(
           "Content-Type": "application/json",
           "X-Goog-Api-Key": key,
           "X-Goog-FieldMask":
-            "routes.distanceMeters,routes.duration,routes.polyline.encodedPolyline",
+            "routes.distanceMeters,routes.duration,routes.polyline.encodedPolyline,routes.travelAdvisory.speedReadingIntervals",
         },
         body: JSON.stringify(body),
         cache: "no-store",
@@ -146,6 +160,13 @@ export async function fetchGoogleDirectionsRoute(
         distanceMeters?: number;
         duration?: string;
         polyline?: { encodedPolyline?: string };
+        travelAdvisory?: {
+          speedReadingIntervals?: Array<{
+            startPolylinePointIndex?: number;
+            endPolylinePointIndex?: number;
+            speed?: string;
+          }>;
+        };
       }>;
       error?: { code?: number; message?: string; status?: string };
     };
@@ -171,10 +192,28 @@ export async function fetchGoogleDirectionsRoute(
     const durationSec = route.duration
       ? Number((route.duration ?? "0s").replace(/s$/, "")) || 0
       : 0;
+
+    // Parse traffic speed intervals. The API returns contiguous segments
+    // covering the full polyline. startPolylinePointIndex defaults to 0 when absent.
+    const rawIntervals = route.travelAdvisory?.speedReadingIntervals ?? [];
+    const trafficSegments: TrafficSegment[] = rawIntervals
+      .map((iv) => {
+        const speed = (iv.speed ?? "NORMAL") as TrafficSpeed;
+        const validSpeed: TrafficSpeed =
+          speed === "SLOW" || speed === "TRAFFIC_JAM" ? speed : "NORMAL";
+        return {
+          startIndex: iv.startPolylinePointIndex ?? 0,
+          endIndex: iv.endPolylinePointIndex ?? polyline.length - 1,
+          speed: validSpeed,
+        };
+      })
+      .filter((s) => s.endIndex > s.startIndex);
+
     return {
       polyline,
       distanceMeters: route.distanceMeters ?? 0,
       durationSec,
+      trafficSegments,
     };
   } catch (err) {
     console.warn(
