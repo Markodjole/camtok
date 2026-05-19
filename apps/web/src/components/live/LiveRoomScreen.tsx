@@ -97,6 +97,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [routePoints, setRoutePoints] = useState<RoutePoint[]>(
     initialRoom.routePoints ?? [],
   );
+  const routePointsRef = useRef(routePoints);
+  routePointsRef.current = routePoints;
   const lastStakeAmount = useViewerChromeStore((s) => s.lastStakeAmount);
   const isMuted = useViewerChromeStore((s) => s.isMuted);
   const wallet = useUserStore((s) => s.wallet);
@@ -1448,11 +1450,11 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     let cancelled = false;
 
     const fetchCameras = async () => {
-      const pts = routePoints;
-      const last = pts[pts.length - 1];
-      if (!last) return;
-      const heading = last.heading ?? 0;
       try {
+        const pts = routePointsRef.current;
+        const last = pts[pts.length - 1];
+        if (!last) return;
+        const heading = last.heading ?? 0;
         const res = await fetch(
           `/api/live/traffic-cameras?lat=${last.lat}&lng=${last.lng}&heading=${heading}`,
           { cache: "no-store" },

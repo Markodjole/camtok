@@ -25,9 +25,10 @@ const WINDY_BASE = "https://api.windy.com/webcams/api/v3/webcams";
 // Windy's nearby filter is quirky at exactly 2.5 km (returns 0 in Belgrade); 3 km is reliable.
 const SEARCH_RADIUS_KM = 3;
 /** Cameras inside this distance show the feed panel. */
-const ACTIVE_RADIUS_M = 800;
-/** Half-angle of the forward heading cone. */
-const FORWARD_CONE_DEG = 80;
+const ACTIVE_RADIUS_M = 1500;
+/** Half-angle of the forward heading cone for map pins. Kept wide so pins
+ *  appear even when heading data is imprecise. */
+const FORWARD_CONE_DEG = 150;
 
 function bearingDeg(
   fromLat: number,
@@ -84,8 +85,8 @@ export async function GET(req: NextRequest) {
     // nearby={lat},{lng},{radius_km}
     url.searchParams.set("nearby", `${lat},${lng},${SEARCH_RADIUS_KM}`);
     url.searchParams.set("limit", "30");
-    // include images so we get the current snapshot URL in one call
-    url.searchParams.set("include", "images");
+    // include images AND location — without location, lat/lng are missing from the response
+    url.searchParams.set("include", "images,location");
     url.searchParams.set("lang", "en");
 
     const res = await fetch(url.toString(), {
@@ -101,14 +102,13 @@ export async function GET(req: NextRequest) {
 
     const json = (await res.json()) as {
       webcams?: Array<{
-        webcamId?: string;
-        id?: string;
+        webcamId?: number | string;
         title?: string;
         location?: { latitude?: number; longitude?: number; city?: string };
         images?: {
           current?: {
             preview?: string;
-            large?: string;
+            thumbnail?: string;
           };
         };
       }>;
@@ -123,9 +123,10 @@ export async function GET(req: NextRequest) {
         const dist = distanceM(lat, lng, cLat, cLng);
         const bear = bearingDeg(lat, lng, cLat, cLng);
         const diff = angleDiff(bear, heading);
-        const imageUrl = w.images?.current?.large ?? w.images?.current?.preview ?? null;
+        // Windy v3 only returns preview (400×224) — no separate "large"
+        const imageUrl = w.images?.current?.preview ?? w.images?.current?.thumbnail ?? null;
         return {
-          id: w.webcamId ?? w.id ?? String(Math.random()),
+          id: w.webcamId != null ? String(w.webcamId) : String(Math.random()),
           name: w.title ?? w.location?.city ?? "Webcam",
           lat: cLat,
           lng: cLng,
