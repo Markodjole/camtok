@@ -158,8 +158,8 @@ export interface LiveMapProps {
 }
 
 const C = {
-  streamer: { line: "#22c55e", lineOp: 0.5, fill: "#4ade80", r: 7 },
-  viewer: { line: "#22c55e", lineOp: 0.5, fill: "#4ade80", r: 7 },
+  streamer: { line: "#2563eb", lineOp: 0.7, fill: "#4ade80", r: 7 },
+  viewer: { line: "#2563eb", lineOp: 0.7, fill: "#4ade80", r: 7 },
 };
 
 function headingDivIcon(
@@ -841,13 +841,19 @@ export function LiveMap({
           (p) => Number.isFinite(p.lat) && Number.isFinite(p.lng),
         )
       ) {
-        // Traffic color map matching Google Maps UI.
+        // Traffic colors: deliberately distinct from the blue past-path.
+        // NORMAL = light sky-blue (route w/ good flow), SLOW = amber, JAM = red.
+        // Matches Google Maps traffic density semantics without clashing with
+        // the #3b82f6 blue driven-history polyline.
         const TRAFFIC_COLOR: Record<string, string> = {
-          NORMAL: "#22c55e",      // green
-          SLOW: "#f59e0b",        // amber / yellow
-          TRAFFIC_JAM: "#ef4444", // red
+          NORMAL: "#7dd3fc",      // sky-300 — clear road, subtle
+          SLOW: "#f59e0b",        // amber-400 — moderate congestion
+          TRAFFIC_JAM: "#ef4444", // red-500  — heavy traffic
         };
-        const ROUTE_OPACITY = 0.45;
+        const ROUTE_WEIGHT_NORMAL = 3;
+        const ROUTE_WEIGHT_BAD = 5;
+        const ROUTE_OPACITY_NORMAL = 0.30;
+        const ROUTE_OPACITY_BAD = 0.55;
 
         const segments = destinationRouteTraffic;
         if (segments && segments.length > 0) {
@@ -861,24 +867,25 @@ export function LiveMap({
               .map((p) => [p.lat, p.lng] as [number, number]);
             if (pts.length < 2) continue;
             const color = TRAFFIC_COLOR[seg.speed] ?? TRAFFIC_COLOR.NORMAL;
+            const isBad = seg.speed === "SLOW" || seg.speed === "TRAFFIC_JAM";
             L.polyline(pts, {
               color,
-              weight: 4,
-              opacity: ROUTE_OPACITY,
+              weight: isBad ? ROUTE_WEIGHT_BAD : ROUTE_WEIGHT_NORMAL,
+              opacity: isBad ? ROUTE_OPACITY_BAD : ROUTE_OPACITY_NORMAL,
               lineCap: "round",
               lineJoin: "round",
             }).addTo(group).bringToBack?.();
           }
         } else {
-          // No traffic data — fall back to a single red dashed line.
+          // No traffic data — draw a subtle dashed route line (Google Maps blue).
           const pts = destinationRoute.map(
             (p) => [p.lat, p.lng] as [number, number],
           );
           L.polyline(pts, {
-            color: "#ef4444",
+            color: "#93c5fd",
             weight: 3,
-            opacity: ROUTE_OPACITY,
-            dashArray: "7 9",
+            opacity: 0.30,
+            dashArray: "6 8",
             lineCap: "round",
             lineJoin: "round",
           }).addTo(group).bringToBack?.();
@@ -1217,13 +1224,14 @@ export function LiveMap({
       measVLng = measVLng * 0.2 + ve * 0.8;
     }
 
-    const blend = 0.28;
+    const blend = 0.42;
     const vr = viewerVelSmoothedRef.current;
     vr.vLat = vr.vLat * (1 - blend) + measVLat * blend;
     vr.vLng = vr.vLng * (1 - blend) + measVLng * blend;
 
+    // Cap at ~150 km/h equivalent to prevent runaway projection.
     const vmag = Math.hypot(vr.vLat, vr.vLng);
-    const maxDegPerSec = 0.0028;
+    const maxDegPerSec = 0.005;
     if (vmag > maxDegPerSec) {
       const s = maxDegPerSec / vmag;
       vr.vLat *= s;
@@ -1365,10 +1373,10 @@ export function LiveMap({
       return cancelViewerLoop;
     }
 
-    const BASE_STIFFNESS = 10.5;
-    const PRECISE_STIFFNESS = 26;
-    const BASE_PROJECT_SEC = 0.75;
-    const PRECISE_PROJECT_SEC = 0.2;
+    const BASE_STIFFNESS = 18;
+    const PRECISE_STIFFNESS = 30;
+    const BASE_PROJECT_SEC = 0.55;
+    const PRECISE_PROJECT_SEC = 0.18;
     const NEGATIVE_SPEED_EPS = 1e-8;
     const TURN_PRECISE_PRE_M = 50;
     const TURN_PRECISE_POST_M = 20;

@@ -104,6 +104,8 @@ export async function fetchGoogleDirectionsRoute(
   const motorRouting =
     travelMode === "DRIVE" || travelMode === "TWO_WHEELER";
 
+  // TRAFFIC_ON_POLYLINE requires TRAFFIC_AWARE (or OPTIMAL) routing preference.
+  // Always use TRAFFIC_AWARE for motor routes regardless of tuning style preference.
   const routingPreference = motorRouting
     ? tuning?.routingPreference ?? "TRAFFIC_AWARE"
     : undefined;
@@ -115,9 +117,6 @@ export async function fetchGoogleDirectionsRoute(
       ? tuning.routeModifiers
       : undefined;
 
-  // TRAFFIC_ON_POLYLINE is only supported for motorized travel modes.
-  const supportsTraffic = travelMode === "DRIVE" || travelMode === "TWO_WHEELER";
-
   const body = {
     origin: {
       location: { latLng: { latitude: from.lat, longitude: from.lng } },
@@ -126,12 +125,13 @@ export async function fetchGoogleDirectionsRoute(
       location: { latLng: { latitude: to.lat, longitude: to.lng } },
     },
     travelMode,
-    // HIGH_QUALITY gives denser polyline points that index correctly with speedReadingIntervals.
+    // HIGH_QUALITY gives denser polyline points that align with speedReadingInterval indices.
     polylineQuality: "HIGH_QUALITY",
     polylineEncoding: "ENCODED_POLYLINE",
     ...(routingPreference ? { routingPreference } : {}),
     ...(routeModifiers ? { routeModifiers } : {}),
-    ...(supportsTraffic ? { extraComputations: ["TRAFFIC_ON_POLYLINE"] } : {}),
+    // Request traffic density data for motor routes.
+    ...(motorRouting ? { extraComputations: ["TRAFFIC_ON_POLYLINE"] } : {}),
   };
 
   try {
@@ -143,7 +143,7 @@ export async function fetchGoogleDirectionsRoute(
           "Content-Type": "application/json",
           "X-Goog-Api-Key": key,
           "X-Goog-FieldMask":
-            "routes.distanceMeters,routes.duration,routes.polyline.encodedPolyline,routes.travelAdvisory.speedReadingIntervals",
+            "routes.distanceMeters,routes.duration,routes.polyline.encodedPolyline,routes.travelAdvisory.speedReadingIntervals,routes.legs.travelAdvisory.speedReadingIntervals",
         },
         body: JSON.stringify(body),
         cache: "no-store",
@@ -155,18 +155,20 @@ export async function fetchGoogleDirectionsRoute(
       console.warn("[googleDirections] non-OK", res.status, errText.slice(0, 240));
       return null;
     }
+    type SpeedInterval = {
+      startPolylinePointIndex?: number;
+      endPolylinePointIndex?: number;
+      speed?: string;
+    };
     const json = (await res.json()) as {
       routes?: Array<{
         distanceMeters?: number;
         duration?: string;
         polyline?: { encodedPolyline?: string };
-        travelAdvisory?: {
-          speedReadingIntervals?: Array<{
-            startPolylinePointIndex?: number;
-            endPolylinePointIndex?: number;
-            speed?: string;
-          }>;
-        };
+        travelAdvisory?: { speedReadingIntervals?: SpeedInterval[] };
+        legs?: Array<{
+          travelAdvisory?: { speedReadingIntervals?: SpeedInterval[] };
+        }>;
       }>;
       error?: { code?: number; message?: string; status?: string };
     };
@@ -193,9 +195,23 @@ export async function fetchGoogleDirectionsRoute(
       ? Number((route.duration ?? "0s").replace(/s$/, "")) || 0
       : 0;
 
-    // Parse traffic speed intervals. The API returns contiguous segments
-    // covering the full polyline. startPolylinePointIndex defaults to 0 when absent.
-    const rawIntervals = route.travelAdvisory?.speedReadingIntervals ?? [];
+    // Parse traffic speed intervals. The API returns contiguous segments covering
+    // the full polyline. startPolylinePointIndex defaults to 0 when absent.
+    // Intervals may appear at the route level or leg level depending on API version.
+    const rawIntervals =
+      route.travelAdvisory?.speedReadingIntervals ??
+      route.legs?.[0]?.travelAdvisory?.speedReadingIntervals ??
+      [];
+    if (process.env.NODE_ENV === "development") {
+      console.log(
+        "[googleDirections] speedReadingIntervals count:",
+        rawIntervals.length,
+        "routingPreference:",
+        body.routingPreference ?? "none",
+        "extraComputations:",
+        (body as Record<string, unknown>).extraComputations ?? "none",
+      );
+    }
     const trafficSegments: TrafficSegment[] = rawIntervals
       .map((iv) => {
         const speed = (iv.speed ?? "NORMAL") as TrafficSpeed;
