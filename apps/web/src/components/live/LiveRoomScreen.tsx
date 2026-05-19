@@ -212,7 +212,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         }
         accDist += segLen;
       }
-      if (minOff < 400 && routeDistAtClosest < bestRouteDist) {
+      // Camera must be within 400 m of the route laterally AND have a
+      // positive route-distance so we only pick cameras ahead, not behind.
+      if (minOff < 400 && routeDistAtClosest > 0 && routeDistAtClosest < bestRouteDist) {
         bestRouteDist = routeDistAtClosest;
         bestCam = cam;
       }
@@ -1752,9 +1754,10 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         />
       ) : null}
 
-      {/* Corner live dot + compact actions (no stake stepper — use header stake) */}
+      {/* Corner live dot — shifts right when traffic camera panel is occupying top-left */}
       <div
-        className="pointer-events-none fixed left-3 top-3 z-[62]"
+        className="pointer-events-none fixed top-3 z-[62] transition-all duration-200"
+        style={{ left: nearestCamera ? pipSizePx + 6 : 12 }}
         role="status"
         aria-label="Live broadcast"
       >
@@ -1835,9 +1838,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           Center on streamer
         </button>
       ) : null}
-      {/* ── Traffic camera panel — top-left corner when a cam is within range ── */}
+      {/* ── Traffic camera panel — flush top-left corner ── */}
       {nearestCamera ? (
-        <div className="absolute left-2 top-2 z-30">
+        <div className="absolute left-0 top-0 z-30">
           <TrafficCameraPanel camera={nearestCamera} size={pipSizePx} />
         </div>
       ) : null}
@@ -1846,20 +1849,20 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       <div
         className="absolute z-30 overflow-hidden border-y border-l border-white/15 shadow-2xl"
         style={{
-          top: pipPos.top,
-          left: pipPos.left,
+          top: nearestCamera ? pipSizePx : pipPos.top,
+          left: nearestCamera ? 0 : pipPos.left,
           width: "34vw",
           height: "34vw",
           maxWidth: 180,
           maxHeight: 180,
           opacity: 0.95,
           touchAction: "none",
-          cursor: pipDragReady ? "grabbing" : "grab",
+          cursor: nearestCamera ? "default" : pipDragReady ? "grabbing" : "grab",
         }}
-        onPointerDown={onPipPointerDown}
-        onPointerMove={onPipPointerMove}
-        onPointerUp={onPipPointerUp}
-        onPointerCancel={onPipPointerUp}
+        onPointerDown={nearestCamera ? undefined : onPipPointerDown}
+        onPointerMove={nearestCamera ? undefined : onPipPointerMove}
+        onPointerUp={nearestCamera ? undefined : onPipPointerUp}
+        onPointerCancel={nearestCamera ? undefined : onPipPointerUp}
       >
         {mapExpanded ? (
           /* PiP shows the camera stream when map is fullscreen */

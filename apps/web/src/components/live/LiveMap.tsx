@@ -404,7 +404,7 @@ export function LiveMap({
     if (root) {
       const flatDeg = -deg;
       root
-        .querySelectorAll<HTMLElement>(".camtok-dest-screen-flat")
+        .querySelectorAll<HTMLElement>(".camtok-dest-screen-flat, .camtok-cam-screen-flat")
         .forEach((node) => {
           node.style.transform = `rotate(${flatDeg}deg)`;
           node.style.transformOrigin = "50% 100%";
@@ -984,10 +984,11 @@ export function LiveMap({
 
         if (isActive) {
           // Active camera: destination-pin style — pill label above, pulsing icon dot below.
+          // Uses class camtok-cam-screen-flat so it counter-rotates with the map heading.
           const labelHtml = label
             ? `<div style="box-sizing:border-box;max-width:min(220px,60vw);margin-bottom:4px;padding:2px 8px;border-radius:9999px;background:rgba(14,165,233,0.92);border:1px solid rgba(255,255,255,0.6);color:#fff;font-size:11px;font-weight:600;letter-spacing:0.01em;box-shadow:0 4px 14px rgba(0,0,0,0.45);line-height:1.3;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${label}</div>`
             : "";
-          html = `<div style="display:flex;flex-direction:column;align-items:center;">
+          html = `<div class="camtok-cam-screen-flat" style="display:flex;flex-direction:column;align-items:center;transform:rotate(0deg);transform-origin:50% 100%;will-change:transform;">
             ${labelHtml}
             <div style="position:relative;width:28px;height:28px;display:flex;align-items:center;justify-content:center;">
               <div style="position:absolute;inset:0;border-radius:50%;background:rgba(14,165,233,0.28);animation:cam-ping 1.4s cubic-bezier(0,0,0.2,1) infinite;"></div>
@@ -998,17 +999,32 @@ export function LiveMap({
           w = 230; h = (label ? 28 : 0) + 30;
           anchorX = w / 2; anchorY = h;
         } else {
-          // Inactive cameras: small, subtle icon pin only.
-          html = `<div style="display:flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;background:rgba(0,0,0,0.55);border:1px solid rgba(255,255,255,0.28);box-shadow:0 1px 3px rgba(0,0,0,0.5);font-size:10px;line-height:1;">📷</div>`;
-          w = 18; h = 18; anchorX = 9; anchorY = 9;
+          // Inactive cameras: very small, barely visible dot icon.
+          html = `<div style="display:flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:50%;background:rgba(0,0,0,0.35);border:1px solid rgba(255,255,255,0.18);font-size:8px;line-height:1;opacity:0.55;">📷</div>`;
+          w = 14; h = 14; anchorX = 7; anchorY = 7;
         }
 
         const icon = L.divIcon({ html, className: "", iconSize: [w, h], iconAnchor: [anchorX, anchorY] });
-        L.marker([cam.lat, cam.lng], {
+        const marker = L.marker([cam.lat, cam.lng], {
           icon,
           interactive: false,
-          zIndexOffset: isActive ? 2000 : 150,
+          zIndexOffset: isActive ? 2000 : 100,
         }).addTo(group);
+
+        // Apply current map rotation immediately so label is readable on mount.
+        if (isActive) {
+          queueMicrotask(() => {
+            const root = containerRef.current;
+            if (!root) return;
+            const deg = rotateWithHeadingRef.current && followModeRef.current
+              ? -rotationDegRef.current : 0;
+            root.querySelectorAll<HTMLElement>(".camtok-cam-screen-flat").forEach((node) => {
+              node.style.transform = `rotate(${deg}deg)`;
+              node.style.transformOrigin = "50% 100%";
+            });
+          });
+          void marker;
+        }
       }
     })();
     return () => { aborted = true; };

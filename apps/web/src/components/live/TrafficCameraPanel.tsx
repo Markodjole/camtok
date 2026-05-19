@@ -50,7 +50,7 @@ export function TrafficCameraPanel({ camera, size }: Props) {
 
   return (
     <div
-      className="relative overflow-hidden border-y border-l border-white/15 bg-black shadow-2xl"
+      className="relative overflow-hidden bg-black shadow-2xl"
       style={{ width: size, height: size }}
     >
       {/* Camera feed */}
