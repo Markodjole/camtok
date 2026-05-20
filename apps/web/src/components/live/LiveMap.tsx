@@ -694,35 +694,29 @@ function LiveMapInner({
     layerRef.current?.setOpacity(tileOpacity);
   }, [tileOpacity]);
 
-  // Adaptive tile quality: if FPS stays below 30 for 3s, hot-swap to nolabels 1× tiles
-  // and tell the parent to disable heading rotation (halves the rendered tile area).
-  // One-way switch to avoid flapping; the RAF counter itself costs ~0 CPU.
+  // FPS monitor: if sustained < 30fps for 3s, notify parent to shed expensive work.
+  // One-way trigger; the RAF counter itself costs ~0 CPU.
   const onPerformanceDegradeRef = useRef(onPerformanceDegrade);
   useEffect(() => { onPerformanceDegradeRef.current = onPerformanceDegrade; }, [onPerformanceDegrade]);
 
   useEffect(() => {
     if (!mapReady) return;
-    // {r} removed → forces standard 1× tiles (4× fewer pixels per tile on retina screens)
-    const LIGHT = "https://{s}.basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}.png";
     let frames = 0;
     let lastTs = performance.now();
     let lowCount = 0;
-    let degraded = false;
+    let fired = false;
     let rafId: number;
 
     const tick = (now: number) => {
       frames++;
       const elapsed = now - lastTs;
       if (elapsed >= 1000) {
-        if (!degraded) {
+        if (!fired) {
           const fps = (frames / elapsed) * 1000;
           if (fps < 30) {
             lowCount++;
             if (lowCount >= 3) {
-              degraded = true;
-              layerRef.current?.setUrl(LIGHT, false);
-              const pane = mapRef.current?.getPanes().tilePane as HTMLElement | undefined;
-              if (pane) pane.style.filter = "invert(0.88) hue-rotate(180deg) saturate(1.1) brightness(1.15)";
+              fired = true;
               onPerformanceDegradeRef.current?.();
             }
           } else {

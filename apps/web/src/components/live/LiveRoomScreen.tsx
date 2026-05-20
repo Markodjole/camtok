@@ -1545,14 +1545,14 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       }
     };
 
-    void fetchCameras();
+    if (!mapPerfDegraded) void fetchCameras();
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  // Re-kick when room changes; routePoints are NOT in deps (we read latest via closure inside).
+  // Re-kick when room changes or perf degrades; routePoints are NOT in deps (read via closure).
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [room.roomId]);
+  }, [room.roomId, mapPerfDegraded]);
 
   const onPipPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;
@@ -1687,7 +1687,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
                 mapFollowRestoreRef.current = null;
               }, 5000);
             }}
-            onPerformanceDegrade={() => setMapPerfDegraded(true)}
+            onPerformanceDegrade={() => { setMapPerfDegraded(true); setTrafficCameras([]); }}
             tileOpacity={1}
             mapCaption={
               viewerCurrentBetHeadline ?? currentMarket?.title ?? undefined
@@ -1867,7 +1867,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         </button>
       ) : null}
       {/* ── Traffic camera panel — flush top-left corner ── */}
-      {nearestCamera ? (
+      {nearestCamera && !mapPerfDegraded ? (
         <div className="absolute left-0 top-0 z-30">
           <TrafficCameraPanel camera={nearestCamera} size={pipSizePx} />
         </div>
@@ -1909,7 +1909,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               showCourseArrow={true}
               transportMode={room.transportMode}
               rotateWithHeading={!mapPerfDegraded}
-              onPerformanceDegrade={() => setMapPerfDegraded(true)}
+              onPerformanceDegrade={() => { setMapPerfDegraded(true); setTrafficCameras([]); }}
               tileOpacity={0.65}
               mapCaption={
               viewerCurrentBetHeadline ?? currentMarket?.title ?? undefined
