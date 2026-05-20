@@ -722,7 +722,7 @@ function LiveMapInner({
               degraded = true;
               layerRef.current?.setUrl(LIGHT, false);
               const pane = mapRef.current?.getPanes().tilePane as HTMLElement | undefined;
-              if (pane) pane.style.filter = "contrast(1.5) saturate(1.4)";
+              if (pane) pane.style.filter = "invert(1) hue-rotate(180deg) saturate(1.3)";
               onPerformanceDegradeRef.current?.();
             }
           } else {
