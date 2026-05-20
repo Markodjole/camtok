@@ -713,6 +713,9 @@ function LiveMapInner({
             if (lowCount >= 3) {
               degraded = true;
               layerRef.current?.setUrl(LIGHT, false);
+              // Compensate for missing labels/buildings with stronger filter
+              const pane = mapRef.current?.getPanes().tilePane as HTMLElement | undefined;
+              if (pane) pane.style.filter = "contrast(2) saturate(1.6) brightness(0.88)";
             }
           } else {
             lowCount = 0;
