@@ -627,13 +627,19 @@ export function LiveMap({
       m.on("dragstart", () => {
         onUserInteractRef.current?.();
       });
-      const t = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        maxZoom: 19,
-        opacity: 0.4,
-        keepBuffer: 3,
-        updateWhenIdle: false,
-        updateWhenZooming: false,
-      });
+      const t = L.tileLayer(
+        "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
+        {
+          subdomains: "abcd",
+          maxZoom: 20,
+          opacity: 0.4,
+          keepBuffer: 3,
+          updateWhenIdle: false,
+          updateWhenZooming: false,
+          attribution:
+            '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+        },
+      );
       t.addTo(m);
       zoneLayerRef.current = L.layerGroup().addTo(m);
       checkpointLayerRef.current = L.layerGroup().addTo(m);
