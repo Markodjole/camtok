@@ -732,10 +732,9 @@ function LiveMapInner({
             }
             const muted = zonesVisualStyle === "muted";
             const pickZone = zonesVisualStyle === "pick_zone";
-            // White outlines on the current square; non-current cells get a slight cool tint
-            // so the grid reads without the loud green strokes.
-            const LINE_CURRENT = "#ffffff";
-            const LINE_OTHER = "rgba(148, 163, 184, 0.9)";
+            // Dark outlines for Voyager (light tiles); contrast-safe on any brightness.
+            const LINE_CURRENT = "#1e40af";           // deep blue — was white (invisible on light bg)
+            const LINE_OTHER = "rgba(51, 65, 85, 0.85)"; // slate-700 — was light-gray (invisible on light bg)
             let strokeColor: string;
             let strokeWeight: number;
             let fillC: string;
@@ -747,11 +746,11 @@ function LiveMapInner({
               strokeWeight = selected ? 4 : isCurrentZone ? 3.5 : 2;
               if (isOurCell) {
                 fillC = color;
-                fillOp = selected ? 0.24 : 0.17;
+                fillOp = selected ? 0.28 : 0.20;
               } else {
-                // Light veil so the map underneath stays readable.
-                fillC = "#020617";
-                fillOp = 0.18;
+                // Neutral veil so the map underneath stays readable on light tiles.
+                fillC = "#1e3a8a";
+                fillOp = 0.07;
               }
               dashArr = undefined;
             } else if (muted) {
@@ -760,10 +759,10 @@ function LiveMapInner({
               strokeWeight = selected ? 2.5 : isCurrentZone ? 2.5 : 2;
               if (isOurCell) {
                 fillC = color;
-                fillOp = selected ? 0.12 : isCurrentZone ? 0.1 : 0.06;
+                fillOp = selected ? 0.18 : isCurrentZone ? 0.14 : 0.09;
               } else {
-                fillC = "#0f172a";
-                fillOp = 0.14;
+                fillC = "#1e3a8a";
+                fillOp = 0.06;
               }
               dashArr = selected || isCurrentZone ? undefined : "5 4";
             } else {
@@ -776,15 +775,15 @@ function LiveMapInner({
               fillC = color;
               fillOp = selected
                 ? isActive
-                  ? 0.1
-                  : 0.06
+                  ? 0.20
+                  : 0.12
                 : isCurrentZone
                   ? isActive
-                    ? 0.045
-                    : 0.03
+                    ? 0.13
+                    : 0.08
                   : isActive
-                    ? 0.075
-                    : 0.05;
+                    ? 0.10
+                    : 0.07;
               dashArr = selected ? undefined : "6 4";
             }
             const poly = L.polygon(latlngs, {
@@ -1697,7 +1696,7 @@ function LiveMapInner({
   }, [followMode, streamer, routePoints.length, viewerFollowZoom, viewerFollowLatLngBounds]);
 
   return (
-    <div className="relative h-full w-full" style={{ background: "rgba(10,10,20,0.4)" }}>
+    <div className="relative h-full w-full" style={{ background: "transparent" }}>
       <div className="absolute inset-0 overflow-hidden">
         <div
           ref={rotationShellRef}
