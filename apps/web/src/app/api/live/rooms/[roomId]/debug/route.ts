@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { getOrBuildGridSpecForRoom } from "@/lib/live/grid/gridSpecForRoom";
+import { acquireTickLock, releaseTickLock, runRoomTick } from "@/lib/live/tick/runRoomTick";
 import {
   cellIdForPosition,
   gridCellCenter,
@@ -120,6 +121,14 @@ export async function GET(
     }
   }
 
+  // Recent room events (last 10) — shows tick activity, market opens, errors
+  const { data: recentEvents } = await service
+    .from("live_room_events")
+    .select("event_type, payload, created_at")
+    .eq("room_id", roomId)
+    .order("created_at", { ascending: false })
+    .limit(10);
+
   // Recent markets (last 5)
   const { data: recentMarkets } = await service
     .from("live_betting_markets")
@@ -159,5 +168,23 @@ export async function GET(
     cell: cellInfo,
     currentMarket,
     recentMarkets: recentMarkets ?? [],
+    recentEvents: recentEvents ?? [],
   });
+}
+
+// POST — run one tick and return the full result including opener errors
+export async function POST(
+  _req: NextRequest,
+  ctx: { params: Promise<{ roomId: string }> },
+) {
+  const { roomId } = await ctx.params;
+  const service = await createServiceClient();
+  const locked = await acquireTickLock(service, roomId);
+  if (!locked) return NextResponse.json({ error: "tick_locked" });
+  try {
+    const result = await runRoomTick(roomId, service);
+    return NextResponse.json(result);
+  } finally {
+    await releaseTickLock(service, roomId);
+  }
 }
