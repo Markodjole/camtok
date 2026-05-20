@@ -2,10 +2,13 @@ import { z } from "zod";
 
 export const transportModeSchema = z.enum([
   "walking",
+  "run",
   "bike",
   "scooter",
   "car",
+  "motorcycle",
   "other_vehicle",
+  "other",
 ]);
 
 export const liveSessionStatusSchema = z.enum([
