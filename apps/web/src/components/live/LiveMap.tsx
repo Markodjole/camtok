@@ -633,7 +633,7 @@ function LiveMapInner({
         {
           subdomains: "abcd",
           maxZoom: 20,
-          opacity: 0.85,
+          opacity: 0.95,
           keepBuffer: 1,
           updateWhenIdle: false,
           updateWhenZooming: false,
@@ -644,7 +644,7 @@ function LiveMapInner({
       t.addTo(m);
       // Boost tile contrast/saturation via GPU compositor — zero JS/layout cost
       const tilePaneEl = m.getPanes().tilePane as HTMLElement | undefined;
-      if (tilePaneEl) tilePaneEl.style.filter = "contrast(1.15) saturate(1.2)";
+      if (tilePaneEl) tilePaneEl.style.filter = "contrast(1.4) saturate(1.4) brightness(0.95)";
       zoneLayerRef.current = L.layerGroup().addTo(m);
       checkpointLayerRef.current = L.layerGroup().addTo(m);
       destLayerRef.current = L.layerGroup().addTo(m);
