@@ -732,9 +732,9 @@ function LiveMapInner({
             }
             const muted = zonesVisualStyle === "muted";
             const pickZone = zonesVisualStyle === "pick_zone";
-            // Dark outlines for Voyager (light tiles); contrast-safe on any brightness.
-            const LINE_CURRENT = "#1e40af";           // deep blue — was white (invisible on light bg)
-            const LINE_OTHER = "rgba(51, 65, 85, 0.85)"; // slate-700 — was light-gray (invisible on light bg)
+            // Soft outlines — subtle on Voyager light tiles, not aggressive.
+            const LINE_CURRENT = "rgba(71, 85, 105, 0.75)";  // slate-600 @ 75% — visible but gentle
+            const LINE_OTHER = "rgba(100, 116, 139, 0.45)";  // slate-500 @ 45% — barely-there grid lines
             let strokeColor: string;
             let strokeWeight: number;
             let fillC: string;
@@ -746,11 +746,10 @@ function LiveMapInner({
               strokeWeight = selected ? 4 : isCurrentZone ? 3.5 : 2;
               if (isOurCell) {
                 fillC = color;
-                fillOp = selected ? 0.28 : 0.20;
+                fillOp = selected ? 0.24 : 0.17;
               } else {
-                // Neutral veil so the map underneath stays readable on light tiles.
-                fillC = "#1e3a8a";
-                fillOp = 0.07;
+                fillC = color;
+                fillOp = 0.04;
               }
               dashArr = undefined;
             } else if (muted) {
@@ -759,10 +758,10 @@ function LiveMapInner({
               strokeWeight = selected ? 2.5 : isCurrentZone ? 2.5 : 2;
               if (isOurCell) {
                 fillC = color;
-                fillOp = selected ? 0.18 : isCurrentZone ? 0.14 : 0.09;
+                fillOp = selected ? 0.12 : isCurrentZone ? 0.1 : 0.06;
               } else {
-                fillC = "#1e3a8a";
-                fillOp = 0.06;
+                fillC = color;
+                fillOp = 0.03;
               }
               dashArr = selected || isCurrentZone ? undefined : "5 4";
             } else {
@@ -775,15 +774,15 @@ function LiveMapInner({
               fillC = color;
               fillOp = selected
                 ? isActive
-                  ? 0.20
-                  : 0.12
+                  ? 0.1
+                  : 0.06
                 : isCurrentZone
                   ? isActive
-                    ? 0.13
-                    : 0.08
+                    ? 0.045
+                    : 0.03
                   : isActive
-                    ? 0.10
-                    : 0.07;
+                    ? 0.075
+                    : 0.05;
               dashArr = selected ? undefined : "6 4";
             }
             const poly = L.polygon(latlngs, {
