@@ -776,9 +776,9 @@ function LiveMapInner({
             }
             const muted = zonesVisualStyle === "muted";
             const pickZone = zonesVisualStyle === "pick_zone";
-            // Soft outlines — subtle on Voyager light tiles, not aggressive.
-            const LINE_CURRENT = "rgba(71, 85, 105, 0.75)";  // slate-600 @ 75% — visible but gentle
-            const LINE_OTHER = "rgba(100, 116, 139, 0.45)";  // slate-500 @ 45% — barely-there grid lines
+            // Very subtle dashed borders — grid is a hint, not a feature.
+            const LINE_CURRENT = "rgba(71, 85, 105, 0.5)";   // active/selected cell
+            const LINE_OTHER   = "rgba(100, 116, 139, 0.25)"; // all other cells
             let strokeColor: string;
             let strokeWeight: number;
             let fillC: string;
@@ -787,47 +787,23 @@ function LiveMapInner({
             if (pickZone) {
               const isOurCell = isCurrentZone || selected;
               strokeColor = isOurCell ? LINE_CURRENT : LINE_OTHER;
-              strokeWeight = selected ? 4 : isCurrentZone ? 3.5 : 2;
-              if (isOurCell) {
-                fillC = color;
-                fillOp = selected ? 0.24 : 0.17;
-              } else {
-                fillC = color;
-                fillOp = 0.04;
-              }
-              dashArr = undefined;
+              strokeWeight = selected ? 1.5 : isCurrentZone ? 1.5 : 0.8;
+              fillC = color;
+              fillOp = isOurCell ? (selected ? 0.14 : 0.09) : 0.02;
+              dashArr = isOurCell ? undefined : "5 5";
             } else if (muted) {
               const isOurCell = isCurrentZone || selected;
               strokeColor = isOurCell ? LINE_CURRENT : LINE_OTHER;
-              strokeWeight = selected ? 2.5 : isCurrentZone ? 2.5 : 2;
-              if (isOurCell) {
-                fillC = color;
-                fillOp = selected ? 0.12 : isCurrentZone ? 0.1 : 0.06;
-              } else {
-                fillC = color;
-                fillOp = 0.03;
-              }
-              dashArr = selected || isCurrentZone ? undefined : "5 4";
-            } else {
-              strokeColor = selected
-                ? LINE_CURRENT
-                : isCurrentZone
-                  ? LINE_CURRENT
-                  : LINE_OTHER;
-              strokeWeight = selected ? 3 : 2;
+              strokeWeight = isOurCell ? 1.5 : 0.8;
               fillC = color;
-              fillOp = selected
-                ? isActive
-                  ? 0.1
-                  : 0.06
-                : isCurrentZone
-                  ? isActive
-                    ? 0.045
-                    : 0.03
-                  : isActive
-                    ? 0.075
-                    : 0.05;
-              dashArr = selected ? undefined : "6 4";
+              fillOp = isOurCell ? (selected ? 0.08 : 0.06) : 0.02;
+              dashArr = "5 5";
+            } else {
+              strokeColor = (selected || isCurrentZone) ? LINE_CURRENT : LINE_OTHER;
+              strokeWeight = (selected || isCurrentZone) ? 1.5 : 0.8;
+              fillC = color;
+              fillOp = selected ? 0.07 : isCurrentZone ? 0.04 : 0.03;
+              dashArr = "5 5";
             }
             const poly = L.polygon(latlngs, {
               color: strokeColor,
