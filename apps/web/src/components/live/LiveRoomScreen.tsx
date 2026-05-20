@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { usePathname } from "next/navigation";
 import { createPortal } from "react-dom";
 import {
@@ -239,6 +239,28 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     setMyOpenBetMarketIds(new Set());
     setZoneExitPending(null);
   }, [room.roomId]);
+
+  // Keep the screen awake for the entire live session (viewer + driver room).
+  useEffect(() => {
+    if (!("wakeLock" in navigator)) return;
+    let active = true;
+    let sentinel: WakeLockSentinel | null = null;
+    const acquire = () => {
+      if (!active || document.visibilityState !== "visible") return;
+      navigator.wakeLock.request("screen").then((s) => {
+        if (!active) { void s.release(); return; }
+        sentinel = s;
+        s.addEventListener("release", () => { sentinel = null; });
+      }).catch(() => {/* unsupported or denied — ignore */});
+    };
+    acquire();
+    document.addEventListener("visibilitychange", acquire);
+    return () => {
+      active = false;
+      document.removeEventListener("visibilitychange", acquire);
+      if (sentinel) { void sentinel.release(); sentinel = null; }
+    };
+  }, []);
   const [lastBetMarketId, setLastBetMarketId] = useState<string | null>(null);
   const [lastBetOptionLabel, setLastBetOptionLabel] = useState<string | null>(null);
   // Set immediately on bet press — hides the popup before the server even responds.
@@ -2149,7 +2171,7 @@ function ViewerCenterMoneyFlash({
   );
 }
 
-function ZoneExitCountdownWidget({
+const ZoneExitCountdownWidget = memo(function ZoneExitCountdownWidget({
   betPlacedAtMs,
   remainingAtBetSec,
   resolving = false,
@@ -2186,9 +2208,9 @@ function ZoneExitCountdownWidget({
       )}
     </div>
   );
-}
+});
 
-function BalanceBadge({
+const BalanceBadge = memo(function BalanceBadge({
   balance,
   splash,
   onSplashDone,
@@ -2295,7 +2317,7 @@ function BalanceBadge({
       </div>
     </div>
   );
-}
+});
 
 
 /**
@@ -2446,7 +2468,7 @@ function zoneTimeOptionLabel(optionId: string, remainingSec: number | null): str
   return null;
 }
 
-function MarketTimer({ locksAt }: { locksAt: string }) {
+const MarketTimer = memo(function MarketTimer({ locksAt }: { locksAt: string }) {
   const { secondsLeft, label } = useCountdown(locksAt);
   const locked = secondsLeft <= 0;
   return (
@@ -2462,7 +2484,7 @@ function MarketTimer({ locksAt }: { locksAt: string }) {
       {locked ? "locked" : label}
     </span>
   );
-}
+});
 
 /** 0 = start of window (green-grey), 1 = lock (red-grey). */
 /** Returns seconds elapsed since the market opened. */
@@ -2489,7 +2511,7 @@ function betSheetUrgencyBackground(elapsedSec: number): string {
   return "rgba(54, 24, 24, 0.78)";                         // red-grey
 }
 
-function MapSelectionBottomSheet({
+const MapSelectionBottomSheet = memo(function MapSelectionBottomSheet({
   betHeadline,
   selectionDetail,
   marketOptions,
@@ -2702,4 +2724,4 @@ function MapSelectionBottomSheet({
       </div>
     </div>
   );
-}
+});

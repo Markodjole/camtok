@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  memo,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -281,7 +282,7 @@ function motionSegmentDtSec(
   return fallbackSec;
 }
 
-export function LiveMap({
+function LiveMapInner({
   routePoints,
   className = "",
   interactive = false,
@@ -1777,3 +1778,5 @@ export function LiveMap({
     </div>
   );
 }
+
+export const LiveMap = memo(LiveMapInner);

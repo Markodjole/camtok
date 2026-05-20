@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import type { TrafficCamera } from "@/app/api/live/traffic-cameras/route";
 
 interface Props {
@@ -18,7 +18,7 @@ function bustUrl(url: string): string {
   return `${url}${sep}_t=${Date.now()}`;
 }
 
-export function TrafficCameraPanel({ camera, size }: Props) {
+function TrafficCameraPanelInner({ camera, size }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [videoSrc, setVideoSrc] = useState<string | null>(null);
   const [imgSrc, setImgSrc] = useState<string | null>(null);
@@ -94,3 +94,5 @@ export function TrafficCameraPanel({ camera, size }: Props) {
     </div>
   );
 }
+
+export const TrafficCameraPanel = memo(TrafficCameraPanelInner);

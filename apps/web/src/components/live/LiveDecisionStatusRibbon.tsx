@@ -4,7 +4,7 @@
  * Viewer status: route countdown + engine headline + optional bet-type chips when several rounds are eligible.
  */
 
-import { useState, useEffect } from "react";
+import { memo, useState, useEffect } from "react";
 import type { BetTypeV2, RoundPlanV2 } from "@bettok/live";
 import { betTypeV2Label } from "@/lib/live/betting/betTypeV2Label";
 
@@ -40,7 +40,7 @@ function haversineMeters(
   return r * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1 - s));
 }
 
-export function LiveDecisionStatusRibbon({
+function LiveDecisionStatusRibbonInner({
   phase,
   locksAt,
   revealAt,
@@ -157,3 +157,5 @@ export function LiveDecisionStatusRibbon({
     </div>
   );
 }
+
+export const LiveDecisionStatusRibbon = memo(LiveDecisionStatusRibbonInner);
