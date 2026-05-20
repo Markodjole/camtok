@@ -1755,7 +1755,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
       {room.destination ? (
         <div className="pointer-events-none fixed bottom-[4.75rem] left-2 z-30 max-w-[min(72vw,14rem)]">
-          <div className="pointer-events-auto flex items-center gap-1 rounded-md border border-white/10 bg-black/35 px-1.5 py-px text-[8px] font-normal leading-tight text-white/55 shadow-none backdrop-blur-sm">
+          <div className="pointer-events-auto flex items-center gap-1 rounded-md border border-white/10 bg-black/70 px-1.5 py-px text-[8px] font-normal leading-tight text-white/55 shadow-none">
             <span className="shrink-0 opacity-70" aria-hidden>
               📍
             </span>
@@ -1797,7 +1797,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       <button
         type="button"
         onClick={() => setShowReplay(true)}
-        className="fixed right-3 top-3 z-[62] flex h-7 w-7 items-center justify-center rounded-full bg-black/35 text-xs text-white/75 shadow-md backdrop-blur active:bg-black/50"
+        className="fixed right-3 top-3 z-[62] flex h-7 w-7 items-center justify-center rounded-full bg-black/65 text-xs text-white/75 shadow-md active:bg-black/80"
         title="Decision history"
       >
         📋
@@ -1857,7 +1857,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         <button
           type="button"
           onClick={() => setMapFollow(true)}
-          className="absolute bottom-48 right-4 z-50 flex items-center gap-1.5 rounded-full border border-amber-300/50 bg-amber-500/30 px-3 py-1.5 text-[11px] font-semibold text-amber-50 shadow-lg backdrop-blur active:bg-amber-500/50"
+          className="absolute bottom-48 right-4 z-50 flex items-center gap-1.5 rounded-full border border-amber-300/50 bg-amber-600/70 px-3 py-1.5 text-[11px] font-semibold text-amber-50 shadow-lg active:bg-amber-600/90"
           title="Recenter on streamer"
         >
           <span className="text-base leading-none">◎</span>
@@ -1949,7 +1949,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           data-pip-no-drag
           type="button"
           onClick={() => setMapExpanded((v) => !v)}
-          className="absolute bottom-1.5 right-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-black/50 text-white backdrop-blur active:bg-black/75"
+          className="absolute bottom-1.5 right-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-black/70 text-white active:bg-black/90"
           title={mapExpanded ? "Show camera fullscreen" : "Show map fullscreen"}
         >
           <svg
@@ -2192,7 +2192,7 @@ const ZoneExitCountdownWidget = memo(function ZoneExitCountdownWidget({
   const urgent = !resolving && remainingSec <= 5;
   return (
     <div
-      className={`pointer-events-none flex h-11 w-11 items-center justify-center rounded-full border text-sm font-bold tabular-nums backdrop-blur transition-colors ${
+      className={`pointer-events-none flex h-11 w-11 items-center justify-center rounded-full border text-sm font-bold tabular-nums transition-colors ${
         resolving
           ? "border-amber-400/50 bg-amber-600/30 text-amber-100"
           : urgent
@@ -2259,7 +2259,7 @@ const BalanceBadge = memo(function BalanceBadge({
     <div className="pointer-events-none flex justify-end">
       <div
         className={[
-          "relative overflow-hidden rounded-full border border-white/10 bg-black/40 px-2.5 py-1 text-xs font-medium tabular-nums text-white/85 backdrop-blur-md",
+          "relative overflow-hidden rounded-full border border-white/10 bg-black/75 px-2.5 py-1 text-xs font-medium tabular-nums text-white/85",
           showWinFx ? "scale-105" : "",
           "transition-transform duration-150",
         ].join(" ")}
@@ -2585,7 +2585,7 @@ const MapSelectionBottomSheet = memo(function MapSelectionBottomSheet({
       }}
     >
       <div
-        className="pointer-events-auto flex h-full flex-col border-y border-r border-white/10 p-2 text-white shadow-lg backdrop-blur-md"
+        className="pointer-events-auto flex h-full flex-col border-y border-r border-white/10 p-2 text-white shadow-lg"
         /** Match the PiP square (left): width:34vw capped at 180px → height the same. */
         style={{
           height: "min(34vw, 180px)",

@@ -108,7 +108,7 @@ function LiveDecisionStatusRibbonInner({
       style={{ left: `calc(50% + ${leftOffsetPx / 2}px)`, transform: "translateX(-50%)" }}
     >
       <div className="flex flex-col items-center gap-1.5">
-        <div className="flex max-w-full items-center justify-center gap-1 rounded-full border border-emerald-500/20 bg-emerald-950/30 px-2 py-0.5 text-[9px] font-medium leading-snug text-emerald-50/80 shadow-sm backdrop-blur-sm [text-shadow:0_1px_2px_rgba(0,0,0,0.55)]">
+        <div className="flex max-w-full items-center justify-center gap-1 rounded-full border border-emerald-500/20 bg-emerald-950/75 px-2 py-0.5 text-[9px] font-medium leading-snug text-emerald-50/80 shadow-sm [text-shadow:0_1px_2px_rgba(0,0,0,0.55)]">
           <span
             className="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full"
             style={{
@@ -125,7 +125,7 @@ function LiveDecisionStatusRibbonInner({
         </div>
 
         {currentBetHeadline ? (
-          <div className="max-w-full truncate rounded-full border border-white/10 bg-black/40 px-2.5 py-1 text-center text-[10px] font-semibold leading-tight text-white/90 shadow-sm backdrop-blur-sm [text-shadow:0_1px_2px_rgba(0,0,0,0.65)]">
+          <div className="max-w-full truncate rounded-full border border-white/10 bg-black/75 px-2.5 py-1 text-center text-[10px] font-semibold leading-tight text-white/90 shadow-sm [text-shadow:0_1px_2px_rgba(0,0,0,0.65)]">
             {currentBetHeadline}
           </div>
         ) : null}

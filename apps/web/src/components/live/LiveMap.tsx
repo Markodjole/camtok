@@ -633,8 +633,8 @@ function LiveMapInner({
         {
           subdomains: "abcd",
           maxZoom: 20,
-          opacity: 0.4,
-          keepBuffer: 3,
+          opacity: 0.55,
+          keepBuffer: 1,
           updateWhenIdle: false,
           updateWhenZooming: false,
           attribution:
@@ -642,6 +642,9 @@ function LiveMapInner({
         },
       );
       t.addTo(m);
+      // Boost tile contrast/saturation via GPU compositor — zero JS/layout cost
+      const tilePaneEl = m.getPanes().tilePane as HTMLElement | undefined;
+      if (tilePaneEl) tilePaneEl.style.filter = "contrast(1.25) saturate(1.2)";
       zoneLayerRef.current = L.layerGroup().addTo(m);
       checkpointLayerRef.current = L.layerGroup().addTo(m);
       destLayerRef.current = L.layerGroup().addTo(m);
@@ -1706,7 +1709,7 @@ function LiveMapInner({
               transformOrigin: "50% 50%",
               ...(rotateWithHeading && followMode
                 ? {
-                    inset: "-50% -80%",
+                    inset: "-30% -50%",
                     transition: streamer
                       ? "transform 1100ms cubic-bezier(0.22,0.61,0.36,1)"
                       : undefined,
@@ -1749,7 +1752,7 @@ function LiveMapInner({
         <div className="flex flex-wrap items-center gap-1">
           {destinationRoute && destinationRoute.length > 1 ? (
             <span
-              className="inline-flex items-center gap-1 rounded-md border border-red-400/20 bg-black/30 px-1 py-px text-[7px] font-medium text-white/45 shadow-none backdrop-blur-[2px]"
+              className="inline-flex items-center gap-1 rounded-md border border-red-400/20 bg-black/65 px-1 py-px text-[7px] font-medium text-white/45 shadow-none"
               title={destinationRouteLabel ?? "Suggested path to destination on map"}
             >
               <span className="whitespace-nowrap">Google Maps</span>
@@ -1766,7 +1769,7 @@ function LiveMapInner({
           {(driverRouteBadges ?? []).map((label) => (
             <span
               key={label}
-              className="rounded-full border border-sky-400/35 bg-sky-950/55 px-1.5 py-px text-[8px] font-medium leading-tight text-sky-100/80 shadow-sm backdrop-blur-sm"
+              className="rounded-full border border-sky-400/35 bg-sky-950/85 px-1.5 py-px text-[8px] font-medium leading-tight text-sky-100/80 shadow-sm"
             >
               {label}
             </span>
