@@ -691,6 +691,42 @@ function LiveMapInner({
     layerRef.current?.setOpacity(tileOpacity);
   }, [tileOpacity]);
 
+  // Adaptive tile quality: if FPS stays below 30 for 3s, hot-swap to label-free tiles.
+  // One-way switch to avoid flapping; the RAF counter itself costs ~0 CPU.
+  useEffect(() => {
+    if (!mapReady) return;
+    const LIGHT = "https://{s}.basemaps.cartocdn.com/rastertiles/light_nolabels/{z}/{x}/{y}{r}.png";
+    let frames = 0;
+    let lastTs = performance.now();
+    let lowCount = 0;
+    let degraded = false;
+    let rafId: number;
+
+    const tick = (now: number) => {
+      frames++;
+      const elapsed = now - lastTs;
+      if (elapsed >= 1000) {
+        if (!degraded) {
+          const fps = (frames / elapsed) * 1000;
+          if (fps < 30) {
+            lowCount++;
+            if (lowCount >= 3) {
+              degraded = true;
+              layerRef.current?.setUrl(LIGHT, false);
+            }
+          } else {
+            lowCount = 0;
+          }
+        }
+        frames = 0;
+        lastTs = now;
+      }
+      rafId = requestAnimationFrame(tick);
+    };
+    rafId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafId);
+  }, [mapReady]);
+
   // When heading-rotation mode changes the container expands from viewport → 1.48× viewport.
   // Leaflet must re-measure its container so it loads tiles for the full enlarged area.
   useEffect(() => {
