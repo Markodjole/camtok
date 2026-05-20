@@ -1677,7 +1677,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             audienceRole="viewer"
             showCourseArrow={true}
             transportMode={room.transportMode}
-            rotateWithHeading={!mapPerfDegraded}
+            rotateWithHeading={true}
             followMode={mapFollow}
             onUserInteract={() => {
               setMapFollow(false);
@@ -1908,7 +1908,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               audienceRole="viewer"
               showCourseArrow={true}
               transportMode={room.transportMode}
-              rotateWithHeading={!mapPerfDegraded}
+              rotateWithHeading={true}
               onPerformanceDegrade={() => { setMapPerfDegraded(true); setTrafficCameras([]); }}
               tileOpacity={0.65}
               mapCaption={
