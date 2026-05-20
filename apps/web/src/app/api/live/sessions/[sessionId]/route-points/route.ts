@@ -19,7 +19,7 @@ export async function GET(
     )
     .eq("live_session_id", sessionId)
     .order("recorded_at", { ascending: false })
-    .limit(200);
+    .limit(30);
 
   const points: RoutePoint[] = ((data ?? []) as Array<{
     normalized_lat: number | null;

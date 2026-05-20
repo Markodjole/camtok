@@ -782,7 +782,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       }
     };
     fetchPoints();
-    const id = setInterval(fetchPoints, 700);
+    const id = setInterval(fetchPoints, 2000);
     return () => clearInterval(id);
   }, [room.liveSessionId]);
 

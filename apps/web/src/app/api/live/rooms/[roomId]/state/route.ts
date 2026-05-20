@@ -13,5 +13,7 @@ export async function GET(
   if (!res.room) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
-  return NextResponse.json(res);
+  return NextResponse.json(res, {
+    headers: { "Cache-Control": "public, s-maxage=1, stale-while-revalidate=2" },
+  });
 }
