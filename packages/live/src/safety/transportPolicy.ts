@@ -17,6 +17,7 @@ export type TransportPolicy = {
 export function policyFor(mode: TransportMode): TransportPolicy {
   switch (mode) {
     case "walking":
+    case "run":
       return {
         mode,
         allowSystemMarkets: true,
@@ -38,7 +39,9 @@ export function policyFor(mode: TransportMode): TransportPolicy {
         requireOwnerApproval: true,
       };
     case "car":
+    case "motorcycle":
     case "other_vehicle":
+    case "other":
       return {
         mode,
         allowSystemMarkets: true,

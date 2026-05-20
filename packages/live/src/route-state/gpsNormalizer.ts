@@ -3,18 +3,24 @@ import type { TransportMode } from "../types";
 
 const MAX_ACCELERATION_MPS2: Record<TransportMode, number> = {
   walking: 2,
+  run: 3,
   bike: 3,
   scooter: 3.5,
   car: 6,
+  motorcycle: 6,
   other_vehicle: 6,
+  other: 6,
 };
 
 const MAX_SPEED_MPS: Record<TransportMode, number> = {
   walking: 3.5,
+  run: 6,
   bike: 12,
   scooter: 12,
   car: 45,
+  motorcycle: 45,
   other_vehicle: 45,
+  other: 45,
 };
 
 const MAX_ACCURACY_METERS = 60;

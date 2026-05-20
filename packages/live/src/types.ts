@@ -8,10 +8,13 @@
 
 export type TransportMode =
   | "walking"
+  | "run"
   | "bike"
   | "scooter"
   | "car"
-  | "other_vehicle";
+  | "motorcycle"
+  | "other_vehicle"
+  | "other";
 
 export type LiveSessionStatus =
   | "starting"

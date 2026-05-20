@@ -7,18 +7,24 @@ import type { NormalizedPoint } from "./gpsNormalizer";
  */
 export const MIN_LOCK_WINDOW_SEC: Record<TransportMode, number> = {
   walking: 12,
+  run: 12,
   bike: 14,
   scooter: 18,
   car: 22,
+  motorcycle: 22,
   other_vehicle: 22,
+  other: 22,
 };
 
 export const MAX_LOCK_WINDOW_SEC: Record<TransportMode, number> = {
   walking: 25,
+  run: 25,
   bike: 30,
   scooter: 38,
   car: 45,
+  motorcycle: 45,
   other_vehicle: 45,
+  other: 45,
 };
 
 export type DecisionCandidate = {
