@@ -87,19 +87,34 @@ export async function GET(req: NextRequest) {
 async function fetchActiveRoomIds(
   service: Awaited<ReturnType<typeof createServiceClient>>,
 ): Promise<string[]> {
-  // Join live_rooms → character_live_sessions so we only tick rooms whose
-  // session is still active (started/live/paused, not ended).
-  const { data, error } = await service
-    .from("live_rooms")
-    .select("id, character_live_sessions!inner(status)")
-    .in("character_live_sessions.status", ["starting", "live", "paused"]);
+  // Two-step query to avoid ambiguous FK between live_rooms and
+  // character_live_sessions (both live_rooms.live_session_id and
+  // character_live_sessions.current_room_id point between the two tables,
+  // which makes the PostgREST !inner embed fail with an ambiguity error).
+  const { data: sessions, error: sessErr } = await service
+    .from("character_live_sessions")
+    .select("id")
+    .in("status", ["starting", "live", "paused"]);
 
-  if (error) {
-    console.error("[cron/live-tick] fetchActiveRoomIds error", error);
+  if (sessErr) {
+    console.error("[cron/live-tick] fetchActiveRoomIds sessions error", sessErr);
     return [];
   }
 
-  return (data ?? []).map((r) => (r as { id: string }).id);
+  const sessionIds = (sessions ?? []).map((s) => (s as { id: string }).id);
+  if (!sessionIds.length) return [];
+
+  const { data: rooms, error: roomErr } = await service
+    .from("live_rooms")
+    .select("id")
+    .in("live_session_id", sessionIds);
+
+  if (roomErr) {
+    console.error("[cron/live-tick] fetchActiveRoomIds rooms error", roomErr);
+    return [];
+  }
+
+  return (rooms ?? []).map((r) => (r as { id: string }).id);
 }
 
 async function tickOneRoom(
