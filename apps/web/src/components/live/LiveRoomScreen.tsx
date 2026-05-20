@@ -136,6 +136,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [showCheckpoints, setShowCheckpoints] = useState(true);
   const [mapFollow, setMapFollow] = useState(true);
   const mapFollowRestoreRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [mapPerfDegraded, setMapPerfDegraded] = useState(false);
   const [layoutViewportW, setLayoutViewportW] = useState(390);
   useEffect(() => {
     const sync = () => setLayoutViewportW(window.innerWidth);
@@ -1676,7 +1677,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             audienceRole="viewer"
             showCourseArrow={true}
             transportMode={room.transportMode}
-            rotateWithHeading={true}
+            rotateWithHeading={!mapPerfDegraded}
             followMode={mapFollow}
             onUserInteract={() => {
               setMapFollow(false);
@@ -1686,6 +1687,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
                 mapFollowRestoreRef.current = null;
               }, 5000);
             }}
+            onPerformanceDegrade={() => setMapPerfDegraded(true)}
             tileOpacity={1}
             mapCaption={
               viewerCurrentBetHeadline ?? currentMarket?.title ?? undefined
@@ -1906,7 +1908,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               audienceRole="viewer"
               showCourseArrow={true}
               transportMode={room.transportMode}
-              rotateWithHeading={true}
+              rotateWithHeading={!mapPerfDegraded}
+              onPerformanceDegrade={() => setMapPerfDegraded(true)}
               tileOpacity={0.65}
               mapCaption={
               viewerCurrentBetHeadline ?? currentMarket?.title ?? undefined

@@ -169,6 +169,8 @@ export interface LiveMapProps {
   layoutViewportWidthPx?: number | null;
   /** Muted polygons for engine-highlighted zone overlays. */
   zonesVisualStyle?: "default" | "muted" | "pick_zone";
+  /** Called once when sustained FPS < 30 — parent can disable rotation / reduce work. */
+  onPerformanceDegrade?: () => void;
 }
 
 const C = {
@@ -325,6 +327,7 @@ function LiveMapInner({
   viewerZoomRuleKey = null,
   layoutViewportWidthPx = null,
   zonesVisualStyle = "default" as "default" | "muted" | "pick_zone",
+  onPerformanceDegrade,
 }: LiveMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<import("leaflet").Map | null>(null);
@@ -691,11 +694,16 @@ function LiveMapInner({
     layerRef.current?.setOpacity(tileOpacity);
   }, [tileOpacity]);
 
-  // Adaptive tile quality: if FPS stays below 30 for 3s, hot-swap to label-free tiles.
+  // Adaptive tile quality: if FPS stays below 30 for 3s, hot-swap to nolabels 1× tiles
+  // and tell the parent to disable heading rotation (halves the rendered tile area).
   // One-way switch to avoid flapping; the RAF counter itself costs ~0 CPU.
+  const onPerformanceDegradeRef = useRef(onPerformanceDegrade);
+  useEffect(() => { onPerformanceDegradeRef.current = onPerformanceDegrade; }, [onPerformanceDegrade]);
+
   useEffect(() => {
     if (!mapReady) return;
-    const LIGHT = "https://{s}.basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}{r}.png";
+    // {r} removed → forces standard 1× tiles (4× fewer pixels per tile on retina screens)
+    const LIGHT = "https://{s}.basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}.png";
     let frames = 0;
     let lastTs = performance.now();
     let lowCount = 0;
@@ -714,7 +722,8 @@ function LiveMapInner({
               degraded = true;
               layerRef.current?.setUrl(LIGHT, false);
               const pane = mapRef.current?.getPanes().tilePane as HTMLElement | undefined;
-              if (pane) pane.style.filter = "contrast(1.3) saturate(1.3)";
+              if (pane) pane.style.filter = "contrast(1.5) saturate(1.4)";
+              onPerformanceDegradeRef.current?.();
             }
           } else {
             lowCount = 0;
