@@ -1,6 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { getOrBuildGridSpecForRoom } from "@/lib/live/grid/gridSpecForRoom";
+import {
+  cellIdForPosition,
+  gridCellCenter,
+  parseGridOptionId,
+} from "@/lib/live/grid/cityGrid500";
+import { metersBetween } from "@/lib/live/routing/geometry";
+import {
+  NEXT_ZONE_TRIGGER_M,
+  ZONE_EXIT_CENTER_TRIGGER_M,
+} from "@/lib/live/betting/betWindowConstants";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,7 +25,7 @@ export async function GET(
   // Room
   const { data: room } = await service
     .from("live_rooms")
-    .select("id, phase, current_market_id, live_session_id, tick_locked_until, last_event_at")
+    .select("id, phase, current_market_id, live_session_id, tick_locked_until, last_event_at, queued_triggers")
     .eq("id", roomId)
     .maybeSingle();
 
@@ -26,11 +36,11 @@ export async function GET(
   // Session
   const { data: session } = await service
     .from("character_live_sessions")
-    .select("id, status, transport_mode, owner_user_id, last_heartbeat_at")
+    .select("id, status, transport_mode, last_heartbeat_at")
     .eq("id", sessionId)
     .maybeSingle();
 
-  // GPS count + latest point
+  // GPS
   const { count: gpsCount } = await service
     .from("live_route_snapshots")
     .select("id", { count: "exact", head: true })
@@ -44,11 +54,82 @@ export async function GET(
     .limit(1)
     .maybeSingle();
 
-  // Grid spec
+  // Grid spec + cell analysis
   const specRes = await getOrBuildGridSpecForRoom(service, roomId, sessionId);
+  let cellInfo: Record<string, unknown> = { resolved: false };
+
+  if (specRes.ok && latestGps) {
+    const g = latestGps as { normalized_lat: number | null; normalized_lng: number | null; raw_lat: number; raw_lng: number };
+    const lat = g.normalized_lat ?? g.raw_lat;
+    const lng = g.normalized_lng ?? g.raw_lng;
+    const cellId = cellIdForPosition(specRes.spec, lat, lng);
+    const parsed = cellId ? parseGridOptionId(cellId) : null;
+
+    if (parsed) {
+      const center = gridCellCenter(specRes.spec, parsed.row, parsed.col);
+      const distM = metersBetween({ lat, lng }, center);
+      const cellKey = `cell:r${parsed.row}:c${parsed.col}`;
+
+      // Check fired phases for this cell
+      const { data: zoneMarkets } = await service
+        .from("live_betting_markets")
+        .select("subtitle")
+        .eq("live_session_id", sessionId)
+        .eq("market_type", "zone_exit_time");
+
+      const firedPhases: string[] = [];
+      for (const row of zoneMarkets ?? []) {
+        try {
+          const meta = JSON.parse((row as { subtitle: string | null }).subtitle ?? "{}") as { cellKey?: string; triggerPhase?: string };
+          if (meta.cellKey === cellKey && meta.triggerPhase) firedPhases.push(meta.triggerPhase);
+        } catch { /* skip */ }
+      }
+
+      // Check if next_zone fired for this cell
+      const { data: gridMarkets } = await service
+        .from("live_betting_markets")
+        .select("subtitle")
+        .eq("room_id", roomId)
+        .eq("market_type", "city_grid")
+        .order("opens_at", { ascending: false })
+        .limit(30);
+
+      const nextZoneFired = (gridMarkets ?? []).some((row) => {
+        try {
+          const meta = JSON.parse((row as { subtitle: string | null }).subtitle ?? "{}") as { cellKey?: string };
+          return meta.cellKey === cellKey;
+        } catch { return false; }
+      });
+
+      cellInfo = {
+        resolved: true,
+        cellId,
+        cellKey,
+        distanceToCenterM: Math.round(distM),
+        firedPhases,
+        nextZoneFired,
+        eligibleTriggers: {
+          next_zone: !nextZoneFired && distM <= NEXT_ZONE_TRIGGER_M,
+          zone_exit_entry: !firedPhases.includes("entry"),
+          zone_exit_center70m: !firedPhases.includes("center_70m") && distM <= ZONE_EXIT_CENTER_TRIGGER_M,
+          zone_exit_exitOuter: !firedPhases.includes("exit_outer") && firedPhases.includes("center_70m"),
+        },
+      };
+    } else {
+      cellInfo = { resolved: false, reason: "cellId not resolved for current position", cellId };
+    }
+  }
+
+  // Recent markets (last 5)
+  const { data: recentMarkets } = await service
+    .from("live_betting_markets")
+    .select("id, market_type, status, opens_at, subtitle")
+    .eq("room_id", roomId)
+    .order("opens_at", { ascending: false })
+    .limit(5);
 
   // Current market
-  let market = null;
+  let currentMarket = null;
   const mId = (room as { current_market_id: string | null }).current_market_id;
   if (mId) {
     const { data: m } = await service
@@ -56,31 +137,27 @@ export async function GET(
       .select("id, market_type, status, opens_at, locks_at")
       .eq("id", mId)
       .maybeSingle();
-    market = m;
+    currentMarket = m;
   }
 
   return NextResponse.json({
     room: {
-      id: (room as { id: string }).id,
       phase: (room as { phase: string }).phase,
       tickLockedUntil: (room as { tick_locked_until: string | null }).tick_locked_until,
       lastEventAt: (room as { last_event_at: string | null }).last_event_at,
+      queuedTriggers: (room as { queued_triggers: unknown }).queued_triggers,
     },
-    session: session
-      ? {
-          id: (session as { id: string }).id,
-          status: (session as { status: string }).status,
-          transportMode: (session as { transport_mode: string }).transport_mode,
-          lastHeartbeatAt: (session as { last_heartbeat_at: string | null }).last_heartbeat_at,
-        }
-      : null,
-    gps: {
-      totalPoints: gpsCount ?? 0,
-      latest: latestGps ?? null,
-    },
+    session: session ? {
+      status: (session as { status: string }).status,
+      transportMode: (session as { transport_mode: string }).transport_mode,
+      lastHeartbeatAt: (session as { last_heartbeat_at: string | null }).last_heartbeat_at,
+    } : null,
+    gps: { totalPoints: gpsCount ?? 0, latest: latestGps ?? null },
     gridSpec: specRes.ok
       ? { ok: true, cellMeters: specRes.spec.cellMeters, cityLabel: specRes.spec.cityLabel }
       : { ok: false, reason: (specRes as { error: string }).error },
-    currentMarket: market,
+    cell: cellInfo,
+    currentMarket,
+    recentMarkets: recentMarkets ?? [],
   });
 }
