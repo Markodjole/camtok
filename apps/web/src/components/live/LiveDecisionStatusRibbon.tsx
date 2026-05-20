@@ -4,6 +4,7 @@
  * Viewer status: route countdown + engine headline + optional bet-type chips when several rounds are eligible.
  */
 
+import { useState, useEffect } from "react";
 import type { BetTypeV2, RoundPlanV2 } from "@bettok/live";
 import { betTypeV2Label } from "@/lib/live/betting/betTypeV2Label";
 
@@ -17,7 +18,6 @@ interface LiveDecisionStatusRibbonProps {
   driverPos?: { lat: number; lng: number } | null;
   betOptionLabel?: string | null;
   currentBetHeadline?: string | null;
-  nowTick: number;
   eligibleRoundPlans?: RoundPlanV2[];
   highlightedEngineType?: BetTypeV2 | null;
   onSelectEngineType?: (type: BetTypeV2) => void;
@@ -48,12 +48,18 @@ export function LiveDecisionStatusRibbon({
   driverPos,
   betOptionLabel,
   currentBetHeadline,
-  nowTick,
   eligibleRoundPlans = [],
   highlightedEngineType = null,
   onSelectEngineType,
   leftOffsetPx = 0,
 }: LiveDecisionStatusRibbonProps) {
+  // Own 1 s clock — only this tiny component re-renders on each tick.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
   const distanceM =
     turnPoint && driverPos ? haversineMeters(driverPos, turnPoint) : null;
   const distLabel =
@@ -65,7 +71,7 @@ export function LiveDecisionStatusRibbon({
   if (phase === "pending" && locksAt) {
     const secToLock = Math.max(
       0,
-      Math.round((Date.parse(locksAt) - nowTick) / 1000),
+      Math.round((Date.parse(locksAt) - now) / 1000),
     );
     mainLabel = `Bets open · lock ${secToLock}s${distLabel}`;
     dotTone = "open";
@@ -74,7 +80,7 @@ export function LiveDecisionStatusRibbon({
     dotTone = "open";
   } else if (phase === "active") {
     const secToTurn = revealAt
-      ? Math.max(0, Math.round((Date.parse(revealAt) - nowTick) / 1000))
+      ? Math.max(0, Math.round((Date.parse(revealAt) - now) / 1000))
       : null;
     mainLabel = `Locked · ~${secToTurn ?? "?"}s${distLabel}`;
     dotTone = "closed";

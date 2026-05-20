@@ -716,7 +716,6 @@ export function OwnerLiveControlPanel({
               ? { lat: routePoints[routePoints.length - 1]!.lat, lng: routePoints[routePoints.length - 1]!.lng }
               : null
           }
-          nowTick={nowTick}
         />
 
         <div className="absolute right-4 top-20 z-40 flex flex-col items-center gap-6">

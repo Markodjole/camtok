@@ -230,8 +230,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     }
     return bestCam;
   }, [trafficCameras, destinationRoute]);
-  /** Start at 0 so SSR and first client paint match; tick after mount (avoids hydration #418). */
-  const [nowTick, setNowTick] = useState(0);
+  // nowTick removed — each consumer owns its own clock via useDeadlinePassed / local state.
   const [myOpenBetMarketIds, setMyOpenBetMarketIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -429,11 +428,11 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     return `cell:r${p.row}:c${p.col}`;
   }, [currentZoneId]);
 
-  const zoneExitInRoundSec = useMemo(() => {
-    if (!zoneExitPending) return null;
-    const elapsed = Math.floor((nowTick - zoneExitPending.betPlacedAtMs) / 1000);
-    return Math.max(0, Math.round(zoneExitPending.remainingAtBetSec) - elapsed);
-  }, [zoneExitPending, nowTick]);
+  // Deadline-based: fires a single setTimeout at the exact moment instead of polling.
+  const zoneExitDeadlineMs = zoneExitPending
+    ? zoneExitPending.betPlacedAtMs + Math.round(zoneExitPending.remainingAtBetSec) * 1000
+    : null;
+  const zoneExitCountdownElapsed = useDeadlinePassed(zoneExitDeadlineMs);
 
   const zoneExitLeftZone = Boolean(
     zoneExitPending &&
@@ -442,7 +441,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   );
 
   const zoneExitResolving = Boolean(
-    zoneExitPending && (zoneExitInRoundSec === 0 || zoneExitLeftZone),
+    zoneExitPending && (zoneExitCountdownElapsed || zoneExitLeftZone),
   );
 
   /** True once the vehicle has left the start cell for a next_zone bet. */
@@ -760,7 +759,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       }
     };
     fetchPoints();
-    const id = setInterval(fetchPoints, 330);
+    const id = setInterval(fetchPoints, 700);
     return () => clearInterval(id);
   }, [room.liveSessionId]);
 
@@ -1093,10 +1092,22 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       return t <= Date.now();
     })();
   /** Match server/tick: never treat market as lockable until this long after opens_at. */
+  const _graceDeadlineMs =
+    currentMarket?.opensAt && Number.isFinite(Date.parse(currentMarket.opensAt))
+      ? Date.parse(currentMarket.opensAt) + MIN_MARKET_OPEN_MS_BEFORE_LOCK
+      : null;
+  const _graceElapsed = useDeadlinePassed(_graceDeadlineMs);
   const marketOpenGraceElapsed =
     !currentMarket?.opensAt ||
     !Number.isFinite(Date.parse(currentMarket.opensAt)) ||
-    nowTick >= Date.parse(currentMarket.opensAt) + MIN_MARKET_OPEN_MS_BEFORE_LOCK;
+    _graceElapsed;
+
+  /** Single-shot lock flag — fires exactly when locksAt is reached. */
+  const _locksAtMs =
+    currentMarket?.locksAt && Number.isFinite(Date.parse(currentMarket.locksAt))
+      ? Date.parse(currentMarket.locksAt)
+      : null;
+  const marketLocked = useDeadlinePassed(_locksAtMs);
 
   const isLocked =
     marketOpenGraceElapsed &&
@@ -1121,8 +1132,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       marketOpenGraceElapsed &&
       !liveBetRelaxClient() &&
       !!currentMarket &&
-      Number.isFinite(Date.parse(currentMarket.locksAt)) &&
-      nowTick >= Date.parse(currentMarket.locksAt);
+      marketLocked;
     const distClosed =
       marketOpenGraceElapsed &&
       !liveBetRelaxClient() &&
@@ -1293,12 +1303,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
    * the server only inside the open window — once locked, attempts return
    * "Market has locked", so the UI must match that gate.
    */
-  const betWindowClosed = (() => {
-    if (!currentMarket) return false;
-    const t = Date.parse(currentMarket.locksAt);
-    if (!Number.isFinite(t)) return false;
-    return nowTick >= t;
-  })();
+  // Reuse _locksAtMs / marketLocked computed above — no polling needed.
+  const betWindowClosed = !!(currentMarket && _locksAtMs != null && marketLocked);
   /**
    * Unified bet card visibility: every active bet type renders through the
    * same `MapSelectionBottomSheet` so the viewer sees the same component,
@@ -1328,16 +1334,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     }>
   >(() => currentMarket?.options ?? [], [currentMarket]);
 
-  /**
-   * For zone_exit_time bets: estimated seconds remaining inside the zone,
-   * counting down each second using nowTick.  T is stored in the market
-   * subtitle as `estimatedSec` and set at market-open time by the server.
-   */
-  const zoneTimeRemainingEstSec = useMemo(() => {
-    return currentMarket
-      ? estimatedZoneSecondsRemaining(currentMarket, nowTick)
-      : null;
-  }, [currentMarket, nowTick]);
+  // zoneTimeRemainingEstSec moved into MapSelectionBottomSheet (owns its own clock).
 
   /**
    * One-touch sheet: tapping an option places the bet immediately. The only
@@ -1400,11 +1397,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     return () => window.removeEventListener("resize", placeBottomLeft);
   }, []);
 
-  useEffect(() => {
-    setNowTick(Date.now());
-    const id = setInterval(() => setNowTick(Date.now()), 500);
-    return () => clearInterval(id);
-  }, []);
+  // nowTick interval removed — replaced by per-consumer useDeadlinePassed / local clocks.
 
   useEffect(() => {
     let cancelled = false;
@@ -1617,7 +1610,6 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             : null
         }
         currentBetHeadline={viewerCurrentBetHeadline}
-        nowTick={nowTick}
         eligibleRoundPlans={activeBettingRound?.eligibleRoundPlans ?? []}
         highlightedEngineType={
           displayBetType && displayBetType !== viewerBetOfferType
@@ -1833,7 +1825,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         ) : null}
         {zoneExitPending ? (
           <ZoneExitCountdownWidget
-            remainingSec={zoneExitInRoundSec ?? 0}
+            betPlacedAtMs={zoneExitPending.betPlacedAtMs}
+            remainingAtBetSec={zoneExitPending.remainingAtBetSec}
             resolving={zoneExitResolving}
           />
         ) : null}
@@ -2022,7 +2015,11 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           }}
           gridMode={currentMarket.marketType === "city_grid"}
           turnMode={currentMarket.marketType === "next_turn"}
-          zoneTimeRemainingEstSec={zoneTimeRemainingEstSec}
+          zoneMarket={
+            currentMarket.marketType === "zone_exit_time"
+              ? (parseZoneExitMarketMeta(currentMarket) ?? null)
+              : null
+          }
           oneTapOptionBet={currentMarket.marketType !== "city_grid"}
         />
       ) : null}
@@ -2153,12 +2150,23 @@ function ViewerCenterMoneyFlash({
 }
 
 function ZoneExitCountdownWidget({
-  remainingSec,
+  betPlacedAtMs,
+  remainingAtBetSec,
   resolving = false,
 }: {
-  remainingSec: number;
+  betPlacedAtMs: number;
+  remainingAtBetSec: number;
   resolving?: boolean;
 }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const remainingSec = Math.max(
+    0,
+    Math.round(remainingAtBetSec) - Math.floor((now - betPlacedAtMs) / 1000),
+  );
   const urgent = !resolving && remainingSec <= 5;
   return (
     <div
@@ -2404,6 +2412,31 @@ function estimatedZoneSecondsRemaining(
   );
 }
 
+/**
+ * Returns `true` once (and forever after) `deadlineMs` is reached.
+ * Uses a single targeted `setTimeout` — no polling, no repeated re-renders.
+ * Safe for SSR: initialises to `false` on the server; the `useEffect` corrects
+ * it on the first client paint.
+ */
+function useDeadlinePassed(deadlineMs: number | null): boolean {
+  const [passed, setPassed] = useState(false);
+  useEffect(() => {
+    if (deadlineMs == null) {
+      setPassed(false);
+      return;
+    }
+    const remaining = deadlineMs - Date.now();
+    if (remaining <= 0) {
+      setPassed(true);
+      return;
+    }
+    setPassed(false);
+    const id = window.setTimeout(() => setPassed(true), remaining);
+    return () => window.clearTimeout(id);
+  }, [deadlineMs]);
+  return passed;
+}
+
 function zoneTimeOptionLabel(optionId: string, remainingSec: number | null): string | null {
   if (remainingSec == null) return null;
   const sec = Math.round(remainingSec);
@@ -2473,7 +2506,7 @@ function MapSelectionBottomSheet({
   onPlaceBet,
   gridMode = false,
   turnMode = false,
-  zoneTimeRemainingEstSec = null,
+  zoneMarket = null,
   oneTapOptionBet = false,
 }: {
   betHeadline: string;
@@ -2493,12 +2526,22 @@ function MapSelectionBottomSheet({
   gridMode?: boolean;
   turnMode?: boolean;
   /** When non-null, renders a 3-column < / ≈ / > layout with live countdown labels. */
-  zoneTimeRemainingEstSec?: number | null;
+  zoneMarket?: { opensAtMs: number; estimatedSec: number } | null;
   oneTapOptionBet?: boolean;
 }) {
   const elapsed = useBetWindowElapsed(opensAt);
   const sheetBg = betSheetUrgencyBackground(elapsed);
   const sorted = [...marketOptions].sort((a, b) => a.displayOrder - b.displayOrder);
+  // Own 1s clock for zone countdown — only runs when this sheet is for zone_exit_time.
+  const [sheetNow, setSheetNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!zoneMarket) return;
+    const id = setInterval(() => setSheetNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [!!zoneMarket]); // eslint-disable-line react-hooks/exhaustive-deps
+  const zoneTimeRemainingEstSec = zoneMarket
+    ? Math.max(0, zoneMarket.estimatedSec - Math.floor((sheetNow - zoneMarket.opensAtMs) / 1000))
+    : null;
   const zoneTimeMode = zoneTimeRemainingEstSec != null;
   const zoneTimeOptions = zoneTimeMode
     ? (["exit_under", "exit_at", "exit_over"] as const)

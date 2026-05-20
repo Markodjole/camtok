@@ -228,7 +228,7 @@ const VIEWER_ZOOM_ANIM_MS = 2400;
  * Leaflet reloads OSM tiles on every `setView` — cap recenters (~15 Hz) so the map
  * does not stutter (LCP / stop-go on `leaflet-tile`).
  */
-const MAP_VIEW_SYNC_MIN_MS = 66;
+const MAP_VIEW_SYNC_MIN_MS = 150; // was 66 (~15 Hz); 150 ms caps map recenters to ~6.7 Hz
 const MAP_VIEW_SYNC_MIN_MOVE_M = 0.85;
 const MAP_VIEW_SYNC_MIN_ZOOM_DELTA = 0.035;
 
@@ -387,6 +387,10 @@ export function LiveMap({
   const viewerMapRotationTargetRef = useRef<number>(0);
   const rotateWithHeadingRef = useRef(false);
   const viewerTurnPinRef = useRef<{ lat: number; lng: number } | null>(null);
+  /** Ref-shadowed driverPins — lets the viewer RAF loop read the latest value
+   *  without being a dep, preventing RAF restarts every 700 ms. */
+  const driverPinsRef = useRef(driverPins);
+  useEffect(() => { driverPinsRef.current = driverPins; }, [driverPins]);
   const rotationShellRef = useRef<HTMLDivElement | null>(null);
   const lastMapViewSyncRef = useRef({
     atMs: 0,
@@ -1115,15 +1119,16 @@ export function LiveMap({
               return Math.max(12, Math.min(20, z));
             })()
           : null;
+      const _dp = driverPinsRef.current;
       const viewerTurnPinActive =
         !streamer &&
         widthBasedInitialZoom == null &&
         viewerFollowLatLngBounds == null &&
         (viewerFollowZoom == null || !Number.isFinite(viewerFollowZoom)) &&
         (turnTarget != null ||
-          (driverPins != null &&
-            driverPins.length > 0 &&
-            Number.isFinite(driverPins[0]?.lat)));
+          (_dp != null &&
+            _dp.length > 0 &&
+            Number.isFinite(_dp[0]?.lat)));
       const navZoomFloor = viewerTurnPinActive
         ? Math.max(viewerFollowProfileZoom, 17.5)
         : viewerFollowProfileZoom;
@@ -1246,7 +1251,7 @@ export function LiveMap({
     rotateWithHeading,
     followMode,
     turnTarget,
-    driverPins,
+    // driverPins intentionally omitted — read via driverPinsRef.current; routePoints already triggers this effect often enough.
   ]);
 
   // Viewer: each poll refreshes target + gently blends measured °/s (poll is guidance, not a snap target).
@@ -1477,7 +1482,7 @@ export function LiveMap({
 
       const target = viewerPollTargetRef.current;
       const vel = viewerVelSmoothedRef.current;
-      const nextPin = driverPins?.[0] ?? null;
+      const nextPin = driverPinsRef.current?.[0] ?? null;
       if (
         nextPin &&
         nextPin.distanceMeters != null &&
@@ -1680,7 +1685,9 @@ export function LiveMap({
       container.removeEventListener("wheel", markInteracting);
       m.off("zoomend", onZoomEnd);
     };
-  }, [followMode, streamer, routePoints.length, driverPins, viewerFollowZoom, viewerFollowLatLngBounds]);
+  // driverPins intentionally omitted — read via driverPinsRef.current to prevent RAF restarts on every GPS poll.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [followMode, streamer, routePoints.length, viewerFollowZoom, viewerFollowLatLngBounds]);
 
   return (
     <div className="relative h-full w-full" style={{ background: "rgba(10,10,20,0.4)" }}>
