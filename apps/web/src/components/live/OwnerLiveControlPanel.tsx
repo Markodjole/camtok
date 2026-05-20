@@ -1026,4 +1026,19 @@ function IconCrosshair() {
   );
 }
 
+export function IconZoomScale({ scale }: { scale: number }) {
+  const label = scale >= 1 ? "1×" : `${scale}×`;
+  return (
+    <span className="flex flex-col items-center leading-none">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="h-4 w-4">
+        <circle cx={10} cy={10} r={6} />
+        <path strokeLinecap="round" d="M14.5 14.5 20 20" />
+        {scale < 1 && <path strokeLinecap="round" d="M7 10h6M10 7v6" />}
+        {scale >= 1 && <path strokeLinecap="round" d="M7 10h6" />}
+      </svg>
+      <span className="mt-0.5 text-[9px] font-bold tracking-tight opacity-80">{label}</span>
+    </span>
+  );
+}
+
 export { IconRailButton, IconLayers, IconPin, IconSparkle, IconCoin, IconCrosshair };

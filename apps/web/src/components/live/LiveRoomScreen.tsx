@@ -43,7 +43,7 @@ import {
   IconLayers,
   IconSparkle,
   IconCoin,
-  IconCrosshair,
+  IconZoomScale,
 } from "./OwnerLiveControlPanel";
 import { useViewerChromeStore } from "@/stores/viewer-chrome-store";
 import type { BetTypeV2 } from "@bettok/live";
@@ -136,6 +136,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [showCheckpoints, setShowCheckpoints] = useState(true);
   const [mapFollow, setMapFollow] = useState(true);
   const mapFollowRestoreRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const ZOOM_SCALES = [1, 0.7, 0.5] as const;
+  const [zoomScaleIdx, setZoomScaleIdx] = useState(0);
+  const zoomScale = ZOOM_SCALES[zoomScaleIdx]!;
   const [mapPerfDegraded, setMapPerfDegraded] = useState(false);
   const [layoutViewportW, setLayoutViewportW] = useState(390);
   useEffect(() => {
@@ -1032,8 +1035,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     currentMarket?.marketType === "next_turn" && !betJustPlaced;
 
   const targetWidthMeters = nextTurnSheetOpen ? ZOOM_NEXT_TURN_M : ZOOM_DEFAULT_M;
-  // Width jumps instantly; LiveMap runs one continuous zoom animation (no double-ease).
-  const viewerTargetWidthMeters = targetWidthMeters;
+  // Divide by zoomScale so 0.7 → 1/0.7 ≈ 1.43× wider = zoomed out.
+  const viewerTargetWidthMeters = targetWidthMeters / zoomScale;
 
   const marketTurnPassKey =
     currentMarket != null && currentMarket.marketType !== "city_grid"
@@ -1839,11 +1842,11 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             <IconCoin />
           </IconRailButton>
           <IconRailButton
-            active={mapFollow}
-            onClick={() => setMapFollow(true)}
-            title={mapFollow ? "Following streamer" : "Tap to follow streamer"}
+            active={zoomScaleIdx !== 0}
+            onClick={() => setZoomScaleIdx((i) => (i + 1) % ZOOM_SCALES.length)}
+            title={zoomScaleIdx === 0 ? "Zoom out" : `Zoom: ${zoomScale}×`}
           >
-            <IconCrosshair />
+            <IconZoomScale scale={zoomScale} />
           </IconRailButton>
           </div>
         ) : null}
