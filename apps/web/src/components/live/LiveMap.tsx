@@ -695,7 +695,7 @@ function LiveMapInner({
   // One-way switch to avoid flapping; the RAF counter itself costs ~0 CPU.
   useEffect(() => {
     if (!mapReady) return;
-    const LIGHT = "https://{s}.basemaps.cartocdn.com/rastertiles/light_nolabels/{z}/{x}/{y}{r}.png";
+    const LIGHT = "https://{s}.basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}{r}.png";
     let frames = 0;
     let lastTs = performance.now();
     let lowCount = 0;
@@ -713,9 +713,8 @@ function LiveMapInner({
             if (lowCount >= 3) {
               degraded = true;
               layerRef.current?.setUrl(LIGHT, false);
-              // Compensate for missing labels/buildings with stronger filter
               const pane = mapRef.current?.getPanes().tilePane as HTMLElement | undefined;
-              if (pane) pane.style.filter = "contrast(2) saturate(1.6) brightness(0.88)";
+              if (pane) pane.style.filter = "contrast(1.3) saturate(1.3)";
             }
           } else {
             lowCount = 0;
