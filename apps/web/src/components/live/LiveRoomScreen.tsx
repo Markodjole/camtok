@@ -136,6 +136,20 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [showCheckpoints, setShowCheckpoints] = useState(true);
   const [mapFollow, setMapFollow] = useState(true);
   const mapFollowRestoreRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleMapUserInteract = useCallback(() => {
+    setMapFollow(false);
+    if (mapFollowRestoreRef.current) clearTimeout(mapFollowRestoreRef.current);
+    mapFollowRestoreRef.current = setTimeout(() => {
+      setMapFollow(true);
+      mapFollowRestoreRef.current = null;
+    }, 5000);
+  }, []);
+  const handleMapPerfDegrade = useCallback(() => {
+    setMapPerfDegraded(true);
+    setTrafficCameras([]);
+  }, []);
+
   const ZOOM_SCALES = [1, 0.7, 0.5] as const;
   const [zoomScaleIdx, setZoomScaleIdx] = useState(0);
   const zoomScale = ZOOM_SCALES[zoomScaleIdx]!;
@@ -890,9 +904,14 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     }
   }
 
-  const viewerTurnTarget = currentMarket?.turnPointLat != null && currentMarket?.turnPointLng != null
-    ? { lat: currentMarket.turnPointLat, lng: currentMarket.turnPointLng, kind: "straight" as const, label: "" }
-    : null;
+  const viewerTurnTarget = useMemo(
+    () =>
+      currentMarket?.turnPointLat != null && currentMarket?.turnPointLng != null
+        ? { lat: currentMarket.turnPointLat, lng: currentMarket.turnPointLng, kind: "straight" as const, label: "" }
+        : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [currentMarket?.turnPointLat, currentMarket?.turnPointLng],
+  );
 
   useEffect(() => {
     setStickyViewerPin(null);
@@ -1388,6 +1407,58 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     ],
   );
 
+  /**
+   * Stable callbacks for LiveMap — must never change identity so React.memo
+   * on LiveMap is not defeated by every parent render.
+   *
+   * All values that the handlers need to read at call-time are stored in a
+   * single mutable ref that is updated every render (no React re-render cost).
+   * The callbacks themselves are created once with useCallback(() => ..., []).
+   */
+  const zoneSelectCtxRef = useRef({
+    currentMarket,
+    sheetBettingClosed,
+    placingOptionId,
+    viewerHasBetOnCurrentMarket: false as boolean,
+    scheduleBetClose,
+    placeBet,
+  });
+  // Update synchronously during render (safe for refs).
+  zoneSelectCtxRef.current = {
+    currentMarket,
+    sheetBettingClosed,
+    placingOptionId,
+    viewerHasBetOnCurrentMarket,
+    scheduleBetClose,
+    placeBet,
+  };
+
+  const handleZoneSelect = useCallback((id: string | null) => {
+    const ctx = zoneSelectCtxRef.current;
+    setSelectedZoneId(id);
+    if (id) setSelectedCheckpointId(null);
+    if (
+      id &&
+      ctx.currentMarket?.marketType === "city_grid" &&
+      !ctx.sheetBettingClosed &&
+      !ctx.placingOptionId &&
+      !ctx.viewerHasBetOnCurrentMarket
+    ) {
+      ctx.scheduleBetClose();
+      void ctx.placeBet(id).then((result) => {
+        if (result?.ok) {
+          setSelectedZoneId(null);
+          setMapSheetError(null);
+        }
+      });
+    }
+  }, []);
+
+  const handleCheckpointSelect = useCallback((id: string | null) => {
+    setSelectedCheckpointId(id);
+    if (id) setSelectedZoneId(null);
+  }, []);
+
   /** Reset any selection on market change — viewer must explicitly tap to bet. */
   useEffect(() => {
     if (currentMarket?.marketType === "city_grid") {
@@ -1680,17 +1751,10 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             audienceRole="viewer"
             showCourseArrow={true}
             transportMode={room.transportMode}
-            rotateWithHeading={true}
+            rotateWithHeading={!mapPerfDegraded}
             followMode={mapFollow}
-            onUserInteract={() => {
-              setMapFollow(false);
-              if (mapFollowRestoreRef.current) clearTimeout(mapFollowRestoreRef.current);
-              mapFollowRestoreRef.current = setTimeout(() => {
-                setMapFollow(true);
-                mapFollowRestoreRef.current = null;
-              }, 5000);
-            }}
-            onPerformanceDegrade={() => { setMapPerfDegraded(true); setTrafficCameras([]); }}
+            onUserInteract={handleMapUserInteract}
+            onPerformanceDegrade={handleMapPerfDegrade}
             tileOpacity={1}
             mapCaption={
               viewerCurrentBetHeadline ?? currentMarket?.title ?? undefined
@@ -1720,35 +1784,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             viewerTargetWidthMeters={viewerTargetWidthMeters}
             viewerZoomRuleKey={`zoom:${Math.round(viewerTargetWidthMeters)}:${currentMarket?.id ?? "nomarket"}`}
             layoutViewportWidthPx={layoutViewportW}
-            onZoneSelect={(id) => {
-              /**
-               * For a live `city_grid` (`next_zone`) market, tapping a cell
-               * IS the bet — fire `placeBet` immediately if a bet hasn't
-               * already been placed. Outside of `next_zone` we just keep
-               * the selection so the map can highlight it.
-               */
-              setSelectedZoneId(id);
-              if (id) setSelectedCheckpointId(null);
-              if (
-                id &&
-                currentMarket?.marketType === "city_grid" &&
-                !sheetBettingClosed &&
-                !placingOptionId &&
-                !viewerHasBetOnCurrentMarket
-              ) {
-                scheduleBetClose();
-                void placeBet(id).then((result) => {
-                  if (result?.ok) {
-                    setSelectedZoneId(null);
-                    setMapSheetError(null);
-                  }
-                });
-              }
-            }}
-            onCheckpointSelect={(id) => {
-              setSelectedCheckpointId(id);
-              if (id) setSelectedZoneId(null);
-            }}
+            onZoneSelect={handleZoneSelect}
+            onCheckpointSelect={handleCheckpointSelect}
           />
         ) : (
           <LiveVideoPlayer
@@ -1911,8 +1948,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               audienceRole="viewer"
               showCourseArrow={true}
               transportMode={room.transportMode}
-              rotateWithHeading={true}
-              onPerformanceDegrade={() => { setMapPerfDegraded(true); setTrafficCameras([]); }}
+              rotateWithHeading={!mapPerfDegraded}
+              onPerformanceDegrade={handleMapPerfDegrade}
               tileOpacity={0.65}
               mapCaption={
               viewerCurrentBetHeadline ?? currentMarket?.title ?? undefined

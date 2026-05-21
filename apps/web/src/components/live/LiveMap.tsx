@@ -185,7 +185,8 @@ function headingDivIcon(
 ) {
   const m = 24;
   const c = "#4ade80";
-  const html = `<div style="width:52px;height:52px;display:flex;align-items:center;justify-content:center;transform:rotate(${deg}deg)">
+  // data-camtok-arrow lets us update transform in-place without setIcon.
+  const html = `<div data-camtok-arrow style="width:52px;height:52px;display:flex;align-items:center;justify-content:center;transform:rotate(${deg}deg)">
     <div style="width:0;height:0;border-left:${m * 0.35}px solid transparent;border-right:${m * 0.35}px solid transparent;
       border-bottom:${m * 0.8}px solid ${c};filter:drop-shadow(0 0 2px #000)"></div></div>`;
   return L.divIcon({ html, className: "camtok-h", iconSize: [52, 52], iconAnchor: [26, 26] });
@@ -396,6 +397,23 @@ function LiveMapInner({
   const driverPinsRef = useRef(driverPins);
   useEffect(() => { driverPinsRef.current = driverPins; }, [driverPins]);
   const rotationShellRef = useRef<HTMLDivElement | null>(null);
+  /**
+   * Destination pin elements that must be counter-rotated when the map shell
+   * rotates.  Populated once when the destination layer is rebuilt; avoids a
+   * querySelectorAll on every RAF frame.
+   */
+  const destFlatNodesRef = useRef<HTMLElement[]>([]);
+  /**
+   * Direct reference to the course-arrow wrapper div so heading can be
+   * updated via style.transform without re-creating the Leaflet marker icon.
+   */
+  const arrowElRef = useRef<HTMLElement | null>(null);
+  /**
+   * Fingerprint of the last turn/rail render: `"lat,lng|approachLen"`.
+   * Lets us skip the clearLayers + recreate cycle when the pin position
+   * and approach line haven't actually changed between 700 ms polls.
+   */
+  const turnLayerFingerprintRef = useRef<string>("");
   const lastMapViewSyncRef = useRef({
     atMs: 0,
     lat: 0,
@@ -411,15 +429,11 @@ function LiveMapInner({
     if (shell) {
       shell.style.transform = `rotate(${deg}deg)`;
     }
-    const root = containerRef.current;
-    if (root) {
-      const flatDeg = -deg;
-      root
-        .querySelectorAll<HTMLElement>(".camtok-dest-screen-flat")
-        .forEach((node) => {
-          node.style.transform = `rotate(${flatDeg}deg)`;
-          node.style.transformOrigin = "50% 100%";
-        });
+    // Counter-rotate destination pin labels so they stay screen-upright.
+    // Uses a pre-built ref array instead of querySelectorAll every frame.
+    const flatDeg = -deg;
+    for (const node of destFlatNodesRef.current) {
+      node.style.transform = `rotate(${flatDeg}deg)`;
     }
   };
 
@@ -654,6 +668,7 @@ function LiveMapInner({
       camLayerRef.current = L.layerGroup().addTo(m);
       railLayerRef.current = L.layerGroup().addTo(m);
       turnLayerRef.current = L.layerGroup().addTo(m);
+      turnLayerFingerprintRef.current = ""; // ensure first draw always runs
       // Vehicle pane sits above all polylines, markers, and turn pins (z-index 640 >
       // marker pane 600 > overlay/SVG pane 400). Only tooltips (650) and popups (700) beat it.
       m.createPane("vehicle");
@@ -881,6 +896,7 @@ function LiveMapInner({
       const L = (await import("leaflet")).default;
       if (aborted) return;
       group.clearLayers();
+      destFlatNodesRef.current = []; // clear stale node refs before rebuild
 
       if (
         destinationRoute &&
@@ -966,19 +982,24 @@ function LiveMapInner({
           zIndexOffset: 1000,
         });
         marker.addTo(group);
+        // After the marker DOM is inserted, collect its flat-node elements
+        // into destFlatNodesRef so applyMapShellRotation never needs to
+        // querySelectorAll on the hot RAF path.
         queueMicrotask(() => {
           const root = containerRef.current;
           if (!root) return;
+          const nodes = Array.from(
+            root.querySelectorAll<HTMLElement>(".camtok-dest-screen-flat"),
+          );
+          destFlatNodesRef.current = nodes;
           const deg =
             rotateWithHeadingRef.current && followModeRef.current
               ? -rotationDegRef.current
               : 0;
-          root
-            .querySelectorAll<HTMLElement>(".camtok-dest-screen-flat")
-            .forEach((node) => {
-              node.style.transform = `rotate(${deg}deg)`;
-              node.style.transformOrigin = "50% 100%";
-            });
+          for (const node of nodes) {
+            node.style.transform = `rotate(${deg}deg)`;
+            node.style.transformOrigin = "50% 100%";
+          }
         });
       }
     })();
@@ -1043,6 +1064,16 @@ function LiveMapInner({
     const group = turnLayerRef.current;
     const rail = railLayerRef.current;
     if (!group || !rail) return;
+
+    // Build a cheap fingerprint — skip the full layer teardown + rebuild when
+    // the first pin position and approach line length haven't changed.
+    const pin0 = driverPins?.[0] ?? (turnTarget ? { lat: turnTarget.lat, lng: turnTarget.lng } : null);
+    const newFingerprint = pin0
+      ? `${pin0.lat.toFixed(5)},${pin0.lng.toFixed(5)}|${approachLine?.length ?? 0}`
+      : `none|${approachLine?.length ?? 0}`;
+    if (newFingerprint === turnLayerFingerprintRef.current) return;
+    turnLayerFingerprintRef.current = newFingerprint;
+
     (async () => {
       const L = (await import("leaflet")).default;
       group.clearLayers();
@@ -1200,8 +1231,13 @@ function LiveMapInner({
       }
       if (showCourseArrow && last.heading != null) {
         if (arRef.current) {
-          // Do not hard-set marker lat/lng here; RAF loop animates it smoothly.
-          arRef.current.setIcon(headingDivIcon(L, last.heading, streamer));
+          // Update heading by mutating the wrapper div's transform directly —
+          // avoids a full Leaflet icon teardown + DOM rebuild on every GPS poll.
+          if (arrowElRef.current) {
+            arrowElRef.current.style.transform = `rotate(${last.heading}deg)`;
+          } else {
+            arRef.current.setIcon(headingDivIcon(L, last.heading, streamer));
+          }
         } else {
           arRef.current = L.marker(pos, {
             icon: headingDivIcon(L, last.heading, streamer),
@@ -1209,10 +1245,16 @@ function LiveMapInner({
             zIndexOffset: 500,
             pane: "vehicle",
           }).addTo(m);
+          // Grab the wrapper div immediately so future heading updates skip setIcon.
+          queueMicrotask(() => {
+            const el = arRef.current?.getElement()?.querySelector<HTMLElement>("[data-camtok-arrow]");
+            arrowElRef.current = el ?? null;
+          });
         }
       } else if (arRef.current) {
         m.removeLayer(arRef.current);
         arRef.current = null;
+        arrowElRef.current = null;
       }
       if (followMode) {
         if (isFirstFollowFrame) {
@@ -1710,9 +1752,13 @@ function LiveMapInner({
       container.removeEventListener("wheel", markInteracting);
       m.off("zoomend", onZoomEnd);
     };
-  // driverPins intentionally omitted — read via driverPinsRef.current to prevent RAF restarts on every GPS poll.
+  // routePoints.length collapsed to a boolean: the RAF loop reads current
+  // position through viewerPollTargetRef (updated by the separate route effect),
+  // so we only need to know GPS has arrived — not the exact count.
+  // Restarting on every appended point was resetting spring velocity each poll.
+  // driverPins intentionally omitted — read via driverPinsRef.current.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [followMode, streamer, routePoints.length, viewerFollowZoom, viewerFollowLatLngBounds]);
+  }, [followMode, streamer, routePoints.length > 0, viewerFollowZoom, viewerFollowLatLngBounds]);
 
   return (
     <div className="relative h-full w-full" style={{ background: "transparent" }}>
