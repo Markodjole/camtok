@@ -1472,7 +1472,6 @@ function LiveMapInner({
 
   useEffect(() => {
     const m = mapRef.current;
-    const dot = dotRef.current;
 
     const cancelViewerLoop = () => {
       if (viewerSmoothRafRef.current != null) {
@@ -1484,16 +1483,13 @@ function LiveMapInner({
       viewerLoopLastTsRef.current = 0;
     };
 
-    if (
-      streamer ||
-      !followMode ||
-      routePoints.length === 0 ||
-      !m ||
-      !dot
-    ) {
+    if (streamer || !followMode || routePoints.length === 0 || !m) {
       cancelViewerLoop();
       return cancelViewerLoop;
     }
+    // dot (dotRef.current) may still be null if the route effect's async IIFE
+    // hasn't resolved import("leaflet") yet.  The loop reads dotRef.current
+    // dynamically each frame and retries until it appears — don't bail here.
 
     const BASE_STIFFNESS = 18;
     const PRECISE_STIFFNESS = 30;
@@ -1506,13 +1502,15 @@ function LiveMapInner({
     const loop = (now: number) => {
       const mm = mapRef.current;
       const dd = dotRef.current;
-      if (
-        !mm ||
-        !dd ||
-        routePointsLenRef.current === 0 ||
-        !followModeRef.current
-      ) {
+      if (!mm || routePointsLenRef.current === 0 || !followModeRef.current) {
         cancelViewerLoop();
+        return;
+      }
+      // Dot marker may lag behind by one microtask while the route effect's
+      // async IIFE finishes import("leaflet").  Retry next frame instead of
+      // permanently cancelling the loop.
+      if (!dd) {
+        viewerSmoothRafRef.current = requestAnimationFrame(loop);
         return;
       }
 
