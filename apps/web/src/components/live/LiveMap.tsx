@@ -185,8 +185,7 @@ function headingDivIcon(
 ) {
   const m = 24;
   const c = "#4ade80";
-  // data-camtok-arrow lets us update transform in-place without setIcon.
-  const html = `<div data-camtok-arrow style="width:52px;height:52px;display:flex;align-items:center;justify-content:center;transform:rotate(${deg}deg)">
+  const html = `<div style="width:52px;height:52px;display:flex;align-items:center;justify-content:center;transform:rotate(${deg}deg)">
     <div style="width:0;height:0;border-left:${m * 0.35}px solid transparent;border-right:${m * 0.35}px solid transparent;
       border-bottom:${m * 0.8}px solid ${c};filter:drop-shadow(0 0 2px #000)"></div></div>`;
   return L.divIcon({ html, className: "camtok-h", iconSize: [52, 52], iconAnchor: [26, 26] });
@@ -403,11 +402,8 @@ function LiveMapInner({
    * querySelectorAll on every RAF frame.
    */
   const destFlatNodesRef = useRef<HTMLElement[]>([]);
-  /**
-   * Direct reference to the course-arrow wrapper div so heading can be
-   * updated via style.transform without re-creating the Leaflet marker icon.
-   */
-  const arrowElRef = useRef<HTMLElement | null>(null);
+  /** Last rendered heading for the course arrow — skip setIcon when unchanged. */
+  const arrowLastHeadingRef = useRef<number | null>(null);
   /**
    * Fingerprint of the last turn/rail render: `"lat,lng|approachLen"`.
    * Lets us skip the clearLayers + recreate cycle when the pin position
@@ -1231,30 +1227,26 @@ function LiveMapInner({
       }
       if (showCourseArrow && last.heading != null) {
         if (arRef.current) {
-          // Update heading by mutating the wrapper div's transform directly —
-          // avoids a full Leaflet icon teardown + DOM rebuild on every GPS poll.
-          if (arrowElRef.current) {
-            arrowElRef.current.style.transform = `rotate(${last.heading}deg)`;
-          } else {
-            arRef.current.setIcon(headingDivIcon(L, last.heading, streamer));
+          // Skip setIcon when heading hasn't changed — avoids a full Leaflet
+          // marker DOM rebuild on every GPS poll when the heading is steady.
+          const rounded = Math.round(last.heading);
+          if (arrowLastHeadingRef.current !== rounded) {
+            arrowLastHeadingRef.current = rounded;
+            arRef.current.setIcon(headingDivIcon(L, rounded, streamer));
           }
         } else {
+          arrowLastHeadingRef.current = Math.round(last.heading);
           arRef.current = L.marker(pos, {
             icon: headingDivIcon(L, last.heading, streamer),
             interactive: false,
             zIndexOffset: 500,
             pane: "vehicle",
           }).addTo(m);
-          // Grab the wrapper div immediately so future heading updates skip setIcon.
-          queueMicrotask(() => {
-            const el = arRef.current?.getElement()?.querySelector<HTMLElement>("[data-camtok-arrow]");
-            arrowElRef.current = el ?? null;
-          });
         }
       } else if (arRef.current) {
         m.removeLayer(arRef.current);
         arRef.current = null;
-        arrowElRef.current = null;
+        arrowLastHeadingRef.current = null;
       }
       if (followMode) {
         if (isFirstFollowFrame) {
