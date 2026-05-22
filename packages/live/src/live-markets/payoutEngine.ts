@@ -39,14 +39,14 @@ export function computeParimutuelPayouts(
 
   return bets.map((b) => {
     const won = b.optionId === winningOptionId;
-    const payout = won
-      ? Math.floor((b.stakeAmount / winningStake) * pool)
-      : 0;
-    return {
-      userId: b.userId,
-      stakeAmount: b.stakeAmount,
-      won,
-      payoutAmount: payout,
-    };
+    if (!won) {
+      return { userId: b.userId, stakeAmount: b.stakeAmount, won: false, payoutAmount: 0 };
+    }
+    const parimutuel = Math.floor((b.stakeAmount / winningStake) * pool);
+    // Guarantee at least 2× stake on a win so a win always increases the
+    // player's balance. Parimutuel with a single bettor (or everyone on the
+    // same side) would otherwise return exactly the stake — net zero.
+    const payout = Math.max(parimutuel, b.stakeAmount * 2);
+    return { userId: b.userId, stakeAmount: b.stakeAmount, won: true, payoutAmount: payout };
   });
 }

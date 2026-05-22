@@ -126,27 +126,27 @@ export function drivingRouteStyleBadges(
   const motor = isMotorizedRoadMode(transportMode);
   const tags: string[] = [];
 
+  // Path style — always emit something
   if (style.pathStyle === "smooth") {
     tags.push(motor ? "Avoids highways" : "Calmer paths");
-    tags.push("Smooth driving");
   } else if (style.pathStyle === "direct") {
-    tags.push("Likes shortcuts");
-    tags.push("Direct routes");
+    tags.push(motor ? "Takes shortcuts" : "Direct routes");
+  } else {
+    tags.push(motor ? "Mixed roads" : "Flexible paths");
   }
 
+  // Speed vs comfort — always emit something
   if (style.comfortVsSpeed === "comfort") {
     tags.push("Comfort over speed");
   } else if (style.comfortVsSpeed === "speed") {
-    tags.push("Prioritizes ETA");
+    tags.push("Prioritizes speed");
+  } else {
+    tags.push("Steady pace");
   }
 
   if (style.ecoConscious) {
-    tags.push(motor ? "Saves gas & tolls" : "Light footprint");
+    tags.push(motor ? "Eco-conscious" : "Light footprint");
   }
 
-  const dedup = [...new Set(tags)];
-  if (dedup.length === 0) {
-    dedup.push("Everyday routing");
-  }
-  return dedup.slice(0, 4);
+  return [...new Set(tags)].slice(0, 4);
 }
