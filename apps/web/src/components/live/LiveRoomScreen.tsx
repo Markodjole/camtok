@@ -1751,7 +1751,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             audienceRole="viewer"
             showCourseArrow={true}
             transportMode={room.transportMode}
-            rotateWithHeading={!mapPerfDegraded}
+            rotateWithHeading={true}
             followMode={mapFollow}
             onUserInteract={handleMapUserInteract}
             onPerformanceDegrade={handleMapPerfDegrade}
@@ -1948,7 +1948,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               audienceRole="viewer"
               showCourseArrow={true}
               transportMode={room.transportMode}
-              rotateWithHeading={!mapPerfDegraded}
+              rotateWithHeading={true}
               onPerformanceDegrade={handleMapPerfDegrade}
               tileOpacity={0.65}
               mapCaption={
