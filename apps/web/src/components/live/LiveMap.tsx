@@ -1372,35 +1372,20 @@ function LiveMapInner({
       }
     };
 
-    const cancelViewerLoop = () => {
-      if (viewerSmoothRafRef.current != null) {
-        cancelAnimationFrame(viewerSmoothRafRef.current);
-        viewerSmoothRafRef.current = null;
-      }
-      viewerPoseSmoothedRef.current = null;
-      viewerVelSmoothedRef.current = { vLat: 0, vLng: 0 };
-      viewerPoseVelRef.current = { vLat: 0, vLng: 0 };
-      viewerLastPollTsRef.current = 0;
-      viewerLoopLastTsRef.current = 0;
-    };
+    // The viewer smooth-RAF loop is managed exclusively by the effect below
+    // (dep: routePoints.length > 0).  This burst effect must never touch it —
+    // otherwise its cleanup fires on every routePoints change and kills the
+    // viewer loop before the viewer RAF effect can restart it.
 
     if (!m || !dot || routePoints.length === 0 || !followMode) {
       cancelBurst();
-      cancelViewerLoop();
-      return () => {
-        cancelBurst();
-        cancelViewerLoop();
-      };
+      return cancelBurst;
     }
 
     if (!streamer) {
       cancelBurst();
-      return () => {
-        cancelBurst();
-      };
+      return cancelBurst;
     }
-
-    cancelViewerLoop();
 
     const last = routePoints[routePoints.length - 1]!;
     const prev = routePoints.length > 1 ? routePoints[routePoints.length - 2]! : null;
