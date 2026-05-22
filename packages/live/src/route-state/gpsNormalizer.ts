@@ -123,11 +123,18 @@ export function normalizeGpsBatch(
       }
     }
 
+    // Only derive heading from position bearing when the displacement is large
+    // enough to produce a reliable direction (> 1 m).  Below that threshold
+    // GPS noise dominates and computing a bearing gives a random angle, which
+    // makes the viewer map spin while the driver is standing still.
+    const distM = last
+      ? haversineMeters(last.normalizedLat, last.normalizedLng, normalizedLat, normalizedLng)
+      : 0;
     const heading =
       p.headingDeg ??
-      (last
+      (last && distM > 1.0
         ? bearingDeg(last.normalizedLat, last.normalizedLng, normalizedLat, normalizedLng)
-        : undefined);
+        : last?.headingDeg);
 
     const np: NormalizedPoint = {
       ...p,
