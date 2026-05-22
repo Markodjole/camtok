@@ -288,6 +288,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   // Set immediately on bet press — hides the popup before the server even responds.
   const [betJustPlaced, setBetJustPlaced] = useState(false);
   const betJustPlacedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // "✓ Bet placed" confirmation chip shown for 2.5 s after a confirmed bet.
+  const [betAcceptedLabel, setBetAcceptedLabel] = useState<string | null>(null);
+  const betAcceptedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Show the pressed button for 1 s, then close the sheet.
   const scheduleBetClose = useCallback(() => {
     if (betJustPlacedTimerRef.current) clearTimeout(betJustPlacedTimerRef.current);
@@ -681,13 +684,20 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       setCityGridBetPending((prev) =>
         prev?.marketId === data.marketId ? null : prev,
       );
-      if (data.won || data.payoutAmount > 0) {
-        // Stake already deducted on bet. Server credits full payoutAmount (parimutuel share).
+      if (data.won) {
+        // Net profit = payout − stake (stake was already removed from DB at
+        // bet placement).  Animating the raw payout would overshoot if the
+        // UI hasn't yet synced the stake deduction.
+        const netProfit = data.payoutAmount - data.stakeAmount;
         pulseCenterMoney("win", data.payoutAmount, targetLabel);
-        pulseBalanceChange(data.payoutAmount);
+        if (netProfit > 0) pulseBalanceChange(netProfit);
+      } else if (data.payoutAmount > 0) {
+        // Refund: stake returned, net = 0 — skip animation, server sync corrects.
       } else {
-        // Loss: stake already removed on bet — no second deduction.
+        // Loss: stake was removed server-side at bet time; deduct from UI now
+        // so the badge doesn't wait for the next syncWalletFromServer.
         pulseCenterMoney("loss", data.stakeAmount, targetLabel);
+        pulseBalanceChange(-data.stakeAmount);
       }
       void syncWalletFromServer();
     },
@@ -868,41 +878,73 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     setError(null);
     setMapSheetError(null);
     setPlacingOptionId(optionId);
+
+    // 8 s hard timeout so "Placing…" never hangs forever.
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+    const rollbackOptimistic = (showSheet: boolean) => {
+      clearTimeout(timeoutId);
+      setZoneExitPending(null);
+      setCityGridBetPending(null);
+      if (betJustPlacedTimerRef.current) {
+        clearTimeout(betJustPlacedTimerRef.current);
+        betJustPlacedTimerRef.current = null;
+      }
+      setBetJustPlaced(false);
+      if (showSheet) {
+        // Re-show the sheet so the user can retry.
+        setLastBetMarketId(null);
+        setLastBetOptionLabel(null);
+      }
+    };
+
     try {
       const res = await fetch(`/api/live/rooms/${room.roomId}/bet`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ marketId: market.id, optionId, stakeAmount: stake }),
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
+
       if (res.ok) {
         setMyOpenBetMarketIds((prev) => new Set(prev).add(market.id));
-        viewerLiveLog("place_bet_ok", {
-          marketId: market.id,
-          optionId,
-          pickedLabel,
-          stakeAmount: stake,
-        });
+        // Show "✓ accepted" chip for 2.5 s.
+        setBetAcceptedLabel(pickedLabel ?? `$${stake}`);
+        if (betAcceptedTimerRef.current) clearTimeout(betAcceptedTimerRef.current);
+        betAcceptedTimerRef.current = setTimeout(() => setBetAcceptedLabel(null), 2500);
+        viewerLiveLog("place_bet_ok", { marketId: market.id, optionId, pickedLabel, stakeAmount: stake });
         return { ok: true as const };
-      } else {
-        const j = (await res.json().catch(() => ({}))) as { error?: string };
-        const message = j.error ?? "Bet failed";
-        viewerLiveWarn("place_bet_failed", {
-          status: res.status,
-          message,
-          marketId: market.id,
-          optionId,
-        });
-        setZoneExitPending(null);
-        setCityGridBetPending(null);
-        setError(message);
-        setMapSheetError(message);
-        if (betJustPlacedTimerRef.current) {
-          clearTimeout(betJustPlacedTimerRef.current);
-          betJustPlacedTimerRef.current = null;
-        }
-        setBetJustPlaced(false);
+      }
+
+      const j = (await res.json().catch(() => ({}))) as { error?: string };
+      const message = j.error ?? "Bet failed";
+      viewerLiveWarn("place_bet_failed", { status: res.status, message, marketId: market.id, optionId });
+
+      if (message === "Market not open" || message === "Market has locked") {
+        // Race condition — market closed between client check and server.
+        // Silently rollback without showing an error.
+        rollbackOptimistic(false);
         return { ok: false as const, error: message };
       }
+
+      // Any other server error: rollback and re-show the sheet so user can retry.
+      rollbackOptimistic(true);
+      setError(message);
+      setMapSheetError(message);
+      return { ok: false as const, error: message };
+
+    } catch (e) {
+      const message =
+        e instanceof Error && e.name === "AbortError"
+          ? "Timed out — tap to try again"
+          : "Connection error — tap to try again";
+      viewerLiveWarn("place_bet_failed", { message, marketId: market.id, optionId });
+      rollbackOptimistic(true);
+      setError(message);
+      setMapSheetError(message);
+      return { ok: false as const, error: message };
     } finally {
       setPlacingOptionId(null);
     }
@@ -2091,6 +2133,18 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           }
           oneTapOptionBet={currentMarket.marketType !== "city_grid"}
         />
+      ) : null}
+
+      {/* ── Bet accepted confirmation chip ───────────────────── */}
+      {betAcceptedLabel && !showUnifiedBetSheet ? (
+        <div className="pointer-events-none absolute inset-x-0 bottom-20 z-[210] flex justify-center">
+          <div className="flex animate-fade-in items-center gap-2 rounded-full bg-emerald-500 px-5 py-2.5 text-sm font-semibold text-white shadow-lg">
+            <svg viewBox="0 0 20 20" fill="currentColor" className="size-4 shrink-0">
+              <path fillRule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clipRule="evenodd" />
+            </svg>
+            <span>Bet placed · {betAcceptedLabel}</span>
+          </div>
+        </div>
       ) : null}
     </div>
   );
