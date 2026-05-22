@@ -924,8 +924,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
       if (message === "Market not open" || message === "Market has locked") {
         // Race condition — market closed between client check and server.
-        // Silently rollback without showing an error.
-        rollbackOptimistic(false);
+        // Rollback (re-show the sheet) but don't display an error; the
+        // sheet's own "Betting closed" label covers this state.
+        rollbackOptimistic(true);
         return { ok: false as const, error: message };
       }
 
