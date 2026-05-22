@@ -1727,13 +1727,8 @@ function LiveMapInner({
       container.removeEventListener("wheel", markInteracting);
       m.off("zoomend", onZoomEnd);
     };
-  // routePoints.length collapsed to a boolean: the RAF loop reads current
-  // position through viewerPollTargetRef (updated by the separate route effect),
-  // so we only need to know GPS has arrived — not the exact count.
-  // Restarting on every appended point was resetting spring velocity each poll.
   // driverPins intentionally omitted — read via driverPinsRef.current.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [followMode, streamer, routePoints.length > 0, viewerFollowZoom, viewerFollowLatLngBounds]);
+  }, [followMode, streamer, routePoints.length, viewerFollowZoom, viewerFollowLatLngBounds]);
 
   return (
     <div className="relative h-full w-full" style={{ background: "transparent" }}>
