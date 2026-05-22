@@ -17,7 +17,7 @@ import {
   type ZoneExitPhase,
 } from "@/actions/live-engine-market";
 import { openNextTurnMarketForRoom } from "@/actions/live-next-turn-market";
-import { lockMarket, revealAndSettleMarket } from "@/actions/live-settlement";
+import { lockAndSettleMarket, lockMarket, revealAndSettleMarket } from "@/actions/live-settlement";
 import { isEngineMarketType } from "@/lib/live/betting/engineMarketOptions";
 import {
   BET_OPEN_WINDOW_MS,
@@ -139,7 +139,12 @@ export async function runRoomTick(
   const phase = (room as { phase: string }).phase;
   const marketId = (room as { current_market_id: string | null }).current_market_id;
 
-  // ─── 1. Lock expired market ──────────────────────────────────────────────
+  // ─── 1. Lock + settle expired market ────────────────────────────────────
+  //
+  // When the bet window expires, lock and settle in one atomic call so the
+  // room's `current_market_id` pointer stays set the entire time.
+  // `settleMarketWithWinner` / `refundMarket` clear it only after payout is
+  // written — viewers never see a gap where there is no active market.
   if (phase === "market_open" && marketId) {
     const { data: market } = await service
       .from("live_betting_markets")
@@ -154,18 +159,9 @@ export async function runRoomTick(
         mType === "next_turn" || mType === "city_grid" || mType === "zone_exit_time";
       const shouldLockNow = status === "open" && (Date.now() >= locksAtMs || !isActiveType);
       if (shouldLockNow) {
-        const lockResult = await lockMarket(marketId);
-        if ("commitHash" in lockResult) {
-          await service
-            .from("live_rooms")
-            .update({
-              phase: "waiting_for_next_market",
-              current_market_id: null,
-              last_event_at: new Date().toISOString(),
-            })
-            .eq("id", roomId)
-            .eq("current_market_id", marketId);
-        }
+        // Lock → resolve winner → settle — all in one tick.
+        // Room pointer is cleared inside lockAndSettleMarket after payouts.
+        await lockAndSettleMarket(marketId);
       }
     }
   }
@@ -314,13 +310,17 @@ async function openFromQueueOrTriggers(
     };
   }
 
-  await service.from("live_rooms").update({ queued_triggers: [] }).eq("id", roomId);
-
-  const openerErrors: Array<{ trigger: string; error: string }> = [];
-
+  // Snapshot the non-expired queued triggers BEFORE clearing so they can be
+  // restored if every opener fails. Fresh triggers are always re-detected on
+  // the next tick by detectEligibleTriggers, so they don't need restoring.
   const prioritySorted = [...queue]
     .filter((t) => now - t.queuedAt < QUEUE_EXPIRY_MS)
     .sort((a, b) => triggerPriority(a) - triggerPriority(b));
+  const savedQueue: QueuedTrigger[] = [...prioritySorted];
+
+  await service.from("live_rooms").update({ queued_triggers: [] }).eq("id", roomId);
+
+  const openerErrors: Array<{ trigger: string; error: string }> = [];
 
   for (let i = 0; i < prioritySorted.length; i++) {
     const trigger = prioritySorted[i]!;
@@ -350,8 +350,16 @@ async function openFromQueueOrTriggers(
     });
   }
 
-  if (openerErrors.length) {
-    console.warn("[tick] all openers failed", JSON.stringify(openerErrors));
+  // Every opener failed — put the saved queued triggers back so they are
+  // retried on the next tick rather than being silently dropped.
+  if (openerErrors.length > 0 && savedQueue.length > 0) {
+    console.warn("[tick] all openers failed — restoring queue", JSON.stringify(openerErrors));
+    await service
+      .from("live_rooms")
+      .update({ queued_triggers: savedQueue })
+      .eq("id", roomId);
+  } else if (openerErrors.length > 0) {
+    console.warn("[tick] all openers failed (no queue to restore)", JSON.stringify(openerErrors));
   }
 
   return {
@@ -596,7 +604,8 @@ async function sweepPendingSettlements(
     .in("status", ["locked", "open"])
     .limit(20);
 
-  // Lock any open zone_exit_time markets whose estimated countdown has elapsed.
+  // Lock-and-settle any open engine markets whose estimated countdown has elapsed.
+  // Uses lockAndSettleMarket so the room pointer stays set throughout payout.
   const nowMs = Date.now();
   for (const row of candidates ?? []) {
     if ((row as { status: string }).status !== "open") continue;
@@ -611,15 +620,8 @@ async function sweepPendingSettlements(
       roomId,
     });
     if (!shouldSettle) continue;
-    // Lock first, then fall through to settle below (status will be "locked").
-    const lockResult = await lockMarket(mid);
-    if (!("commitHash" in lockResult)) continue;
-    // Update room phase if it was still tracking this market.
-    await service
-      .from("live_rooms")
-      .update({ phase: "waiting_for_next_market", current_market_id: null, last_event_at: new Date().toISOString() })
-      .eq("id", roomId)
-      .eq("current_market_id", mid);
+    // Atomic: lock → resolve winner → pay out. Room pointer cleared by payout.
+    await lockAndSettleMarket(mid);
   }
 
   // Re-fetch only locked markets to settle.

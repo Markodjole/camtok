@@ -2,18 +2,8 @@
 
 import { unstable_noStore } from "next/cache";
 import { createServiceClient } from "@/lib/supabase/server";
-import {
-  Markets,
-  RouteState,
-  type LiveMarketOption,
-  type RouteDecisionOption,
-} from "@bettok/live";
-import {
-  cellIdForPosition,
-  parseGridOptionId as parseGridFromId,
-  type CityGridSpecCompact,
-} from "@/lib/live/grid/cityGrid500";
-import { isEngineMarketType } from "@/lib/live/betting/engineMarketOptions";
+import { Markets, RouteState, type LiveMarketOption } from "@bettok/live";
+import { resolveMarket, type MarketForResolution } from "@/lib/live/market-resolvers";
 
 type LockEvidence = {
   currentNodeId: string;
@@ -183,9 +173,6 @@ export async function lockMarket(marketId: string) {
     .maybeSingle();
 
   const options = (market as { option_set: LiveMarketOption[] }).option_set;
-  const marketType = (market as { market_type?: string }).market_type ?? "";
-  void marketType;
-  void cellIdForPosition;
 
   /**
    * `selected` is the system's provisional "best guess" outcome stored on
@@ -260,8 +247,27 @@ export async function lockMarket(marketId: string) {
 }
 
 /**
- * After reveal window, compare actual committed path against locked
- * options. If ambiguous / low confidence, refund all bets.
+ * Atomically lock a market and settle it in one tick.
+ *
+ * Keeps `current_market_id` on the room throughout — the pointer is only
+ * cleared by `settleMarketWithWinner` / `refundMarket` after payout is
+ * written, so viewers never see a gap where there is no active market.
+ *
+ * This replaces the previous two-tick pattern of `lockMarket` (tick N)
+ * followed by `revealAndSettleMarket` (tick N+1).
+ */
+export async function lockAndSettleMarket(marketId: string) {
+  const lockResult = await lockMarket(marketId);
+  if ("error" in lockResult) return lockResult;
+  return revealAndSettleMarket(marketId);
+}
+
+/**
+ * Determine the winner for a locked market and pay out all bets.
+ *
+ * Delegates winner resolution to the market-resolver registry so each bet
+ * type has an isolated, testable resolver function. See
+ * `src/lib/live/market-resolvers/` for the per-type implementations.
  */
 export async function revealAndSettleMarket(marketId: string) {
   unstable_noStore();
@@ -269,296 +275,54 @@ export async function revealAndSettleMarket(marketId: string) {
 
   const { data: market } = await service
     .from("live_betting_markets")
-    .select(
-      "id, room_id, live_session_id, status, option_set, decision_node_id, opens_at, reveal_at, market_type, city_grid_spec, subtitle",
-    )
+    .select("id, room_id, live_session_id, status, option_set, decision_node_id, opens_at, reveal_at, market_type, city_grid_spec, subtitle, turn_point_lat, turn_point_lng")
     .eq("id", marketId)
     .maybeSingle();
+
   if (!market) return { error: "Market not found" };
-  if ((market as { status: string }).status !== "locked") {
+  if ((market as unknown as { status: string }).status !== "locked") {
     return { error: "Market not locked" };
   }
 
-  const marketType = (market as { market_type?: string }).market_type ?? "";
-  const gridSpec = (market as { city_grid_spec: CityGridSpecCompact | null })
-    .city_grid_spec;
+  const m = market as unknown as {
+    id: string;
+    room_id: string;
+    live_session_id: string;
+    status: string;
+    option_set: LiveMarketOption[];
+    decision_node_id: string | null;
+    opens_at: string;
+    reveal_at: string;
+    market_type: string;
+    city_grid_spec: unknown;
+    subtitle: string | null;
+    turn_point_lat: number | null;
+    turn_point_lng: number | null;
+  };
 
-  const revealAtMs = new Date((market as { reveal_at: string }).reveal_at).getTime();
-  const since = new Date(revealAtMs - 15_000).toISOString();
+  const marketData: MarketForResolution = {
+    id: m.id,
+    room_id: m.room_id,
+    live_session_id: m.live_session_id,
+    market_type: m.market_type ?? "",
+    option_set: m.option_set ?? [],
+    opens_at: m.opens_at,
+    reveal_at: m.reveal_at,
+    city_grid_spec: (m.city_grid_spec ?? null) as MarketForResolution["city_grid_spec"],
+    subtitle: m.subtitle,
+    turn_point_lat: m.turn_point_lat,
+    turn_point_lng: m.turn_point_lng,
+    decision_node_id: m.decision_node_id,
+  };
 
-  const { data: points } = await service
-    .from("live_route_snapshots")
-    .select(
-      "recorded_at, normalized_lat, normalized_lng, raw_lat, raw_lng, speed_mps, heading_deg, confidence_score",
-    )
-    .eq("live_session_id", (market as { live_session_id: string }).live_session_id)
-    .gte("recorded_at", since)
-    .order("recorded_at", { ascending: true });
+  const resolution = await resolveMarket(marketData, service);
 
-  const committed = (points ?? []).map((r) => {
-    const lat = (r.normalized_lat ?? r.raw_lat) as number;
-    const lng = (r.normalized_lng ?? r.raw_lng) as number;
-    return {
-      recordedAt: r.recorded_at as string,
-      lat,
-      lng,
-      speedMps: (r.speed_mps as number | null) ?? undefined,
-      headingDeg: (r.heading_deg as number | null) ?? undefined,
-      normalizedLat: lat,
-      normalizedLng: lng,
-      confidence: (r.confidence_score as number | null) ?? 0.5,
-      discarded: false,
-    };
-  });
-
-  /**
-   * `next_turn` (left / straight / right): compare the driver's committed
-   * heading change against the bet options. Build a synthetic decision row
-   * on the fly so `revealFromMovement` has direction labels to match — the
-   * market itself doesn't have a `route_decision_nodes` row because it's
-   * gated on pin distance rather than the decision detector.
-   */
-  if (marketType === "next_turn") {
-    const opts = (market as { option_set: LiveMarketOption[] }).option_set;
-
-    /**
-     * Pull GPS from the lock moment forward — the settle path fires the
-     * instant the driver is within ~15 m of the pin, well before
-     * `reveal_at`, so the default `revealAt - 15 s` window would return
-     * nothing and refund the bet. We anchor on `opens_at` to capture the
-     * pre-pin heading too.
-     */
-    const opensAtStr = (market as { opens_at?: string }).opens_at;
-    let nextTurnCommitted = committed;
-    if (opensAtStr) {
-      const { data: snaps } = await service
-        .from("live_route_snapshots")
-        .select(
-          "recorded_at, normalized_lat, normalized_lng, raw_lat, raw_lng, speed_mps, heading_deg, confidence_score",
-        )
-        .eq(
-          "live_session_id",
-          (market as { live_session_id: string }).live_session_id,
-        )
-        .gte("recorded_at", opensAtStr)
-        .order("recorded_at", { ascending: true })
-        .limit(120);
-      nextTurnCommitted = (snaps ?? []).map((r) => {
-        const lat = (r.normalized_lat ?? r.raw_lat) as number;
-        const lng = (r.normalized_lng ?? r.raw_lng) as number;
-        return {
-          recordedAt: r.recorded_at as string,
-          lat,
-          lng,
-          speedMps: (r.speed_mps as number | null) ?? undefined,
-          headingDeg: (r.heading_deg as number | null) ?? undefined,
-          normalizedLat: lat,
-          normalizedLng: lng,
-          confidence: (r.confidence_score as number | null) ?? 0.5,
-          discarded: false,
-        };
-      });
-    }
-
-    const syntheticDecision: { options: RouteDecisionOption[] } = {
-      options: opts.map((o) => ({
-        optionId: o.id,
-        label: o.label,
-        directionType: o.id as RouteDecisionOption["directionType"],
-      })),
-    };
-    const result = RouteState.revealFromMovement(
-      opts,
-      syntheticDecision,
-      nextTurnCommitted,
-    );
-    if (result.status !== "matched") {
-      await refundMarket(marketId, result.reason);
-      return { status: result.status, reason: result.reason };
-    }
-    return await settleMarketWithWinner(marketId, result.winningOptionId, result.reason);
+  if (resolution.outcome === "refund") {
+    await refundMarket(marketId, resolution.reason);
+    return { status: "refund" as const, reason: resolution.reason };
   }
 
-  if (marketType === "zone_exit_time" && gridSpec) {
-    const liveSessionId = (market as { live_session_id: string }).live_session_id;
-    const subtitleStr = (market as { subtitle: string | null }).subtitle;
-    let startCellKey: string | null = null;
-    let estimatedSec = 60; // safe fallback
-    try {
-      const meta = JSON.parse(subtitleStr ?? "{}") as {
-        cellKey?: string | null;
-        estimatedSec?: number;
-      };
-      startCellKey = meta.cellKey ?? null;
-      if (typeof meta.estimatedSec === "number") estimatedSec = meta.estimatedSec;
-    } catch {
-      // ignore parse failures — handled below.
-    }
-    if (!startCellKey) {
-      await refundMarket(marketId, "zone_exit_missing_start_cell");
-      return { status: "ambiguous", reason: "zone_exit_missing_start_cell" };
-    }
-
-    const { data: latestGps } = await service
-      .from("live_route_snapshots")
-      .select("recorded_at, normalized_lat,normalized_lng,raw_lat,raw_lng")
-      .eq("live_session_id", liveSessionId)
-      .order("recorded_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (!latestGps) {
-      await refundMarket(marketId, "zone_exit_no_gps");
-      return { status: "insufficient_confidence", reason: "zone_exit_no_gps" };
-    }
-
-    const g = latestGps as {
-      recorded_at: string;
-      normalized_lat: number | null;
-      normalized_lng: number | null;
-      raw_lat: number;
-      raw_lng: number;
-    };
-    const currentCellId = cellIdForPosition(
-      gridSpec,
-      g.normalized_lat ?? g.raw_lat,
-      g.normalized_lng ?? g.raw_lng,
-    );
-    const currentCell = currentCellId ? parseGridFromId(currentCellId) : null;
-    const currentCellKey =
-      currentCell != null ? `cell:r${currentCell.row}:c${currentCell.col}` : null;
-    const opensAtMs = new Date((market as { opens_at: string }).opens_at).getTime();
-    const nowMs = Date.now();
-    const countdownElapsed =
-      Number.isFinite(opensAtMs) && nowMs >= opensAtMs + estimatedSec * 1000;
-    if (!currentCellKey || currentCellKey === startCellKey) {
-      // Countdown elapsed (the trigger condition) → driver took longer than T → "exit_over".
-      // If somehow called before countdown elapsed (should not happen), also settle as
-      // "exit_over" rather than refunding, because at reveal_at the driver has clearly
-      // been in the zone for a very long time.
-      return await settleMarketWithWinner(
-        marketId,
-        "exit_over",
-        countdownElapsed
-          ? `zone_exit_countdown_elapsed_est${estimatedSec}s`
-          : `zone_exit_reveal_at_still_in_zone_est${estimatedSec}s`,
-      );
-    }
-
-    const exitAtMs = new Date(g.recorded_at).getTime();
-    const elapsedSec =
-      Number.isFinite(opensAtMs) && Number.isFinite(exitAtMs)
-        ? Math.max(0, (exitAtMs - opensAtMs) / 1000)
-        : Number.POSITIVE_INFINITY;
-    // ±20 % window around T → "at"; outside → under / over.
-    const lo = estimatedSec * 0.8;
-    const hi = estimatedSec * 1.2;
-    const winner =
-      elapsedSec < lo ? "exit_under" : elapsedSec <= hi ? "exit_at" : "exit_over";
-
-    return await settleMarketWithWinner(
-      marketId,
-      winner,
-      `zone_exit_${Math.round(elapsedSec)}s_est${estimatedSec}s`,
-    );
-  }
-
-  // Fallback for any future engine bet that does not yet have telemetry logic.
-  if (isEngineMarketType(marketType)) {
-    const opts = (market as { option_set: LiveMarketOption[] }).option_set;
-    if (!opts.length) {
-      await refundMarket(marketId, "engine_no_options");
-      return { status: "voided", reason: "engine_no_options" };
-    }
-    const winIdx = Math.floor(Math.random() * opts.length);
-    const winId = opts[winIdx]!.id;
-    return await settleMarketWithWinner(marketId, winId, "engine_provisional");
-  }
-
-  if (marketType === "city_grid" && gridSpec) {
-    /**
-     * `next_zone`: winning option is the cell the driver is in **right
-     * now**, as long as it differs from the start cell captured at open
-     * time. Driver still sitting in the start cell when settlement runs →
-     * refund (we only call this from the tick once the driver actually
-     * crossed out, but `reveal_at` timeout can still hit it stuck inside).
-     */
-    const liveSessionId = (market as { live_session_id: string })
-      .live_session_id;
-    const subtitleStr = (market as { subtitle: string | null }).subtitle;
-    let startRow: number | null = null;
-    let startCol: number | null = null;
-    try {
-      const meta = JSON.parse(subtitleStr ?? "{}") as {
-        startRow?: number;
-        startCol?: number;
-      };
-      startRow = typeof meta.startRow === "number" ? meta.startRow : null;
-      startCol = typeof meta.startCol === "number" ? meta.startCol : null;
-    } catch {
-      // ignore parse failures — start-cell fallback handled below.
-    }
-
-    const { data: latestGps } = await service
-      .from("live_route_snapshots")
-      .select("normalized_lat,normalized_lng,raw_lat,raw_lng")
-      .eq("live_session_id", liveSessionId)
-      .order("recorded_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (!latestGps) {
-      await refundMarket(marketId, "city_grid_no_gps");
-      return { status: "insufficient_confidence", reason: "city_grid_no_gps" };
-    }
-    const g = latestGps as {
-      normalized_lat: number | null;
-      normalized_lng: number | null;
-      raw_lat: number;
-      raw_lng: number;
-    };
-    const lat = g.normalized_lat ?? g.raw_lat;
-    const lng = g.normalized_lng ?? g.raw_lng;
-    const currCellId = cellIdForPosition(gridSpec, lat, lng);
-    if (!currCellId) {
-      await refundMarket(marketId, "city_grid_outside_cells");
-      return { status: "ambiguous", reason: "city_grid_outside_cells" };
-    }
-    const curr = parseGridFromId(currCellId);
-    if (!curr) {
-      await refundMarket(marketId, "city_grid_bad_cell_id");
-      return { status: "ambiguous", reason: "city_grid_bad_cell_id" };
-    }
-    if (
-      startRow != null &&
-      startCol != null &&
-      curr.row === startRow &&
-      curr.col === startCol
-    ) {
-      await refundMarket(marketId, "city_grid_still_in_zone");
-      return { status: "ambiguous", reason: "city_grid_still_in_zone" };
-    }
-    return await settleMarketWithWinner(marketId, currCellId, "gps_cell_enter");
-  }
-
-  const { data: decision } = await service
-    .from("route_decision_nodes")
-    .select("options")
-    .eq("id", (market as { decision_node_id: string | null }).decision_node_id ?? "")
-    .maybeSingle();
-
-  const options = (market as { option_set: LiveMarketOption[] }).option_set;
-  const decisionOptions = (decision as { options: RouteDecisionOption[] } | null)?.options ?? [];
-  const result = RouteState.revealFromMovement(
-    options,
-    decisionOptions.length ? { options: decisionOptions } : null,
-    committed,
-  );
-
-  if (result.status !== "matched") {
-    await refundMarket(marketId, result.reason);
-    return { status: result.status, reason: result.reason };
-  }
-
-  return await settleMarketWithWinner(marketId, result.winningOptionId, result.reason);
+  return settleMarketWithWinner(marketId, resolution.optionId, resolution.reason);
 }
 
 async function refundMarket(marketId: string, reason: string) {
