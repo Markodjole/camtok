@@ -122,7 +122,10 @@ export async function GET(req: NextRequest) {
       (c) => c.distanceM <= ACTIVE_RADIUS_M && c._diff <= FEED_CONE_DEG,
     );
     feedCandidates.sort((a, b) => a._diff - b._diff);
-    const feedCamId = feedCandidates[0]?.id ?? null;
+    // If no camera passes the heading cone (e.g. driver is stationary or has
+    // no heading), fall back to the single closest camera so the panel always
+    // shows something when there are cameras nearby.
+    const feedCamId = feedCandidates[0]?.id ?? enriched[0]?.id ?? null;
 
     const cameras: TrafficCamera[] = enriched.map((c) => ({
       id: c.id,

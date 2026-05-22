@@ -195,7 +195,11 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const nearestCamera = useMemo(() => {
     if (trafficCameras.length === 0) return null;
     const route = destinationRoute;
-    if (!route || route.length < 2) return null;
+    // No route yet — fall back to the API-flagged nearest camera so the
+    // panel and map pin appear immediately (before Google Maps route loads).
+    if (!route || route.length < 2) {
+      return trafficCameras.find((c) => c.isNearest) ?? null;
+    }
     const R = 6_371_000;
     const rad = (d: number) => (d * Math.PI) / 180;
     const hav = (a: { lat: number; lng: number }, b: { lat: number; lng: number }) => {
