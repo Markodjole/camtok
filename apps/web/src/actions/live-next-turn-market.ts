@@ -8,6 +8,7 @@ import {
   BET_OPEN_WINDOW_MS,
   NEXT_TURN_PIN_MAX_M,
   NEXT_TURN_PIN_MIN_M,
+  NEXT_TURN_QUEUED_OPEN_MIN_M,
 } from "@/lib/live/betting/betWindowConstants";
 import { computeEqualOdds } from "@/lib/live/betting/marketOdds";
 
@@ -71,11 +72,15 @@ export async function openNextTurnMarketForRoom(
 
   const isQueuedPin = opts?.queuedPinId != null && opts.queuedPinId === pin.id;
   if (isQueuedPin) {
-    // Queued trigger: window was already validated. Only reject if the driver
-    // has fully passed the pin (dist ≤ 0) or moved past the upper bound.
-    if (dist <= 0 || dist > NEXT_TURN_PIN_MAX_M) {
+    // Queued trigger: the pin was valid when it was queued, but the driver has
+    // continued moving.  Reject if:
+    //   • driver already passed the pin (dist ≤ 0)
+    //   • driver moved past the upper trigger bound (too far away now)
+    //   • driver is already within the bet-lock threshold — opening here would
+    //     produce a market that locks before users can react
+    if (dist <= NEXT_TURN_QUEUED_OPEN_MIN_M || dist > NEXT_TURN_PIN_MAX_M) {
       return {
-        error: `next_turn: queued pin ${Math.round(dist)} m — driver already passed or too far`,
+        error: `next_turn: queued pin ${Math.round(dist)} m — too close (min ${NEXT_TURN_QUEUED_OPEN_MIN_M} m) or too far`,
       };
     }
   } else if (dist < NEXT_TURN_PIN_MIN_M || dist > NEXT_TURN_PIN_MAX_M) {
@@ -125,7 +130,10 @@ export async function openNextTurnMarketForRoom(
   const now = new Date();
   const windowMs = opts?.windowMs ?? BET_OPEN_WINDOW_MS;
   const locksAt = new Date(now.getTime() + windowMs);
-  const revealAt = new Date(now.getTime() + 60_000);
+  // 2 minutes: a driver stopped at lights or in slow traffic can take 60+ s
+  // to reach a turn from 100–220 m away.  This is a hard safety cap — the
+  // sweep settles much earlier once driverCommittedTurnDecision fires.
+  const revealAt = new Date(now.getTime() + 120_000);
 
   const { data: market, error: marketError } = await service
     .from("live_betting_markets")

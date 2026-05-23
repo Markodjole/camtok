@@ -45,13 +45,34 @@ export const ZONE_EXIT_CENTER_TRIGGER_M = 70;
 export const ZONE_EXIT_OUTER_TRIGGER_MIN_M = 100;
 
 // ─── next_turn ────────────────────────────────────────────────────────────────
+//
+// Trigger band: wider than the old 90–150 m to give viewers enough runway
+// between market-open and the distance lock (NEXT_TURN_BET_LOCK_DISTANCE_M).
+//
+// At 30 km/h the driver covers ~8.3 m/s.  With the old 90 m min and 70 m lock
+// there were only 20 m of bettable window (≈ 2.4 s after grace).  The new band
+// (100–220 m) plus a 40 m lock leaves 60+ m of runway (≥ 7 s at 30 km/h).
+//
+// Queued-open safety: when a trigger fires at 100–220 m but the market is
+// queued (another market is open), the driver continues moving.  By the time
+// the queue drains the driver may already be within the lock threshold.
+// NEXT_TURN_QUEUED_OPEN_MIN_M is the minimum distance that must remain at the
+// moment the queued market actually opens; if the driver is already closer,
+// the opener is skipped to avoid a market that locks immediately.
 
 /** Nominal distance at which next_turn triggers (m). */
-export const NEXT_TURN_PIN_TARGET_M = 120;
+export const NEXT_TURN_PIN_TARGET_M = 160;
 
 /** Window around the nominal distance: trigger fires while dist is in [MIN, MAX]. */
-export const NEXT_TURN_PIN_MIN_M = 90;
-export const NEXT_TURN_PIN_MAX_M = 150;
+export const NEXT_TURN_PIN_MIN_M = 100;
+export const NEXT_TURN_PIN_MAX_M = 220;
+
+/**
+ * Minimum distance from the turn pin at which a *queued* next_turn open is
+ * allowed to proceed.  Must be noticeably larger than NEXT_TURN_BET_LOCK_DISTANCE_M
+ * so users always have at least a few seconds to bet once the market opens.
+ */
+export const NEXT_TURN_QUEUED_OPEN_MIN_M = 65;
 
 // ─── Legacy alias (used in live-markets.ts client-side lock check) ────────────
 

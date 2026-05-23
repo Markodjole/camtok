@@ -19,7 +19,10 @@ import {
   isValidGridOptionForSpec,
   type CityGridSpecCompact,
 } from "@/lib/live/grid/cityGrid500";
-import { LIVE_BET_LOCK_DISTANCE_M } from "@/lib/live/liveBetLockDistance";
+import {
+  LIVE_BET_LOCK_DISTANCE_M,
+  NEXT_TURN_BET_LOCK_DISTANCE_M,
+} from "@/lib/live/liveBetLockDistance";
 import { liveBetRelaxServer } from "@/lib/live/liveBetRelax";
 import {
   MIN_MARKET_OPEN_MS_BEFORE_LOCK,
@@ -161,7 +164,12 @@ export async function placeLiveBet(input: PlaceLiveBetInput) {
         .maybeSingle()
     : { data: null };
 
+  // next_turn: reject placement when driver is within NEXT_TURN_BET_LOCK_DISTANCE_M
+  // of the stored turn pin.  Gated to next_turn only — other market types that
+  // happen to have turn_point_lat/lng set use the generic LIVE_BET_LOCK_DISTANCE_M
+  // fallback below (kept for legacy markets).
   if (
+    marketType === "next_turn" &&
     !liveBetRelaxServer() &&
     !insideOpenGrace &&
     turnLat != null &&
@@ -174,17 +182,11 @@ export async function placeLiveBet(input: PlaceLiveBetInput) {
       normalized_lng: number | null;
       raw_lat: number;
       raw_lng: number;
-      heading_deg: number | null;
-      speed_mps: number | null;
-      confidence_score: number | null;
     };
     const lat = gps.normalized_lat ?? gps.raw_lat;
     const lng = gps.normalized_lng ?? gps.raw_lng;
-    const dist = metersBetween(
-      { lat, lng },
-      { lat: turnLat, lng: turnLng },
-    );
-    if (dist <= 70) {
+    const dist = metersBetween({ lat, lng }, { lat: turnLat, lng: turnLng });
+    if (dist <= NEXT_TURN_BET_LOCK_DISTANCE_M) {
       return { error: "Too close to turn — betting closed" };
     }
   }

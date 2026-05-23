@@ -15,7 +15,10 @@ import {
 import { drivingRouteStyleBadges } from "@/lib/live/routing/drivingRouteStyle";
 import dynamic from "next/dynamic";
 import type { LiveFeedRow, RoutePoint } from "@/actions/live-feed";
-import { LIVE_BET_LOCK_DISTANCE_M } from "@/lib/live/liveBetLockDistance";
+import {
+  LIVE_BET_LOCK_DISTANCE_M,
+  NEXT_TURN_BET_LOCK_DISTANCE_M,
+} from "@/lib/live/liveBetLockDistance";
 import {
   MIN_MARKET_OPEN_MS_BEFORE_LOCK,
   VIEWER_BET_MIN_DISPLAY_MS,
@@ -107,7 +110,19 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const liveBalance = walletLiveBalance(wallet);
   const [placingOptionId, setPlacingOptionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [mapSheetError, setMapSheetError] = useState<string | null>(null);
+  /**
+   * Error shown inside the active bet sheet.  Stored as `{ marketId, message }`
+   * so it is automatically invisible when a new market opens — no manual clear
+   * needed, no stale "Too close to turn" bleed-through on the next sheet.
+   *
+   * Use the `mapSheetError` / `setMapSheetError` pair declared later in this
+   * component (after `currentMarket` is available) — they are derived from
+   * this raw state and safely scoped to the active market.
+   */
+  const [mapSheetErrorState, setMapSheetErrorState] = useState<{
+    marketId: string;
+    message: string;
+  } | null>(null);
   const [showReplay, setShowReplay] = useState(false);
   /** Big center readout: stake committed, then win (green +) or loss (red -). */
   const [centerMoneyFlash, setCenterMoneyFlash] = useState<{
@@ -432,6 +447,29 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   }, [eligibleTypes.length]);
 
   const currentMarket = room.currentMarket;
+
+  // ── Market-scoped bet-sheet error ─────────────────────────────────────────
+  // `mapSheetError` is the error message visible in the current bet sheet.
+  // It is null whenever the active market differs from the one that produced
+  // the error — no useEffect, no explicit clear on market change needed.
+  const mapSheetError =
+    mapSheetErrorState != null &&
+    mapSheetErrorState.marketId === currentMarket?.id
+      ? mapSheetErrorState.message
+      : null;
+  const setMapSheetError = useCallback(
+    (message: string | null) => {
+      if (!message) {
+        setMapSheetErrorState(null);
+        return;
+      }
+      setMapSheetErrorState(
+        currentMarket?.id ? { marketId: currentMarket.id, message } : null,
+      );
+    },
+    [currentMarket?.id],
+  );
+
   /** Live grid spec only when the current market is a grid round (used for
    *  betting math). */
   const cityGridSpec = useMemo(
@@ -1148,7 +1186,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     (() => {
       if (!viewerBetOfferType) return false;
       if (viewerBetOfferType === "next_turn") {
-        return nextPinDistanceM != null && nextPinDistanceM <= 70;
+        return nextPinDistanceM != null && nextPinDistanceM <= NEXT_TURN_BET_LOCK_DISTANCE_M;
       }
       if (viewerBetOfferType === "next_zone") {
         if (currentMarket?.marketType === "city_grid") return false;

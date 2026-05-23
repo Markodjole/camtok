@@ -7,8 +7,24 @@ export type EngineMarketOption = {
   displayOrder: number;
 };
 
-/** Market types that are engine-driven (outcome resolved via telemetry). */
-export const ENGINE_BET_TYPES = new Set<string>(["zone_exit_time"]);
+/**
+ * Market types whose outcome is resolved by the driving-telemetry engine
+ * and therefore must NOT be settled immediately at `locks_at`.
+ *
+ * Settlement lifecycle for these types:
+ *   1. `locks_at` fires   → `lockMarket` only (bets frozen, no new bets)
+ *   2. sweep each tick    → checks specific outcome condition (turn committed /
+ *                           zone exited / countdown elapsed)
+ *   3. condition met      → `revealAndSettleMarket` (winner + payout)
+ *   4. `reveal_at` safety → force-settle if outcome still pending after timeout
+ *
+ * Contrast with immediate-settle types (e.g. city_grid) which are resolved
+ * at `locks_at` in a single lockAndSettleMarket call.
+ */
+export const ENGINE_BET_TYPES = new Set<string>([
+  "next_turn",     // settle when driver commits turn heading
+  "zone_exit_time", // settle when driver leaves start cell or countdown elapses
+]);
 
 export function isEngineMarketType(marketType: string): boolean {
   return ENGINE_BET_TYPES.has(marketType);
