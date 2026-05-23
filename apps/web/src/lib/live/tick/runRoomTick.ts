@@ -17,6 +17,7 @@ import {
   type ZoneExitPhase,
 } from "@/actions/live-engine-market";
 import { openNextTurnMarketForRoom } from "@/actions/live-next-turn-market";
+import { openStraightStreakMarketForRoom } from "@/actions/live-straight-streak-market";
 import { lockAndSettleMarket, lockMarket, revealAndSettleMarket } from "@/actions/live-settlement";
 import { isEngineMarketType } from "@/lib/live/betting/engineMarketOptions";
 import {
@@ -25,6 +26,8 @@ import {
   NEXT_TURN_PIN_MIN_M,
   NEXT_TURN_PIN_MAX_M,
   NEXT_ZONE_TRIGGER_M,
+  STRAIGHT_STREAK_MIN_LENGTH,
+  STRAIGHT_STREAK_COMMITTED_TURN_DEG,
   ZONE_EXIT_CENTER_TRIGGER_M,
   ZONE_EXIT_OUTER_TRIGGER_MIN_M,
 } from "@/lib/live/betting/betWindowConstants";
@@ -37,6 +40,8 @@ import {
 import { getOrBuildGridSpecForRoom } from "@/lib/live/grid/gridSpecForRoom";
 import { bearingDegrees, metersBetween } from "@/lib/live/routing/geometry";
 import { computeDriverRouteInstruction } from "@/lib/live/routing/computeDriverRouteInstruction";
+import { analyzeStreakAhead } from "@/lib/live/routing/straightStreakAnalyzer";
+import { NEXT_TURN_BETS_ENABLED, STRAIGHT_STREAK_BETS_ENABLED } from "@/lib/live/featureFlags";
 
 // ─── Lock constants ───────────────────────────────────────────────────────────
 
@@ -68,7 +73,17 @@ type QueuedZoneExit = {
   capturedZone: string | null;
   queuedAt: number;
 };
-export type QueuedTrigger = QueuedNextTurn | QueuedNextZone | QueuedZoneExit;
+type QueuedStraightStreak = {
+  type: "straight_streak";
+  /** De-dupe key — "streak:<firstNodeId>" of the straight sequence. */
+  streakKey: string;
+  queuedAt: number;
+};
+export type QueuedTrigger =
+  | QueuedNextTurn
+  | QueuedNextZone
+  | QueuedZoneExit
+  | QueuedStraightStreak;
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
@@ -268,7 +283,7 @@ export async function runRoomTick(
 // ─── Queue helpers ────────────────────────────────────────────────────────────
 
 type FreshTrigger = {
-  type: "next_turn" | "next_zone" | "zone_exit_time";
+  type: "next_turn" | "next_zone" | "zone_exit_time" | "straight_streak";
   pinKey?: string;
   pinId?: number;
   pinLat?: number;
@@ -276,17 +291,21 @@ type FreshTrigger = {
   cellKey?: string;
   phase?: string;
   capturedZone?: string | null;
+  /** straight_streak only: de-dupe key for this straight sequence. */
+  streakKey?: string;
 };
 
 function triggerKey(t: QueuedTrigger): string {
   if (t.type === "next_turn") return `next_turn:${t.pinKey}`;
   if (t.type === "next_zone") return `next_zone:${t.cellKey}`;
+  if (t.type === "straight_streak") return `straight_streak:${t.streakKey}`;
   return `zone_exit_time:${t.cellKey}:${t.phase}`;
 }
 
 function freshTriggerKey(t: FreshTrigger): string {
   if (t.type === "next_turn") return `next_turn:${t.pinKey}`;
   if (t.type === "next_zone") return `next_zone:${t.cellKey}`;
+  if (t.type === "straight_streak") return `straight_streak:${t.streakKey}`;
   return `zone_exit_time:${t.cellKey}:${t.phase}`;
 }
 
@@ -313,6 +332,12 @@ function buildUpdatedQueue(
       });
     } else if (ft.type === "next_zone") {
       alive.push({ type: "next_zone", cellKey: ft.cellKey!, queuedAt: now });
+    } else if (ft.type === "straight_streak") {
+      alive.push({
+        type: "straight_streak",
+        streakKey: ft.streakKey!,
+        queuedAt: now,
+      });
     } else {
       alive.push({
         type: "zone_exit_time",
@@ -411,6 +436,7 @@ async function openFromQueueOrTriggers(
 function triggerPriority(t: QueuedTrigger): number {
   if (t.type === "next_turn") return 1;
   if (t.type === "next_zone") return 2;
+  if (t.type === "straight_streak") return 6;
   const phases: ZoneExitPhase[] = ["entry", "center_70m", "exit_outer"];
   return 3 + phases.indexOf(t.phase as ZoneExitPhase);
 }
@@ -418,6 +444,7 @@ function triggerPriority(t: QueuedTrigger): number {
 function freshPriority(t: FreshTrigger): number {
   if (t.type === "next_turn") return 1;
   if (t.type === "next_zone") return 2;
+  if (t.type === "straight_streak") return 6;
   const phases: ZoneExitPhase[] = ["entry", "center_70m", "exit_outer"];
   return 3 + phases.indexOf(t.phase as ZoneExitPhase);
 }
@@ -441,6 +468,9 @@ async function openQueuedTrigger(
     return openNextTurnMarketForRoom(roomId, { queuedPinId: trigger.pinId, windowMs });
   }
   if (trigger.type === "next_zone") return openCityGridMarketForRoom(roomId, { windowMs });
+  if (trigger.type === "straight_streak") {
+    return openStraightStreakMarketForRoom(roomId, { windowMs, streakKey: trigger.streakKey });
+  }
   return openEngineMarketForRoom(roomId, { phase: trigger.phase, windowMs });
 }
 
@@ -452,6 +482,9 @@ async function openFreshTrigger(
   const windowMs = betWindowMs(remainingFreshCount);
   if (ft.type === "next_turn") return openNextTurnMarketForRoom(roomId, { windowMs });
   if (ft.type === "next_zone") return openCityGridMarketForRoom(roomId, { windowMs });
+  if (ft.type === "straight_streak") {
+    return openStraightStreakMarketForRoom(roomId, { windowMs, streakKey: ft.streakKey });
+  }
   return openEngineMarketForRoom(roomId, { phase: ft.phase as ZoneExitPhase, windowMs });
 }
 
@@ -520,34 +553,70 @@ async function detectEligibleTriggers(
     }
   }
 
-  // ── next_turn trigger ─────────────────────────────────────────────────────
-  try {
-    const drv = await computeDriverRouteInstruction(roomId);
-    const pin = drv.instruction?.pins?.[0] ?? null;
-    if (pin && Number.isFinite(pin.distanceMeters)) {
-      const d = pin.distanceMeters;
-      if (d >= NEXT_TURN_PIN_MIN_M && d <= NEXT_TURN_PIN_MAX_M) {
-        // Guard: pin must be generally ahead of the driver's heading.
-        // If the driver has turned away from the pin direction (> 90°), skip.
-        let pinIsAhead = true;
-        if (driverHeadingDeg != null) {
-          const bearingToPin = metersBetween({ lat, lng }, { lat: pin.lat, lng: pin.lng }) > 1
-            ? bearingDegrees({ lat, lng }, { lat: pin.lat, lng: pin.lng })
-            : driverHeadingDeg;
-          const diff = Math.abs(((driverHeadingDeg - bearingToPin + 540) % 360) - 180);
-          if (diff > 90) pinIsAhead = false;
-        }
-        if (pinIsAhead) {
-          const pinKey = `pin:${pin.id}`;
-          const fired = await hasFiredNextTurn(service, roomId, pinKey);
-          if (!fired) {
-            eligible.push({ type: "next_turn", pinKey, pinId: pin.id, pinLat: pin.lat, pinLng: pin.lng });
+  // ── next_turn + straight_streak triggers ─────────────────────────────────
+  //
+  // Both bet types share a single `computeDriverRouteInstruction` call to
+  // avoid fetching the route twice.  Results are used independently.
+  const needsRoute = NEXT_TURN_BETS_ENABLED || STRAIGHT_STREAK_BETS_ENABLED;
+  let drvResult: Awaited<ReturnType<typeof computeDriverRouteInstruction>> | null = null;
+  if (needsRoute) {
+    try {
+      drvResult = await computeDriverRouteInstruction(roomId);
+    } catch {
+      // routing errors are non-fatal — both bet types degrade gracefully
+    }
+  }
+
+  if (NEXT_TURN_BETS_ENABLED && drvResult) {
+    try {
+      const pin = drvResult.instruction?.pins?.[0] ?? null;
+      if (pin && Number.isFinite(pin.distanceMeters)) {
+        const d = pin.distanceMeters;
+        if (d >= NEXT_TURN_PIN_MIN_M && d <= NEXT_TURN_PIN_MAX_M) {
+          let pinIsAhead = true;
+          if (driverHeadingDeg != null) {
+            const bearingToPin =
+              metersBetween({ lat, lng }, { lat: pin.lat, lng: pin.lng }) > 1
+                ? bearingDegrees({ lat, lng }, { lat: pin.lat, lng: pin.lng })
+                : driverHeadingDeg;
+            const diff = Math.abs(((driverHeadingDeg - bearingToPin + 540) % 360) - 180);
+            if (diff > 90) pinIsAhead = false;
+          }
+          if (pinIsAhead) {
+            const pinKey = `pin:${pin.id}`;
+            const fired = await hasFiredNextTurn(service, roomId, pinKey);
+            if (!fired) {
+              eligible.push({
+                type: "next_turn",
+                pinKey,
+                pinId: pin.id,
+                pinLat: pin.lat,
+                pinLng: pin.lng,
+              });
+            }
           }
         }
       }
+    } catch {
+      // next_turn routing errors are non-fatal
     }
-  } catch {
-    // routing errors are non-fatal
+  }
+
+  if (STRAIGHT_STREAK_BETS_ENABLED && drvResult?.instruction) {
+    try {
+      const { pins } = drvResult.instruction;
+      if (pins.length >= STRAIGHT_STREAK_MIN_LENGTH) {
+        const analysis = analyzeStreakAhead(drvResult.planningPolyline, pins);
+        if (analysis.streakKey) {
+          const fired = await hasFiredStraightStreak(service, roomId, analysis.streakKey);
+          if (!fired) {
+            eligible.push({ type: "straight_streak", streakKey: analysis.streakKey });
+          }
+        }
+      }
+    } catch {
+      // straight_streak analysis errors are non-fatal
+    }
   }
 
   return eligible;
@@ -593,6 +662,30 @@ async function hasFiredNextTurn(
     try {
       const meta = JSON.parse((row as { subtitle: string | null }).subtitle ?? "{}") as { pinKey?: string };
       return meta.pinKey === pinKey;
+    } catch {
+      return false;
+    }
+  });
+}
+
+async function hasFiredStraightStreak(
+  service: Awaited<ReturnType<typeof createServiceClient>>,
+  roomId: string,
+  streakKey: string,
+): Promise<boolean> {
+  const { data } = await service
+    .from("live_betting_markets")
+    .select("subtitle")
+    .eq("room_id", roomId)
+    .eq("market_type", "straight_streak")
+    .order("opens_at", { ascending: false })
+    .limit(20);
+  return (data ?? []).some((row) => {
+    try {
+      const meta = JSON.parse(
+        (row as { subtitle: string | null }).subtitle ?? "{}",
+      ) as { streakKey?: string };
+      return meta.streakKey === streakKey;
     } catch {
       return false;
     }
@@ -710,6 +803,16 @@ async function sweepPendingSettlements(
       continue;
     }
 
+    if (marketType === "straight_streak") {
+      const committed = await driverCommittedStreakDecision(service, { row, sessionId });
+      if (committed) {
+        console.log(`[tick:sweep] straight_streak turn committed — settling ${mid}`);
+        await revealAndSettleMarket(mid);
+        notes.push({ marketId: mid, reason: "streak_turn_committed" });
+      }
+      continue;
+    }
+
     if (isEngineMarketType(marketType)) {
       const settle = await shouldSettleEngineMarket(service, {
         marketId: mid,
@@ -820,6 +923,51 @@ async function driverCommittedTurnDecision(
   // Straight/forward case: settle once the vehicle has crossed the pin area
   // and is moving away again, even if it never hits the exact GPS point.
   return minDistance <= 35 && latestDistance >= minDistance + 12;
+}
+
+/**
+ * Decide whether a `straight_streak` market is ready for settlement.
+ *
+ * Returns `true` once the first heading to last heading span since `opens_at`
+ * exceeds STRAIGHT_STREAK_COMMITTED_TURN_DEG — meaning the driver has clearly
+ * taken a turn, ending the straight streak.  The resolver will then count how
+ * many crossroads they passed straight through.
+ *
+ * Note: `reveal_at` serves as the safety-cap for cases where the driver keeps
+ * going straight indefinitely (streak_over).
+ */
+async function driverCommittedStreakDecision(
+  service: Awaited<ReturnType<typeof createServiceClient>>,
+  args: { row: unknown; sessionId: string | null },
+): Promise<boolean> {
+  if (!args.sessionId) return false;
+  const opensAt =
+    (args.row as { opens_at?: string | null }).opens_at ??
+    new Date(Date.now() - 60_000).toISOString();
+
+  const { data: points } = await service
+    .from("live_route_snapshots")
+    .select("heading_deg")
+    .eq("live_session_id", args.sessionId)
+    .gte("recorded_at", opensAt)
+    .order("recorded_at", { ascending: true })
+    .limit(120);
+
+  if (!points || points.length < 4) return false;
+
+  const headings = (
+    points as Array<{ heading_deg: number | null }>
+  )
+    .map((p) => p.heading_deg)
+    .filter((h): h is number => h != null);
+
+  if (headings.length < 2) return false;
+
+  const firstHeading = headings[0]!;
+  const lastHeading = headings[headings.length - 1]!;
+  const delta = Math.abs(angleDelta(firstHeading, lastHeading));
+
+  return delta >= STRAIGHT_STREAK_COMMITTED_TURN_DEG;
 }
 
 function angleDelta(fromDeg: number, toDeg: number): number {

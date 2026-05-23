@@ -16,7 +16,8 @@ export type RoundState =
 export type BetTypeV2 =
   | "next_turn"
   | "next_zone"
-  | "zone_exit_time";
+  | "zone_exit_time"
+  | "straight_streak";
 
 export type VoidReasonV2 =
   | "gps_uncertain"

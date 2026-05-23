@@ -22,8 +22,9 @@ export type EngineMarketOption = {
  * at `locks_at` in a single lockAndSettleMarket call.
  */
 export const ENGINE_BET_TYPES = new Set<string>([
-  "next_turn",     // settle when driver commits turn heading
-  "zone_exit_time", // settle when driver leaves start cell or countdown elapses
+  "next_turn",       // settle when driver commits turn heading
+  "zone_exit_time",  // settle when driver leaves start cell or countdown elapses
+  "straight_streak", // settle when driver takes a non-straight at any intersection
 ]);
 
 export function isEngineMarketType(marketType: string): boolean {
@@ -95,6 +96,12 @@ export function provisionalOptionsForBetType(type: BetTypeV2): EngineMarketOptio
         { id: "exit_under", label: "Under estimated time", shortLabel: "< ? sec", displayOrder: 0 },
         { id: "exit_at",    label: "Exactly estimated time", shortLabel: "= ? sec", displayOrder: 1 },
         { id: "exit_over",  label: "Over estimated time",  shortLabel: "> ? sec", displayOrder: 2 },
+      ];
+    case "straight_streak":
+      return [
+        { id: "streak_under", label: "Fewer straights than average", shortLabel: "< avg", displayOrder: 0 },
+        { id: "streak_at",    label: "About average straights",       shortLabel: "= avg", displayOrder: 1 },
+        { id: "streak_over",  label: "More straights than average",   shortLabel: "> avg", displayOrder: 2 },
       ];
     default:
       return [];

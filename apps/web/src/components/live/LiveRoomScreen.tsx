@@ -13,6 +13,7 @@ import {
   parseGridOptionId,
 } from "@/lib/live/grid/cityGrid500";
 import { drivingRouteStyleBadges } from "@/lib/live/routing/drivingRouteStyle";
+import { NEXT_TURN_BETS_ENABLED } from "@/lib/live/featureFlags";
 import dynamic from "next/dynamic";
 import type { LiveFeedRow, RoutePoint } from "@/actions/live-feed";
 import {
@@ -56,6 +57,7 @@ import { getWallet } from "@/actions/wallet";
 import { walletLiveBalance } from "@/lib/live/walletBalance";
 import type { TrafficCamera } from "@/app/api/live/traffic-cameras/route";
 import { TrafficCameraPanel } from "./TrafficCameraPanel";
+import { StraightStreakTracker } from "./StraightStreakTracker";
 
 const LiveMap = dynamic(() => import("./LiveMap").then((m) => m.LiveMap), {
   ssr: false,
@@ -1644,6 +1646,13 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   useEffect(() => {
     let cancelled = false;
     const fetchRoute = async () => {
+      // next_turn is suspended — skip the route fetch entirely so no pins
+      // or approach lines are shown on the map.
+      if (!NEXT_TURN_BETS_ENABLED) {
+        setDriverPins(null);
+        setApproachLine(null);
+        return;
+      }
       try {
         const r = await fetch(`/api/live/rooms/${room.roomId}/driver-route`, {
           cache: "no-store",
@@ -2171,6 +2180,16 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               : null
           }
           oneTapOptionBet={currentMarket.marketType !== "city_grid"}
+        />
+      ) : null}
+
+      {/* ── Straight streak passage tracker ──────────────────── */}
+      {currentMarket?.marketType === "straight_streak" &&
+        viewerHasBetOnCurrentMarket ? (
+        <StraightStreakTracker
+          marketMeta={currentMarket.meta}
+          marketId={currentMarket.id}
+          vehiclePosition={routeLast}
         />
       ) : null}
 

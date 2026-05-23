@@ -536,7 +536,7 @@ export async function computeDriverRouteInstruction(
   roomId: string,
 ): Promise<
   | { instruction: null; reason: string }
-  | { instruction: Instruction; planning: DriverRoutePlanningMeta }
+  | { instruction: Instruction; planningPolyline: LatLng[]; planning: DriverRoutePlanningMeta }
 > {
   const res = await getLiveRoomDetail(roomId);
   const room = res.room;
@@ -645,6 +645,12 @@ export async function computeDriverRouteInstruction(
 
   return {
     instruction,
+    /**
+     * Full planning polyline used to project crossroads.  Consumers that need
+     * to analyse the route shape at each pin (e.g. straight_streak bearing
+     * computation) should read this rather than re-fetching the route.
+     */
+    planningPolyline: polyline,
     planning: {
       source: planning.source,
       destinationAware:

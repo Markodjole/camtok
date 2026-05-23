@@ -5,6 +5,7 @@ const LABELS: Record<BetTypeV2, string> = {
   next_turn: "Next junction",
   next_zone: "Next grid square",
   zone_exit_time: "Time to exit zone",
+  straight_streak: "Straights in a row",
 };
 
 export function betTypeV2Label(type: BetTypeV2): string {

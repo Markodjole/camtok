@@ -13,6 +13,7 @@ import { isEngineMarketType } from "@/lib/live/betting/engineMarketOptions";
 import { cityGridResolver } from "./cityGridResolver";
 import { legacyDecisionNodeResolver } from "./legacyDecisionNodeResolver";
 import { nextTurnResolver } from "./nextTurnResolver";
+import { straightStreakResolver } from "./straightStreakResolver";
 import { zoneExitTimeResolver } from "./zoneExitTimeResolver";
 
 export type {
@@ -33,6 +34,7 @@ const resolverRegistry = new Map<string, MarketResolverFnLocal>([
   ["next_turn", nextTurnResolver],
   ["city_grid", cityGridResolver],
   ["zone_exit_time", zoneExitTimeResolver],
+  ["straight_streak", straightStreakResolver],
 ]);
 
 /**

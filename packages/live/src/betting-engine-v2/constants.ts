@@ -33,4 +33,5 @@ export const BET_TYPE_PRIORITY_V2: Record<BetTypeV2, number> = {
   next_turn: 100,
   next_zone: 80,
   zone_exit_time: 75,
+  straight_streak: 60,
 };

@@ -71,6 +71,16 @@ const config: Config = {
           from: { opacity: "0" },
           to: { opacity: "1" },
         },
+        "float-up": {
+          "0%":   { opacity: "1", transform: "translateY(0) scale(1)" },
+          "60%":  { opacity: "1", transform: "translateY(-22px) scale(1.15)" },
+          "100%": { opacity: "0", transform: "translateY(-44px) scale(0.9)" },
+        },
+        "pop-in": {
+          "0%":   { opacity: "0", transform: "scale(0.7)" },
+          "60%":  { opacity: "1", transform: "scale(1.12)" },
+          "100%": { opacity: "1", transform: "scale(1)" },
+        },
         pulse: {
           "0%, 100%": { opacity: "1" },
           "50%": { opacity: "0.5" },
@@ -80,6 +90,8 @@ const config: Config = {
         "slide-up": "slide-up 0.3s ease-out",
         "slide-down": "slide-down 0.3s ease-in",
         "fade-in": "fade-in 0.2s ease-out",
+        "float-up": "float-up 0.9s ease-out forwards",
+        "pop-in": "pop-in 0.25s ease-out forwards",
       },
     },
   },

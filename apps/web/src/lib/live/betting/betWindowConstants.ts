@@ -74,6 +74,39 @@ export const NEXT_TURN_PIN_MAX_M = 220;
  */
 export const NEXT_TURN_QUEUED_OPEN_MIN_M = 65;
 
+// ─── straight_streak ──────────────────────────────────────────────────────────
+//
+// A market that asks: "how many consecutive straight-through intersections
+// will the driver take before turning?"
+//
+//   TRIGGER: detected when the planning route shows ≥ STRAIGHT_STREAK_MIN_LENGTH
+//            consecutive crossroads with bearing change < STRAIGHT_THRESHOLD_DEG.
+//   OPTIONS: < N  /  = N (±1)  /  > N  where N = expected streak at open time.
+//   SETTLE:  when GPS heading change since opens_at exceeds
+//            STRAIGHT_STREAK_COMMITTED_TURN_DEG, or reveal_at safety fires.
+
+/** Minimum expected straight count for a market to open (must be interesting). */
+export const STRAIGHT_STREAK_MIN_LENGTH = 2;
+
+/**
+ * A crossroad is classified as "straight" on the planned route when the
+ * bearing change of the polyline at that point is below this threshold.
+ */
+export const STRAIGHT_THRESHOLD_DEG = 25;
+
+/**
+ * Proximity radius (meters) used by the resolver to decide whether a GPS
+ * snapshot is "at" a stored intersection.
+ */
+export const STREAK_CROSSROAD_PROXIMITY_M = 45;
+
+/**
+ * Heading-change threshold (degrees, first→last GPS since opens_at) at which
+ * the sweep decides the driver has committed to a turn and settlement is ready.
+ * Larger than STRAIGHT_THRESHOLD_DEG to avoid early settle on GPS noise.
+ */
+export const STRAIGHT_STREAK_COMMITTED_TURN_DEG = 40;
+
 // ─── Legacy alias (used in live-markets.ts client-side lock check) ────────────
 
 /** @deprecated use NEXT_ZONE_TRIGGER_M */
