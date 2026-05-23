@@ -49,9 +49,13 @@ export function LiveEventToasts({
   const seenEvent = useRef<Set<string>>(new Set());
   const seenSettle = useRef<Set<string>>(new Set());
   const firstBoot = useRef(true);
+  // Timestamp of the last roomId mount — used to decide which pre-existing
+  // settlements to skip on the first poll (avoids replaying old results).
+  const mountTimeMs = useRef(Date.now());
 
   useEffect(() => {
     firstBoot.current = true;
+    mountTimeMs.current = Date.now();
     seenEvent.current.clear();
     seenSettle.current.clear();
   }, [roomId]);
@@ -95,12 +99,22 @@ export function LiveEventToasts({
         });
 
         if (firstBoot.current) {
-          for (const e of j.events ?? []) seenEvent.current.add(e.id);
-          for (const s of j.mySettlements ?? []) {
-            if (s.settled_at) seenSettle.current.add(`${s.market_id}|${s.settled_at}`);
-          }
           firstBoot.current = false;
-          return;
+          // Suppress events that existed before this component mounted.
+          for (const e of j.events ?? []) seenEvent.current.add(e.id);
+          // Suppress settlements that were already finalised well before mount
+          // (>30 s ago). Settlements within 30 s of mount may still need to fire
+          // — e.g. a fast zone_exit_time bet that settled while the page loaded.
+          const cutoffMs = mountTimeMs.current - 30_000;
+          for (const s of j.mySettlements ?? []) {
+            if (!s.settled_at) continue;
+            const settledMs = new Date(s.settled_at).getTime();
+            if (settledMs < cutoffMs) {
+              seenSettle.current.add(`${s.market_id}|${s.settled_at}`);
+            }
+          }
+          // Re-run the settlement loop below immediately so recent settlements
+          // that weren't suppressed are delivered to onSettlement.
         }
 
         for (const e of j.events ?? []) {

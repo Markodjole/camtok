@@ -139,12 +139,21 @@ export async function runRoomTick(
   const phase = (room as { phase: string }).phase;
   const marketId = (room as { current_market_id: string | null }).current_market_id;
 
-  // ─── 1. Lock + settle expired market ────────────────────────────────────
+  // ─── 1. Lock (and optionally settle) expired market ─────────────────────
   //
-  // When the bet window expires, lock and settle in one atomic call so the
-  // room's `current_market_id` pointer stays set the entire time.
-  // `settleMarketWithWinner` / `refundMarket` clear it only after payout is
-  // written — viewers never see a gap where there is no active market.
+  // When the bet window (locks_at) expires:
+  //
+  //   • next_turn / city_grid / other non-engine types:
+  //       `lockAndSettleMarket` — lock bets AND resolve + pay in one tick.
+  //       Room pointer cleared by payout; viewers never see a gap.
+  //
+  //   • zone_exit_time (engine-driven):
+  //       `lockMarket` ONLY — freeze bets but defer settlement to
+  //       `sweepPendingSettlements` which calls `shouldSettleEngineMarket`
+  //       each tick. Settling here would resolve as exit_over because the
+  //       driver is almost always still inside the start cell at 8 s.
+  //       Settlement fires when the driver actually leaves OR estimatedSec
+  //       elapses, which can be 30–180 s after open.
   if (phase === "market_open" && marketId) {
     const { data: market } = await service
       .from("live_betting_markets")
@@ -159,9 +168,19 @@ export async function runRoomTick(
         mType === "next_turn" || mType === "city_grid" || mType === "zone_exit_time";
       const shouldLockNow = status === "open" && (Date.now() >= locksAtMs || !isActiveType);
       if (shouldLockNow) {
-        // Lock → resolve winner → settle — all in one tick.
-        // Room pointer is cleared inside lockAndSettleMarket after payouts.
-        await lockAndSettleMarket(marketId);
+        if (isEngineMarketType(mType)) {
+          // Lock bets only — settlement deferred to sweep (shouldSettleEngineMarket).
+          console.log(
+            `[tick] locking engine market ${marketId} (${mType}) — settlement deferred`,
+            { roomId, locksAt: (market as { locks_at: string }).locks_at },
+          );
+          await lockMarket(marketId);
+          // Room stays in market_locked phase with current_market_id intact
+          // so the client keeps showing the ZoneExitCountdownWidget.
+        } else {
+          // Lock → resolve winner → pay — all in one tick.
+          await lockAndSettleMarket(marketId);
+        }
       }
     }
   }
@@ -207,6 +226,27 @@ export async function runRoomTick(
   }
 
   if (phaseNow === "market_locked" && marketId) {
+    // Check market type before settling.  Engine-driven markets (zone_exit_time)
+    // must wait for sweepPendingSettlements / shouldSettleEngineMarket — settling
+    // here would fire before the driver has had a chance to exit the zone.
+    const { data: lockedMarket } = await service
+      .from("live_betting_markets")
+      .select("market_type")
+      .eq("id", marketId)
+      .maybeSingle();
+    const lockedType = (lockedMarket as { market_type?: string } | null)?.market_type ?? "";
+
+    if (isEngineMarketType(lockedType)) {
+      // Correct state: locked but waiting for engine settlement condition.
+      // sweepPendingSettlements will settle this when shouldSettleEngineMarket fires.
+      console.log(
+        `[tick] engine market ${marketId} (${lockedType}) locked — awaiting sweep`,
+        { roomId },
+      );
+      return { action: "engine_market_locked_awaiting_sweep", marketId, settled: settleNotes };
+    }
+
+    // Non-engine: settle immediately (legacy path for next_turn / city_grid stuck in locked).
     const r = await revealAndSettleMarket(marketId);
     if ("error" in r) {
       // Unstick: market may already be settled or the row disappeared.
@@ -644,6 +684,7 @@ async function sweepPendingSettlements(
     const sessionId = (row as { live_session_id: string | null }).live_session_id;
 
     if (Number.isFinite(revealAtMs) && nowMs >= revealAtMs) {
+      console.log(`[tick:sweep] reveal_at timeout — settling ${mid} (${marketType})`);
       await revealAndSettleMarket(mid);
       notes.push({ marketId: mid, reason: "reveal_timeout" });
       continue;
@@ -652,6 +693,7 @@ async function sweepPendingSettlements(
     if (marketType === "city_grid") {
       const crossed = await driverCrossedCell(service, { row, sessionId });
       if (crossed) {
+        console.log(`[tick:sweep] city_grid cell crossed — settling ${mid}`);
         await revealAndSettleMarket(mid);
         notes.push({ marketId: mid, reason: "cell_crossed" });
       }
@@ -661,6 +703,7 @@ async function sweepPendingSettlements(
     if (marketType === "next_turn") {
       const committed = await driverCommittedTurnDecision(service, { row, sessionId });
       if (committed) {
+        console.log(`[tick:sweep] next_turn committed — settling ${mid}`);
         await revealAndSettleMarket(mid);
         notes.push({ marketId: mid, reason: "turn_committed" });
       }
@@ -675,6 +718,10 @@ async function sweepPendingSettlements(
         liveSessionId: sessionId,
         roomId,
       });
+      console.log(
+        `[tick:sweep] shouldSettleEngineMarket ${mid} (${marketType}) → ${settle}`,
+        { roomId, locksAt: locksAtStr },
+      );
       if (settle) {
         await revealAndSettleMarket(mid);
         notes.push({ marketId: mid, reason: `engine_${marketType}` });

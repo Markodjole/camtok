@@ -347,18 +347,24 @@ export async function shouldSettleEngineMarket(
   }
   if (!startCellKey) return false;
 
+  const opensAtMs = Date.parse(
+    (marketRow as { opens_at: string | null } | null)?.opens_at ?? "",
+  );
+
   if (estimatedSec != null) {
-    const opensAtMs = Date.parse(
-      (marketRow as { opens_at: string | null } | null)?.opens_at ?? "",
-    );
     if (Number.isFinite(opensAtMs) && Date.now() >= opensAtMs + estimatedSec * 1000) {
+      console.log(`[shouldSettleEngineMarket] timer elapsed`, {
+        marketId,
+        estimatedSec,
+        elapsedSec: Math.round((Date.now() - opensAtMs) / 1000),
+      });
       return true;
     }
   }
 
   const { data: latestGps } = await service
     .from("live_route_snapshots")
-    .select("normalized_lat,normalized_lng,raw_lat,raw_lng")
+    .select("normalized_lat,normalized_lng,raw_lat,raw_lng,recorded_at")
     .eq("live_session_id", liveSessionId)
     .order("recorded_at", { ascending: false })
     .limit(1)
@@ -370,6 +376,7 @@ export async function shouldSettleEngineMarket(
     normalized_lng: number | null;
     raw_lat: number;
     raw_lng: number;
+    recorded_at: string;
   };
   const currentCell = cellIdForPosition(
     gridSpec,
@@ -380,7 +387,20 @@ export async function shouldSettleEngineMarket(
   const parsed = parseGridOptionId(currentCell);
   if (!parsed) return false;
 
-  return `cell:r${parsed.row}:c${parsed.col}` !== startCellKey;
+  const currentCellKey = `cell:r${parsed.row}:c${parsed.col}`;
+  const leftZone = currentCellKey !== startCellKey;
+  if (leftZone) {
+    console.log(`[shouldSettleEngineMarket] driver left zone`, {
+      marketId,
+      startCellKey,
+      currentCellKey,
+      elapsedSec: Number.isFinite(opensAtMs)
+        ? Math.round((Date.now() - opensAtMs) / 1000)
+        : null,
+      gpsAt: g.recorded_at,
+    });
+  }
+  return leftZone;
 }
 
 // ─── Grid center helper ───────────────────────────────────────────────────────

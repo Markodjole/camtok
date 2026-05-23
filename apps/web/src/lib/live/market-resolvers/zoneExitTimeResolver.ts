@@ -82,15 +82,23 @@ export async function zoneExitTimeResolver(
   const countdownElapsed =
     Number.isFinite(opensAtMs) && Date.now() >= opensAtMs + estimatedSec * 1000;
 
+  const logCtx = {
+    marketId: market.id,
+    startCellKey,
+    currentCellKey,
+    estimatedSec,
+    opensAt: market.opens_at,
+    latestGpsAt: g.recorded_at,
+    countdownElapsed,
+  };
+
   // Still in start cell — driver took too long or timer expired while they were inside.
   if (!currentCellKey || currentCellKey === startCellKey) {
-    return {
-      outcome: "win",
-      optionId: "exit_over",
-      reason: countdownElapsed
-        ? `zone_exit_countdown_elapsed_est${estimatedSec}s`
-        : `zone_exit_reveal_at_still_in_zone_est${estimatedSec}s`,
-    };
+    const reason = countdownElapsed
+      ? `zone_exit_countdown_elapsed_est${estimatedSec}s`
+      : `zone_exit_reveal_at_still_in_zone_est${estimatedSec}s`;
+    console.log(`[zoneExitResolver] exit_over (still in zone)`, { ...logCtx, reason });
+    return { outcome: "win", optionId: "exit_over", reason };
   }
 
   const exitAtMs = new Date(g.recorded_at).getTime();
@@ -104,10 +112,8 @@ export async function zoneExitTimeResolver(
   const hi = estimatedSec * 1.2;
   const optionId =
     elapsedSec < lo ? "exit_under" : elapsedSec <= hi ? "exit_at" : "exit_over";
+  const reason = `zone_exit_${Math.round(elapsedSec)}s_est${estimatedSec}s`;
 
-  return {
-    outcome: "win",
-    optionId,
-    reason: `zone_exit_${Math.round(elapsedSec)}s_est${estimatedSec}s`,
-  };
+  console.log(`[zoneExitResolver] ${optionId}`, { ...logCtx, elapsedSec, lo, hi, reason });
+  return { outcome: "win", optionId, reason };
 }
