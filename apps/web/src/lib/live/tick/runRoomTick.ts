@@ -217,7 +217,10 @@ export async function runRoomTick(
       const mType = (market as { market_type: string }).market_type;
       const locksAtMs = new Date((market as { locks_at: string }).locks_at).getTime();
       const isActiveType =
-        mType === "next_turn" || mType === "city_grid" || mType === "zone_exit_time";
+        mType === "next_turn" ||
+        mType === "city_grid" ||
+        mType === "zone_exit_time" ||
+        mType === "straight_streak"; // deferred-settle: must wait for locks_at
       const shouldLockNow = status === "open" && (Date.now() >= locksAtMs || !isActiveType);
       if (shouldLockNow) {
         if (isEngineMarketType(mType)) {
@@ -567,7 +570,7 @@ async function detectEligibleTriggers(
         const cellKey = `cell:r${parsed.row}:c${parsed.col}`;
 
         if (distM <= NEXT_ZONE_TRIGGER_M) {
-          const fired = await hasFiredCityGrid(service, roomId, cellKey);
+          const fired = await hasFiredCityGrid(service, sessionId, cellKey);
           if (!fired) eligible.push({ type: "next_zone", cellKey });
         }
 
@@ -621,7 +624,7 @@ async function detectEligibleTriggers(
           }
           if (pinIsAhead) {
             const pinKey = `pin:${pin.id}`;
-            const fired = await hasFiredNextTurn(service, roomId, pinKey);
+            const fired = await hasFiredNextTurn(service, sessionId, pinKey);
             if (!fired) {
               eligible.push({
                 type: "next_turn",
@@ -645,7 +648,7 @@ async function detectEligibleTriggers(
       if (pins.length >= STRAIGHT_STREAK_MIN_LENGTH) {
         const analysis = analyzeStreakAhead(drvResult.planningPolyline, pins);
         if (analysis.streakKey) {
-          const fired = await hasFiredStraightStreak(service, roomId, analysis.streakKey);
+          const fired = await hasFiredStraightStreak(service, sessionId, analysis.streakKey);
           if (!fired) {
             eligible.push({ type: "straight_streak", streakKey: analysis.streakKey });
           }
@@ -663,13 +666,13 @@ async function detectEligibleTriggers(
 
 async function hasFiredCityGrid(
   service: Awaited<ReturnType<typeof createServiceClient>>,
-  roomId: string,
+  sessionId: string,
   cellKey: string,
 ): Promise<boolean> {
   const { data } = await service
     .from("live_betting_markets")
     .select("subtitle")
-    .eq("room_id", roomId)
+    .eq("live_session_id", sessionId)
     .eq("market_type", "city_grid")
     .order("opens_at", { ascending: false })
     .limit(30);
@@ -685,13 +688,13 @@ async function hasFiredCityGrid(
 
 async function hasFiredNextTurn(
   service: Awaited<ReturnType<typeof createServiceClient>>,
-  roomId: string,
+  sessionId: string,
   pinKey: string,
 ): Promise<boolean> {
   const { data } = await service
     .from("live_betting_markets")
     .select("subtitle")
-    .eq("room_id", roomId)
+    .eq("live_session_id", sessionId)
     .eq("market_type", "next_turn")
     .order("opens_at", { ascending: false })
     .limit(20);
@@ -707,13 +710,13 @@ async function hasFiredNextTurn(
 
 async function hasFiredStraightStreak(
   service: Awaited<ReturnType<typeof createServiceClient>>,
-  roomId: string,
+  sessionId: string,
   streakKey: string,
 ): Promise<boolean> {
   const { data } = await service
     .from("live_betting_markets")
     .select("subtitle")
-    .eq("room_id", roomId)
+    .eq("live_session_id", sessionId)
     .eq("market_type", "straight_streak")
     .order("opens_at", { ascending: false })
     .limit(20);
