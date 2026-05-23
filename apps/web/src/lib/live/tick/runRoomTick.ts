@@ -43,6 +43,43 @@ import { computeDriverRouteInstruction } from "@/lib/live/routing/computeDriverR
 import { analyzeStreakAhead } from "@/lib/live/routing/straightStreakAnalyzer";
 import { NEXT_TURN_BETS_ENABLED, STRAIGHT_STREAK_BETS_ENABLED } from "@/lib/live/featureFlags";
 
+// ─── Sweep diagnostic log ─────────────────────────────────────────────────────
+//
+// Ring buffer (last LOG_RING_SIZE entries) per marketId. Written by every sweep
+// pass so you can always call GET /api/live/market-debug/[id] and see exactly
+// why a market did or didn't settle on recent ticks.
+//
+// In-process only: survives between ticks on a persistent Node process (the
+// normal deployment). Lost on cold start; the debug endpoint falls back to a
+// live re-analysis in that case.
+
+const LOG_RING_SIZE = 30;
+
+export type SweepLogEntry = {
+  ts: number;       // Date.now() when this entry was written
+  marketType: string;
+  check: string;    // what condition was evaluated
+  result: boolean;  // outcome of the check
+  detail: string;   // human-readable context
+};
+
+const MARKET_SWEEP_LOG = new Map<string, SweepLogEntry[]>();
+
+function appendSweepLog(
+  marketId: string,
+  entry: Omit<SweepLogEntry, "ts">,
+): void {
+  const list = MARKET_SWEEP_LOG.get(marketId) ?? [];
+  list.push({ ts: Date.now(), ...entry });
+  if (list.length > LOG_RING_SIZE) list.splice(0, list.length - LOG_RING_SIZE);
+  MARKET_SWEEP_LOG.set(marketId, list);
+}
+
+/** Read the sweep log for one market (newest-first). */
+export function getMarketSweepLog(marketId: string): SweepLogEntry[] {
+  return [...(MARKET_SWEEP_LOG.get(marketId) ?? [])].reverse();
+}
+
 // ─── Lock constants ───────────────────────────────────────────────────────────
 
 /** Lock TTL — a tick that crashes without releasing heals after this. */
@@ -746,15 +783,19 @@ async function sweepPendingSettlements(
     if (!isEngineMarketType(mType)) continue;
     const mid = (row as { id: string }).id;
     const sessionId = (row as { live_session_id: string | null }).live_session_id;
-    const shouldSettle = await shouldSettleEngineMarket(service, {
-      marketId: mid,
-      marketType: mType,
-      liveSessionId: sessionId,
-      roomId,
-    });
-    if (!shouldSettle) continue;
-    // Atomic: lock → resolve winner → pay out. Room pointer cleared by payout.
-    await lockAndSettleMarket(mid);
+    try {
+      const shouldSettle = await shouldSettleEngineMarket(service, {
+        marketId: mid,
+        marketType: mType,
+        liveSessionId: sessionId,
+        roomId,
+      });
+      if (!shouldSettle) continue;
+      // Atomic: lock → resolve winner → pay out. Room pointer cleared by payout.
+      await lockAndSettleMarket(mid);
+    } catch (err) {
+      console.error(`[tick:sweep] ERROR in open-market early-settle for ${mid} (${mType}):`, err);
+    }
   }
 
   // Re-fetch only locked markets to settle.
@@ -775,60 +816,97 @@ async function sweepPendingSettlements(
     const locksAtStr = (row as { locks_at: string }).locks_at;
     const revealAtMs = new Date((row as { reveal_at: string }).reveal_at).getTime();
     const sessionId = (row as { live_session_id: string | null }).live_session_id;
+    const opensAtStr = (row as { opens_at: string }).opens_at;
 
-    if (Number.isFinite(revealAtMs) && nowMs >= revealAtMs) {
-      console.log(`[tick:sweep] reveal_at timeout — settling ${mid} (${marketType})`);
-      await revealAndSettleMarket(mid);
-      notes.push({ marketId: mid, reason: "reveal_timeout" });
-      continue;
-    }
+    // ── Per-market error isolation ──────────────────────────────────────────
+    // A single failed settlement must NEVER abort the loop for other markets.
+    try {
+      let settled = false;
+      let reason = "pending";
 
-    if (marketType === "city_grid") {
-      const crossed = await driverCrossedCell(service, { row, sessionId });
-      if (crossed) {
-        console.log(`[tick:sweep] city_grid cell crossed — settling ${mid}`);
+      if (Number.isFinite(revealAtMs) && nowMs >= revealAtMs) {
+        appendSweepLog(mid, {
+          marketType,
+          check: "reveal_at",
+          result: true,
+          detail: `reveal_at passed by ${Math.round((nowMs - revealAtMs) / 1000)}s`,
+        });
+        console.log(`[tick:sweep] reveal_at timeout — settling ${mid} (${marketType})`);
         await revealAndSettleMarket(mid);
-        notes.push({ marketId: mid, reason: "cell_crossed" });
+        settled = true;
+        reason = "reveal_timeout";
+      } else if (marketType === "city_grid") {
+        const crossed = await driverCrossedCell(service, { row, sessionId });
+        appendSweepLog(mid, { marketType, check: "cell_crossed", result: crossed, detail: "" });
+        if (crossed) {
+          console.log(`[tick:sweep] city_grid cell crossed — settling ${mid}`);
+          await revealAndSettleMarket(mid);
+          settled = true;
+          reason = "cell_crossed";
+        }
+      } else if (marketType === "next_turn") {
+        const committed = await driverCommittedTurnDecision(service, { row, sessionId });
+        appendSweepLog(mid, { marketType, check: "turn_committed", result: committed, detail: "" });
+        if (committed) {
+          console.log(`[tick:sweep] next_turn committed — settling ${mid}`);
+          await revealAndSettleMarket(mid);
+          settled = true;
+          reason = "turn_committed";
+        }
+      } else if (marketType === "straight_streak") {
+        const committed = await driverCommittedStreakDecision(service, { row, sessionId });
+        appendSweepLog(mid, {
+          marketType,
+          check: "streak_turn_committed",
+          result: committed,
+          detail: `opensAt=${opensAtStr}`,
+        });
+        if (committed) {
+          console.log(`[tick:sweep] straight_streak turn committed — settling ${mid}`);
+          await revealAndSettleMarket(mid);
+          settled = true;
+          reason = "streak_turn_committed";
+        }
+      } else if (isEngineMarketType(marketType)) {
+        const settle = await shouldSettleEngineMarket(service, {
+          marketId: mid,
+          marketType,
+          locksAt: locksAtStr,
+          liveSessionId: sessionId,
+          roomId,
+        });
+        appendSweepLog(mid, {
+          marketType,
+          check: "engine_settle",
+          result: settle,
+          detail: `locksAt=${locksAtStr}`,
+        });
+        console.log(
+          `[tick:sweep] shouldSettleEngineMarket ${mid} (${marketType}) → ${settle}`,
+          { roomId, locksAt: locksAtStr },
+        );
+        if (settle) {
+          await revealAndSettleMarket(mid);
+          settled = true;
+          reason = `engine_${marketType}`;
+        }
+      } else {
+        appendSweepLog(mid, {
+          marketType,
+          check: "no_handler",
+          result: false,
+          detail: "market type has no sweep handler",
+        });
       }
-      continue;
-    }
 
-    if (marketType === "next_turn") {
-      const committed = await driverCommittedTurnDecision(service, { row, sessionId });
-      if (committed) {
-        console.log(`[tick:sweep] next_turn committed — settling ${mid}`);
-        await revealAndSettleMarket(mid);
-        notes.push({ marketId: mid, reason: "turn_committed" });
+      if (settled) {
+        notes.push({ marketId: mid, reason });
       }
-      continue;
-    }
-
-    if (marketType === "straight_streak") {
-      const committed = await driverCommittedStreakDecision(service, { row, sessionId });
-      if (committed) {
-        console.log(`[tick:sweep] straight_streak turn committed — settling ${mid}`);
-        await revealAndSettleMarket(mid);
-        notes.push({ marketId: mid, reason: "streak_turn_committed" });
-      }
-      continue;
-    }
-
-    if (isEngineMarketType(marketType)) {
-      const settle = await shouldSettleEngineMarket(service, {
-        marketId: mid,
-        marketType,
-        locksAt: locksAtStr,
-        liveSessionId: sessionId,
-        roomId,
-      });
-      console.log(
-        `[tick:sweep] shouldSettleEngineMarket ${mid} (${marketType}) → ${settle}`,
-        { roomId, locksAt: locksAtStr },
-      );
-      if (settle) {
-        await revealAndSettleMarket(mid);
-        notes.push({ marketId: mid, reason: `engine_${marketType}` });
-      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      appendSweepLog(mid, { marketType, check: "error", result: false, detail: msg });
+      console.error(`[tick:sweep] ERROR processing ${mid} (${marketType}):`, err);
+      // Continue to next market — never let one failure block the rest.
     }
   }
 

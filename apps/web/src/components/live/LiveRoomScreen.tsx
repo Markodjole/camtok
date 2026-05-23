@@ -521,6 +521,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     : null;
   const zoneExitCountdownElapsed = useDeadlinePassed(zoneExitDeadlineMs);
 
+
   const zoneExitLeftZone = Boolean(
     zoneExitPending &&
       currentZoneCellKey &&
@@ -1399,6 +1400,26 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   void myOpenBetMarketIds;
 
   /**
+   * "Settling" chip — shown in the gap between locks_at (countdown ends) and
+   * the actual settlement arriving via the server sweep.  Market-type-specific
+   * message so the viewer knows the system is still working.
+   *
+   * Not shown for zone_exit_time (has its own ZoneExitCountdownWidget) or
+   * straight_streak (has its own StraightStreakTracker counter).
+   */
+  const settleLocksPassed = useDeadlinePassed(
+    viewerHasBetOnCurrentMarket && currentMarket?.locksAt
+      ? new Date(currentMarket.locksAt).getTime() + 2_000
+      : null,
+  );
+  const showSettlingChip = Boolean(
+    settleLocksPassed &&
+      viewerHasBetOnCurrentMarket &&
+      // zone_exit_time already has its own ZoneExitCountdownWidget
+      currentMarket?.marketType !== "zone_exit_time",
+  );
+
+  /**
    * `betPanelDismissed` used to start true for an 800 ms interstitial so the
    * popup "felt fresh", and could be flipped on by the close button. The
    * product rule now is: bet card appears IMMEDIATELY when the market opens
@@ -2184,13 +2205,46 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       ) : null}
 
       {/* ── Straight streak passage tracker ──────────────────── */}
-      {currentMarket?.marketType === "straight_streak" &&
-        viewerHasBetOnCurrentMarket ? (
+      {/* Shown to everyone (not just betters) so the counter provides context
+          for deciding what to bet: < N / = N / > N. */}
+      {currentMarket?.marketType === "straight_streak" ? (
         <StraightStreakTracker
           marketMeta={currentMarket.meta}
           marketId={currentMarket.id}
           vehiclePosition={routeLast}
         />
+      ) : null}
+
+      {/* ── Settling chip (post-locks_at gap) ────────────────── */}
+      {/* For straight_streak the tracker is already at bottom-28, push this chip above it. */}
+      {showSettlingChip && currentMarket ? (
+        <div
+          className={[
+            "pointer-events-none absolute inset-x-0 z-[195] flex justify-center",
+            currentMarket.marketType === "straight_streak" ? "bottom-44" : "bottom-28",
+          ].join(" ")}
+        >
+          <div
+            className="flex items-center gap-2 rounded-full bg-black/70 px-4 py-2 text-sm font-semibold text-white/80 shadow-lg backdrop-blur-sm"
+            title={`debug: /api/live/market-debug/${currentMarket.id}`}
+          >
+            {/* Spinning indicator */}
+            <svg
+              className="size-3.5 shrink-0 animate-spin"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2.5}
+            >
+              <path
+                strokeLinecap="round"
+                d="M12 2a10 10 0 0 1 10 10"
+                strokeDasharray="20 40"
+              />
+            </svg>
+            <span>{settlingChipText(currentMarket.marketType)}</span>
+          </div>
+        </div>
       ) : null}
 
       {/* ── Bet accepted confirmation chip ───────────────────── */}
@@ -2551,6 +2605,18 @@ function formatEta(sec: number): string {
   const h = Math.floor(minutes / 60);
   const r = minutes % 60;
   return r === 0 ? `${h} h` : `${h} h ${r} min`;
+}
+
+/** What to show in the "settling" chip for each market type. */
+function settlingChipText(marketType: string): string {
+  switch (marketType) {
+    case "next_turn":        return "Waiting for turn…";
+    case "next_zone":        return "Waiting for grid move…";
+    case "city_grid":        return "Waiting for driver to move…";
+    case "straight_streak":  return "Counting straights…";
+    case "zone_exit_time":   return "Waiting for zone exit…";
+    default:                 return "Resolving…";
+  }
 }
 
 function parseZoneExitMarketMeta(
