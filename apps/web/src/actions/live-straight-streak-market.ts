@@ -45,12 +45,25 @@ export type { CrossroadBearing, StraightStreakSubtitle };
 /**
  * Open a `straight_streak` market for the given room.
  *
- * @param streakKey - If provided, skip the market if one with this key already
- *   exists recently (de-dupe from trigger).  Re-computed inside on opening.
+ * When called from the tick, `preComputedExpectedStreak` and
+ * `preComputedCrossroads` are supplied so the opener does **not** need to
+ * re-run `computeDriverRouteInstruction`.  This avoids the common failure
+ * mode where the opener hits a different serverless worker with a cold
+ * `ROOM_STATE`, builds a different pin queue, and produces a different (or
+ * empty) streak — causing opener re-validation to reject a perfectly valid
+ * detection.
+ *
+ * If no pre-computed data is provided (e.g. manual / test calls) the opener
+ * falls back to a fresh computation.
  */
 export async function openStraightStreakMarketForRoom(
   roomId: string,
-  opts?: { windowMs?: number; streakKey?: string },
+  opts?: {
+    windowMs?: number;
+    streakKey?: string;
+    preComputedExpectedStreak?: number;
+    preComputedCrossroads?: CrossroadBearing[];
+  },
 ): Promise<{ marketId: string; betType: "straight_streak" } | { error: string }> {
   unstable_noStore();
   const service = await createServiceClient();
@@ -75,27 +88,51 @@ export async function openStraightStreakMarketForRoom(
 
   const characterId = (session as { character_id: string }).character_id;
 
-  // ── Compute route + streak analysis ───────────────────────────────────────
-  const drv = await computeDriverRouteInstruction(roomId);
-  if (!drv.instruction || drv.instruction.pins.length < STRAIGHT_STREAK_MIN_LENGTH) {
-    return { error: `straight_streak: only ${drv.instruction?.pins.length ?? 0} pin(s) — need ≥ ${STRAIGHT_STREAK_MIN_LENGTH}` };
+  // ── Resolve streak analysis ───────────────────────────────────────────────
+  // Prefer pre-computed data from the tick to avoid inconsistency between the
+  // detection phase (which has a live ROOM_STATE) and this opener (which may
+  // run on a different worker with a cold ROOM_STATE).
+  let streakKey: string;
+  let expectedStreak: number;
+  let crossroads: CrossroadBearing[];
+
+  if (
+    opts?.preComputedExpectedStreak != null &&
+    opts.preComputedCrossroads != null &&
+    opts.preComputedCrossroads.length >= STRAIGHT_STREAK_MIN_LENGTH
+  ) {
+    // Use pre-computed data from the tick.
+    expectedStreak = opts.preComputedExpectedStreak;
+    crossroads = opts.preComputedCrossroads;
+    streakKey =
+      opts.streakKey ??
+      (crossroads[0] ? `streak:${crossroads[0].nodeId}` : "streak:unknown");
+  } else {
+    // Fallback: re-compute from live route (used in manual / test calls).
+    const drv = await computeDriverRouteInstruction(roomId);
+    if (!drv.instruction || drv.instruction.pins.length < STRAIGHT_STREAK_MIN_LENGTH) {
+      return {
+        error: `straight_streak: only ${drv.instruction?.pins.length ?? 0} pin(s) — need ≥ ${STRAIGHT_STREAK_MIN_LENGTH}`,
+      };
+    }
+
+    const analysis = analyzeStreakAhead(drv.planningPolyline, drv.instruction.pins);
+    if (!analysis.streakKey || analysis.streakLength < STRAIGHT_STREAK_MIN_LENGTH) {
+      return {
+        error: `straight_streak: streak length ${analysis.streakLength} < min ${STRAIGHT_STREAK_MIN_LENGTH}`,
+      };
+    }
+
+    streakKey = analysis.streakKey;
+    expectedStreak = analysis.streakLength;
+    crossroads = analysis.crossroads;
   }
 
-  const analysis = analyzeStreakAhead(drv.planningPolyline, drv.instruction.pins);
-
-  if (!analysis.streakKey || analysis.streakLength < STRAIGHT_STREAK_MIN_LENGTH) {
-    return {
-      error: `straight_streak: streak length ${analysis.streakLength} < min ${STRAIGHT_STREAK_MIN_LENGTH}`,
-    };
-  }
-
-  const { streakKey, streakLength: expectedStreak, crossroads } = analysis;
-
-  // ── De-dupe: skip if this streak was already bet on recently ──────────────
+  // ── De-dupe: skip if this streak was already bet on in this session ────────
   const { data: prior } = await service
     .from("live_betting_markets")
     .select("id, subtitle")
-    .eq("room_id", roomId)
+    .eq("live_session_id", sessionId)
     .eq("market_type", "straight_streak")
     .order("opens_at", { ascending: false })
     .limit(10);
@@ -111,7 +148,7 @@ export async function openStraightStreakMarketForRoom(
     }
   });
   if (alreadyFired) {
-    return { error: `straight_streak: streakKey ${streakKey} already bet` };
+    return { error: `straight_streak: streakKey ${streakKey} already bet this session` };
   }
 
   // ── Character name for title ───────────────────────────────────────────────

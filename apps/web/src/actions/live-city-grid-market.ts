@@ -5,7 +5,6 @@ import { createServiceClient } from "@/lib/supabase/server";
 import {
   cellIdForPosition,
   enumerateGridCells,
-  gridCellCenter,
   parseGridOptionId,
 } from "@/lib/live/grid/cityGrid500";
 import { getOrBuildGridSpecForRoom } from "@/lib/live/grid/gridSpecForRoom";
@@ -13,19 +12,17 @@ import { Safety, type LiveMarketOption, type TransportMode } from "@bettok/live"
 import {
   BET_OPEN_WINDOW_MS,
   BET_OPEN_WINDOW_IDLE_MS,
-  NEXT_ZONE_TRIGGER_M,
 } from "@/lib/live/betting/betWindowConstants";
-import { metersBetween } from "@/lib/live/routing/geometry";
 import { computeEqualOdds } from "@/lib/live/betting/marketOdds";
 
 /**
  * `next_zone`: viewer taps a 500 m grid cell on the map to bet which square
  * the driver enters next.
  *
- * Trigger rule (the only gate):
- *   Driver must be within NEXT_ZONE_TRIGGER_M (100 m) of the current cell
- *   center. This fires at most once per zone cell visit (dupe guard checks
- *   the last 30 markets for this room).
+ * Trigger rule: fires once per cell per live session whenever the driver is
+ * anywhere inside the cell (same threshold as zone_exit_time "entry").  The
+ * old 100 m center gate was removed because most road paths never pass within
+ * 100 m of a 500 m cell centre, so the market almost never fired.
  */
 export async function openCityGridMarketForRoom(
   roomId: string,
@@ -92,21 +89,13 @@ export async function openCityGridMarketForRoom(
   const parsed = parseGridOptionId(currentCellId);
   if (!parsed) return { error: "next_zone: bad cell id" };
 
-  const center = gridCellCenter(spec, parsed.row, parsed.col);
-  const dist = metersBetween({ lat, lng }, center);
-  if (dist > NEXT_ZONE_TRIGGER_M) {
-    return {
-      error: `next_zone: ${Math.round(dist)} m from cell center > ${NEXT_ZONE_TRIGGER_M} m`,
-    };
-  }
-
   const cellKey = `cell:r${parsed.row}:c${parsed.col}`;
 
-  // Once-per-cell dupe guard: check the last 30 city_grid markets for this room.
+  // Once-per-cell-per-session dupe guard.
   const { data: prior } = await service
     .from("live_betting_markets")
     .select("subtitle")
-    .eq("room_id", roomId)
+    .eq("live_session_id", sessionId)
     .eq("market_type", "city_grid")
     .order("opens_at", { ascending: false })
     .limit(30);

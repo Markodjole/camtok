@@ -115,6 +115,14 @@ type QueuedStraightStreak = {
   /** De-dupe key — "streak:<firstNodeId>" of the straight sequence. */
   streakKey: string;
   queuedAt: number;
+  /**
+   * Pre-computed streak analysis captured at detection time.  Passed to the
+   * opener so it never needs to re-run computeDriverRouteInstruction — which
+   * would hit a different ROOM_STATE snapshot (or a cold serverless worker)
+   * and return different pins, causing opener re-validation to fail.
+   */
+  expectedStreak?: number;
+  crossroads?: import("@/lib/live/routing/straightStreakAnalyzer").CrossroadBearing[];
 };
 export type QueuedTrigger =
   | QueuedNextTurn
@@ -333,6 +341,9 @@ type FreshTrigger = {
   capturedZone?: string | null;
   /** straight_streak only: de-dupe key for this straight sequence. */
   streakKey?: string;
+  /** straight_streak only: pre-computed analysis to pass through to opener. */
+  expectedStreak?: number;
+  crossroads?: import("@/lib/live/routing/straightStreakAnalyzer").CrossroadBearing[];
 };
 
 function triggerKey(t: QueuedTrigger): string {
@@ -377,6 +388,8 @@ function buildUpdatedQueue(
         type: "straight_streak",
         streakKey: ft.streakKey!,
         queuedAt: now,
+        expectedStreak: ft.expectedStreak,
+        crossroads: ft.crossroads,
       });
     } else {
       alive.push({
@@ -509,7 +522,12 @@ async function openQueuedTrigger(
   }
   if (trigger.type === "next_zone") return openCityGridMarketForRoom(roomId, { windowMs });
   if (trigger.type === "straight_streak") {
-    return openStraightStreakMarketForRoom(roomId, { windowMs, streakKey: trigger.streakKey });
+    return openStraightStreakMarketForRoom(roomId, {
+      windowMs,
+      streakKey: trigger.streakKey,
+      preComputedExpectedStreak: trigger.expectedStreak,
+      preComputedCrossroads: trigger.crossroads,
+    });
   }
   return openEngineMarketForRoom(roomId, { phase: trigger.phase, windowMs });
 }
@@ -523,7 +541,12 @@ async function openFreshTrigger(
   if (ft.type === "next_turn") return openNextTurnMarketForRoom(roomId, { windowMs });
   if (ft.type === "next_zone") return openCityGridMarketForRoom(roomId, { windowMs });
   if (ft.type === "straight_streak") {
-    return openStraightStreakMarketForRoom(roomId, { windowMs, streakKey: ft.streakKey });
+    return openStraightStreakMarketForRoom(roomId, {
+      windowMs,
+      streakKey: ft.streakKey,
+      preComputedExpectedStreak: ft.expectedStreak,
+      preComputedCrossroads: ft.crossroads,
+    });
   }
   return openEngineMarketForRoom(roomId, { phase: ft.phase as ZoneExitPhase, windowMs });
 }
@@ -569,7 +592,12 @@ async function detectEligibleTriggers(
         const distM = metersBetween({ lat, lng }, center);
         const cellKey = `cell:r${parsed.row}:c${parsed.col}`;
 
-        if (distM <= NEXT_ZONE_TRIGGER_M) {
+        // Fire next_zone whenever the driver is anywhere inside the cell
+        // (same entry condition as zone_exit_time "entry").  The old 100 m
+        // center gate blocked most routes because road paths rarely pass
+        // within 100 m of a 500 m cell centre.  The opener still verifies
+        // the driver is within bounds at open time.
+        {
           const fired = await hasFiredCityGrid(service, sessionId, cellKey);
           if (!fired) eligible.push({ type: "next_zone", cellKey });
         }
@@ -645,17 +673,34 @@ async function detectEligibleTriggers(
   if (STRAIGHT_STREAK_BETS_ENABLED && drvResult?.instruction) {
     try {
       const { pins } = drvResult.instruction;
-      if (pins.length >= STRAIGHT_STREAK_MIN_LENGTH) {
+      if (pins.length < STRAIGHT_STREAK_MIN_LENGTH) {
+        console.log(`[tick:detect] straight_streak: only ${pins.length} pin(s) — need ≥ ${STRAIGHT_STREAK_MIN_LENGTH}`, { roomId });
+      } else {
         const analysis = analyzeStreakAhead(drvResult.planningPolyline, pins);
+        console.log(`[tick:detect] straight_streak: streakLength=${analysis.streakLength}, streakKey=${analysis.streakKey}`, {
+          roomId,
+          pinCount: pins.length,
+          crossroads: analysis.crossroads.map(c => ({ nodeId: c.nodeId, bearingChangeDeg: c.bearingChangeDeg, isStraight: c.isStraight })),
+        });
         if (analysis.streakKey) {
           const fired = await hasFiredStraightStreak(service, sessionId, analysis.streakKey);
           if (!fired) {
-            eligible.push({ type: "straight_streak", streakKey: analysis.streakKey });
+            eligible.push({
+              type: "straight_streak",
+              streakKey: analysis.streakKey,
+              // Carry the analysis so the opener can use it directly without
+              // re-running computeDriverRouteInstruction on a potentially
+              // different ROOM_STATE snapshot.
+              expectedStreak: analysis.streakLength,
+              crossroads: analysis.crossroads.slice(0, analysis.streakLength),
+            });
+          } else {
+            console.log(`[tick:detect] straight_streak: ${analysis.streakKey} already fired this session`, { roomId });
           }
         }
       }
-    } catch {
-      // straight_streak analysis errors are non-fatal
+    } catch (err) {
+      console.error(`[tick:detect] straight_streak analysis error`, err, { roomId });
     }
   }
 
