@@ -308,6 +308,13 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   // "✓ Bet placed" confirmation chip shown for 2.5 s after a confirmed bet.
   const [betAcceptedLabel, setBetAcceptedLabel] = useState<string | null>(null);
   const betAcceptedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /**
+   * Settling chip deadline — set when a bet is confirmed and persists even
+   * if currentMarket goes null briefly between settlement and the next market.
+   * Cleared only when lastBetMarketId changes (new market / rollback).
+   */
+  const [settlingDeadlineMs, setSettlingDeadlineMs] = useState<number | null>(null);
+  const [settlingMarketType, setSettlingMarketType] = useState<string | null>(null);
   // Show the pressed button for 1 s, then close the sheet.
   const scheduleBetClose = useCallback(() => {
     if (betJustPlacedTimerRef.current) clearTimeout(betJustPlacedTimerRef.current);
@@ -928,6 +935,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       clearTimeout(timeoutId);
       setZoneExitPending(null);
       setCityGridBetPending(null);
+      setSettlingDeadlineMs(null);
+      setSettlingMarketType(null);
       if (betJustPlacedTimerRef.current) {
         clearTimeout(betJustPlacedTimerRef.current);
         betJustPlacedTimerRef.current = null;
@@ -955,6 +964,13 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         setBetAcceptedLabel(pickedLabel ?? `$${stake}`);
         if (betAcceptedTimerRef.current) clearTimeout(betAcceptedTimerRef.current);
         betAcceptedTimerRef.current = setTimeout(() => setBetAcceptedLabel(null), 2500);
+        // Capture locksAt for the settling chip — stored independently so it
+        // survives even if currentMarket goes null briefly between settlement
+        // and the next market opening.
+        if (market.locksAt) {
+          setSettlingDeadlineMs(new Date(market.locksAt).getTime() + 2_000);
+          setSettlingMarketType(market.marketType ?? null);
+        }
         viewerLiveLog("place_bet_ok", { marketId: market.id, optionId, pickedLabel, stakeAmount: stake });
         return { ok: true as const };
       }
@@ -1326,6 +1342,10 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       if (lastBetMarketId && currentMarket?.id !== lastBetMarketId) {
         setLastBetMarketId(null);
         setLastBetOptionLabel(null);
+        // A new market opened while the old bet was still in the "settling"
+        // state — clear the chip so it doesn't bleed into the new market.
+        setSettlingDeadlineMs(null);
+        setSettlingMarketType(null);
       }
     }
     if (betJustPlacedTimerRef.current) {
@@ -1401,22 +1421,18 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
   /**
    * "Settling" chip — shown in the gap between locks_at (countdown ends) and
-   * the actual settlement arriving via the server sweep.  Market-type-specific
-   * message so the viewer knows the system is still working.
+   * the actual settlement arriving via the server sweep.
    *
-   * Not shown for zone_exit_time (has its own ZoneExitCountdownWidget) or
-   * straight_streak (has its own StraightStreakTracker counter).
+   * Uses `settlingDeadlineMs` (captured at bet-placement time) rather than
+   * deriving from `currentMarket?.locksAt` so it survives the brief null
+   * window between market settlement and the next market opening.
    */
-  const settleLocksPassed = useDeadlinePassed(
-    viewerHasBetOnCurrentMarket && currentMarket?.locksAt
-      ? new Date(currentMarket.locksAt).getTime() + 2_000
-      : null,
-  );
+  const settleLocksPassed = useDeadlinePassed(settlingDeadlineMs);
   const showSettlingChip = Boolean(
     settleLocksPassed &&
-      viewerHasBetOnCurrentMarket &&
+      lastBetMarketId &&
       // zone_exit_time already has its own ZoneExitCountdownWidget
-      currentMarket?.marketType !== "zone_exit_time",
+      settlingMarketType !== "zone_exit_time",
   );
 
   /**
@@ -2217,17 +2233,14 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
       {/* ── Settling chip (post-locks_at gap) ────────────────── */}
       {/* For straight_streak the tracker is already at bottom-28, push this chip above it. */}
-      {showSettlingChip && currentMarket ? (
+      {showSettlingChip ? (
         <div
           className={[
             "pointer-events-none absolute inset-x-0 z-[195] flex justify-center",
-            currentMarket.marketType === "straight_streak" ? "bottom-44" : "bottom-28",
+            settlingMarketType === "straight_streak" ? "bottom-44" : "bottom-28",
           ].join(" ")}
         >
-          <div
-            className="flex items-center gap-2 rounded-full bg-black/70 px-4 py-2 text-sm font-semibold text-white/80 shadow-lg backdrop-blur-sm"
-            title={`debug: /api/live/market-debug/${currentMarket.id}`}
-          >
+          <div className="flex items-center gap-2 rounded-full bg-black/70 px-4 py-2 text-sm font-semibold text-white/80 shadow-lg backdrop-blur-sm">
             {/* Spinning indicator */}
             <svg
               className="size-3.5 shrink-0 animate-spin"
@@ -2242,13 +2255,15 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
                 strokeDasharray="20 40"
               />
             </svg>
-            <span>{settlingChipText(currentMarket.marketType)}</span>
+            <span>{settlingChipText(settlingMarketType ?? "")}</span>
           </div>
         </div>
       ) : null}
 
       {/* ── Bet accepted confirmation chip ───────────────────── */}
-      {betAcceptedLabel && !showUnifiedBetSheet ? (
+      {/* Always shown when set — no showUnifiedBetSheet gate which could hide it
+          if a new market opens in the ~200 ms window while the API call is in-flight. */}
+      {betAcceptedLabel ? (
         <div className="pointer-events-none absolute inset-x-0 bottom-20 z-[210] flex justify-center">
           <div className="flex animate-fade-in items-center gap-2 rounded-full bg-emerald-500 px-5 py-2.5 text-sm font-semibold text-white shadow-lg">
             <svg viewBox="0 0 20 20" fill="currentColor" className="size-4 shrink-0">
