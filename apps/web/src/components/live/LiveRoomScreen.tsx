@@ -927,6 +927,11 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     setMapSheetError(null);
     setPlacingOptionId(optionId);
 
+    // Capture the tap time before the network call so the server can use it
+    // as the effective bet time — bets placed before locks_at are accepted
+    // even if network latency pushes the request past the lock transition.
+    const clientBetAt = Date.now();
+
     // 8 s hard timeout so "Placing…" never hangs forever.
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 8000);
@@ -953,7 +958,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       const res = await fetch(`/api/live/rooms/${room.roomId}/bet`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ marketId: market.id, optionId, stakeAmount: stake }),
+        body: JSON.stringify({ marketId: market.id, optionId, stakeAmount: stake, clientBetAt }),
         signal: controller.signal,
       });
       clearTimeout(timeoutId);

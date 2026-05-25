@@ -28,6 +28,10 @@ import {
   MIN_MARKET_OPEN_MS_BEFORE_LOCK,
   MIN_MS_BETWEEN_SYSTEM_MARKETS,
 } from "@/lib/live/liveBetMinOpenMs";
+import {
+  CLOCK_SKEW_TOLERANCE_MS,
+  CLIENT_BET_AT_MAX_LATENCY_MS,
+} from "@/lib/live/betting/betWindowConstants";
 import { buildServerClickSnapshot } from "@/lib/live/betting/clickSnapshot";
 import { computeDriverRouteInstruction } from "@/lib/live/routing/computeDriverRouteInstruction";
 
@@ -119,28 +123,55 @@ export async function placeLiveBet(input: PlaceLiveBetInput) {
   if (!market) return { error: "Market not found" };
 
   const marketStatus = (market as { status: string }).status;
-  /**
-   * While we're tuning the bet cycle, accept bets on markets that have just
-   * `locked` too — viewers regularly tap an option a hair after the 5s lock
-   * fires, the market is moments from settle. Cancelled / settled still
-   * return an error so payouts cannot be double-touched.
-   */
+  const roomIdForRoom = (market as { room_id: string }).room_id;
+  const locksAt = new Date((market as { locks_at: string }).locks_at).getTime();
+  const opensAtMs = Date.parse((market as { opens_at: string }).opens_at);
+  const marketType = (market as { market_type?: string }).market_type ?? "";
+
+  // ── Effective bet time ────────────────────────────────────────────────────
+  //
+  // Use the client-supplied tap timestamp when it passes two sanity checks:
+  //   1. Not in the future by more than CLOCK_SKEW_TOLERANCE_MS.
+  //   2. Not older than CLIENT_BET_AT_MAX_LATENCY_MS (replay / stuck request guard).
+  //
+  // effectiveBetAt is the earlier of serverNow and a valid clientBetAt.  This
+  // means a bet that was tapped before locks_at is never rejected just because
+  // network latency pushed the server-receive time past locks_at.
+  const serverNow = Date.now();
+  const rawClientBetAt = parsed.data.clientBetAt;
+  let effectiveBetAt = serverNow;
+  if (rawClientBetAt != null) {
+    const skewOk = rawClientBetAt <= serverNow + CLOCK_SKEW_TOLERANCE_MS;
+    const ageOk = serverNow - rawClientBetAt <= CLIENT_BET_AT_MAX_LATENCY_MS;
+    if (skewOk && ageOk) {
+      effectiveBetAt = Math.min(serverNow, rawClientBetAt);
+    }
+  }
+
+  // ── Status gate ───────────────────────────────────────────────────────────
+  //
+  // "locked" is allowed when the effective bet time was still before locks_at
+  // (the tick flipped the status during network transit — this is the normal
+  // race condition we are fixing).  Cancelled / settled markets are never
+  // re-opened: payouts have already run and we must not double-touch them.
+  const betWasBeforeLock = effectiveBetAt < locksAt;
   if (marketStatus !== "open") {
-    if (!(liveBetRelaxServer() && marketStatus === "locked")) {
+    const allowLocked =
+      marketStatus === "locked" &&
+      (liveBetRelaxServer() || betWasBeforeLock);
+    if (!allowLocked) {
       return { error: "Market not open" };
     }
   }
-  const roomIdForRoom = (market as { room_id: string }).room_id;
-  const opensAtMs = Date.parse((market as { opens_at: string }).opens_at);
+
   const insideOpenGrace =
     Number.isFinite(opensAtMs) &&
-    Date.now() < opensAtMs + MIN_MARKET_OPEN_MS_BEFORE_LOCK;
-  const locksAt = new Date((market as { locks_at: string }).locks_at).getTime();
-  const marketType = (market as { market_type?: string }).market_type ?? "";
+    effectiveBetAt < opensAtMs + MIN_MARKET_OPEN_MS_BEFORE_LOCK;
+
   if (
     !liveBetRelaxServer() &&
     !insideOpenGrace &&
-    Date.now() >= locksAt
+    effectiveBetAt >= locksAt
   ) {
     return { error: "Market has locked" };
   }
@@ -323,6 +354,12 @@ export async function placeLiveBet(input: PlaceLiveBetInput) {
       stake_amount: parsed.data.stakeAmount,
       status: "active",
       click_snapshot: clickSnapshot,
+      // Store the validated client tap time for audit / analytics.  null when
+      // the client didn't send one or it failed the sanity checks.
+      client_bet_at:
+        rawClientBetAt != null && effectiveBetAt < serverNow
+          ? new Date(rawClientBetAt).toISOString()
+          : null,
     })
     .select("*")
     .single();

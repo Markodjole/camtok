@@ -120,6 +120,14 @@ export const placeLiveBetInputSchema = z.object({
   marketId: z.string().uuid(),
   optionId: z.string().min(1).max(64),
   stakeAmount: z.number().int().positive(),
+  /**
+   * Epoch ms captured on the client the instant the user tapped "bet".
+   * The server uses this as the effective bet time for lock/status checks so
+   * that bets placed before locks_at are not rejected due to network latency
+   * causing the request to arrive after the market transitions to "locked".
+   * Subject to clock-skew and max-latency validation on the server side.
+   */
+  clientBetAt: z.number().int().positive().optional(),
 });
 
 export const camtokEntityTypeSchema = z.enum([

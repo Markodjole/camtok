@@ -489,17 +489,17 @@ async function openFromQueueOrTriggers(
 function triggerPriority(t: QueuedTrigger): number {
   if (t.type === "next_turn") return 1;
   if (t.type === "next_zone") return 2;
-  if (t.type === "straight_streak") return 6;
+  if (t.type === "straight_streak") return 3;
   const phases: ZoneExitPhase[] = ["entry", "center_70m", "exit_outer"];
-  return 3 + phases.indexOf(t.phase as ZoneExitPhase);
+  return 4 + phases.indexOf(t.phase as ZoneExitPhase);
 }
 
 function freshPriority(t: FreshTrigger): number {
   if (t.type === "next_turn") return 1;
   if (t.type === "next_zone") return 2;
-  if (t.type === "straight_streak") return 6;
+  if (t.type === "straight_streak") return 3;
   const phases: ZoneExitPhase[] = ["entry", "center_70m", "exit_outer"];
-  return 3 + phases.indexOf(t.phase as ZoneExitPhase);
+  return 4 + phases.indexOf(t.phase as ZoneExitPhase);
 }
 
 /**

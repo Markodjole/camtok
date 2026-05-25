@@ -107,6 +107,30 @@ export const STREAK_CROSSROAD_PROXIMITY_M = 45;
  */
 export const STRAIGHT_STREAK_COMMITTED_TURN_DEG = 40;
 
+// ─── Client-bet-at timing tolerance ──────────────────────────────────────────
+//
+// When the client sends `clientBetAt` (the epoch ms when the user tapped),
+// the server honours it if it passes two sanity checks:
+//
+//   1. Not in the future by more than CLOCK_SKEW_TOLERANCE_MS  (guards against
+//      client clocks that run fast or outright manipulation).
+//   2. Not more than CLIENT_BET_AT_MAX_LATENCY_MS in the past relative to the
+//      server clock (guards against replays and unreasonably slow requests).
+//
+// A bet whose *effective* time (min of server clock and valid clientBetAt) is
+// before locks_at is accepted even if the market has already transitioned to
+// "locked" by the time the request lands — this is the normal network-latency
+// race condition.
+
+/** Maximum tolerated forward clock skew on the client (ms). */
+export const CLOCK_SKEW_TOLERANCE_MS = 3_000;
+
+/**
+ * Maximum age of a clientBetAt value relative to the server clock (ms).
+ * Requests older than this are treated as if clientBetAt was not provided.
+ */
+export const CLIENT_BET_AT_MAX_LATENCY_MS = 8_000;
+
 // ─── Legacy alias (used in live-markets.ts client-side lock check) ────────────
 
 /** @deprecated use NEXT_ZONE_TRIGGER_M */
