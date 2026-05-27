@@ -683,19 +683,44 @@ async function tryFillerNextStep(
   let steps = routeCtx.osrmSteps;
   let polylineForCheck = routeCtx.planningPolyline;
 
-  // ── Fallback: fetch OSRM steps directly when planning polyline is absent ──
-  if (!steps || !polylineForCheck) {
+  // ── Fallback: fetch OSRM steps when the normal detection path didn't ──────
+  //
+  // Two sub-cases:
+  //   A) planningPolyline available but steps = null (computeDriverRouteInstruction
+  //      succeeded but OSRM step fetch was skipped due to a feature-flag or error).
+  //      → Route to planPolyEnd so the on-route check can still run.
+  //   B) planningPolyline = null (full route planning failed, e.g. Overpass down).
+  //      → Project a forward probe using GPS heading.  If heading is also null
+  //        (driver stopped) skip the on-route check but still try OSRM.
+  if (!steps) {
     const { heading, lat, lng } = routeCtx;
-    if (heading == null) return null; // can't project a forward target without heading
+    let forwardTarget: import("@/lib/live/routing/geometry").LatLng;
+    let keepPolylineCheck = false;
 
-    const forwardTarget = projectPoint({ lat, lng }, heading, FILLER_FORWARD_PROBE_M);
+    if (polylineForCheck && polylineForCheck.length >= 2) {
+      // Sub-case A: planning polyline is known → route to its end point.
+      forwardTarget = polylineForCheck[polylineForCheck.length - 1]!;
+      keepPolylineCheck = true;
+    } else if (heading != null) {
+      // Sub-case B: no polyline → forward probe in heading direction.
+      forwardTarget = projectPoint({ lat, lng }, heading, FILLER_FORWARD_PROBE_M);
+    } else {
+      // No polyline and no heading → can't project a target; bail out.
+      console.log(`[tick:filler] next_step: no steps, no polyline, no heading — skipping`, { roomId });
+      return null;
+    }
+
     try {
       const osrmResult = await fetchOsrmDrivingRouteWithSteps({ lat, lng }, forwardTarget);
       if (!osrmResult) return null;
       steps = osrmResult.steps;
-      // polylineForCheck stays null → findNextStepCandidates skips the on-route check
-      polylineForCheck = null;
-      console.log(`[tick:filler] next_step: using fallback OSRM fetch (no planningPolyline), ${steps.length} steps`, { roomId });
+      // If we used the planning polyline as the OSRM target, keep the polyline
+      // for the on-route check.  Otherwise clear it so the check is skipped.
+      if (!keepPolylineCheck) polylineForCheck = null;
+      console.log(
+        `[tick:filler] next_step: fetched ${steps.length} OSRM steps via ${keepPolylineCheck ? "planPoly" : "forward-probe"} fallback`,
+        { roomId },
+      );
     } catch (err) {
       console.error(`[tick:filler] next_step: fallback OSRM fetch failed`, err, { roomId });
       return null;
@@ -827,6 +852,69 @@ function findNextStepCandidates(
     }
   }
   return results;
+}
+
+// ─── Dense intersection extraction (for straight_streak) ─────────────────────
+
+/**
+ * Extract every real road junction from OSRM step intersection data.
+ *
+ * Each OSRM step includes an `intersections` array covering ALL road junctions
+ * along the step path — not just the final maneuver point.  This gives a dense,
+ * accurate list of every crossroad the driver will cross, far more granular than
+ * the sparse 3-pin OSM queue used by computeDriverRouteInstruction.
+ *
+ * Filter: bearings.length ≥ 3 = real side-road junction (T or 4-way).
+ *         bearings.length = 2 = simple road continuation (bend, name change).
+ *
+ * Returns junctions in ascending distance order from the vehicle, limited to
+ * the range [minM, maxM].
+ */
+function extractDenseIntersections(
+  steps: OsrmStep[],
+  vehicleLat: number,
+  vehicleLng: number,
+  minM = 0,
+  maxM = 1500,
+): import("@/lib/live/routing/straightStreakAnalyzer").CrossroadBearing[] {
+  const vehicle = { lat: vehicleLat, lng: vehicleLng };
+  const seen = new Set<string>();
+  const results: import("@/lib/live/routing/straightStreakAnalyzer").CrossroadBearing[] = [];
+
+  for (const step of steps) {
+    for (const ix of step.intersections) {
+      // Skip trivial continuations — real crossroads have ≥3 road branches.
+      if (ix.bearings.length < 3) continue;
+
+      const { lat, lng } = ix.location;
+      // Deduplicate by snapped coordinate (OSRM can repeat junction positions
+      // across adjacent steps due to micro-rounding).
+      const key = `${lat.toFixed(5)}:${lng.toFixed(5)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      const distanceMeters = metersBetween(vehicle, { lat, lng });
+      if (distanceMeters < minM || distanceMeters > maxM) continue;
+
+      // Synthetic nodeId from coordinate hash for dedup in the tracker.
+      const nodeId =
+        (Math.round(lat * 1e4) & 0xffff) * 65536 +
+        (Math.round(Math.abs(lng) * 1e4) & 0xffff);
+
+      results.push({
+        nodeId,
+        lat,
+        lng,
+        distanceMeters,
+        // bearingChangeDeg/isStraight are irrelevant here — the resolver
+        // scores each junction from actual GPS headings at settlement time.
+        bearingChangeDeg: 0,
+        isStraight: true,
+      });
+    }
+  }
+
+  return results.sort((a, b) => a.distanceMeters - b.distanceMeters);
 }
 
 // ─── Trigger detection ────────────────────────────────────────────────────────
@@ -969,8 +1057,10 @@ async function detectEligibleTriggers(
               // Carry the analysis so the opener can use it directly without
               // re-running computeDriverRouteInstruction on a potentially
               // different ROOM_STATE snapshot.
+              // NOTE: crossroads will be replaced with denser OSRM junction
+              // data below once osrmStepsCache is populated.
               expectedStreak: analysis.streakLength,
-              crossroads: analysis.crossroads.slice(0, analysis.streakLength),
+              crossroads: analysis.crossroads,
             });
           } else {
             console.log(`[tick:detect] straight_streak: ${analysis.streakKey} already fired this session`, { roomId });
@@ -985,22 +1075,68 @@ async function detectEligibleTriggers(
   // ── next_step: OSRM step maneuver bet ──────────────────────────────────────
   //
   // OSRM steps are fetched once here and stored in `osrmStepsCache` so the
-  // filler path (tryFillerNextStep) can reuse them via routeCtx without a
-  // second network call.
+  // filler path (tryFillerNextStep) can reuse them without a second network call.
+  //
+  // Target selection priority:
+  //   1. Planning polyline end (most accurate — same route Google uses).
+  //   2. Forward probe (GPS heading × FILLER_FORWARD_PROBE_M) — used when
+  //      computeDriverRouteInstruction failed so the filler still works.
+  //
+  // When using the forward probe the on-route check is skipped (no reference
+  // polyline), which allows all OSRM maneuver points within the trigger window
+  // to be eligible regardless of Google/OSRM geometry differences.
   const planningPolyline =
     drvResult && "planningPolyline" in drvResult ? drvResult.planningPolyline : null;
   let osrmStepsCache: OsrmStep[] | null = null;
+  // Polyline used for the on-route check in findNextStepCandidates.
+  // Null when the OSRM fetch used a forward probe (no reference polyline).
+  let osrmPolylineCheck = planningPolyline;
 
-  if (NEXT_STEP_BETS_ENABLED && planningPolyline && planningPolyline.length >= 2) {
+  const hasStreakTrigger = eligible.some((t) => t.type === "straight_streak");
+  const needsOsrm = NEXT_STEP_BETS_ENABLED || hasStreakTrigger;
+
+  // Determine OSRM target: polyline end or forward probe.
+  let osrmTarget: import("@/lib/live/routing/geometry").LatLng | null = null;
+  if (needsOsrm) {
+    if (planningPolyline && planningPolyline.length >= 2) {
+      osrmTarget = planningPolyline[planningPolyline.length - 1]!;
+    } else if (driverHeadingDeg != null) {
+      osrmTarget = projectPoint({ lat, lng }, driverHeadingDeg, FILLER_FORWARD_PROBE_M);
+      osrmPolylineCheck = null; // Forward probe — skip on-route check
+    }
+  }
+
+  if (needsOsrm && osrmTarget) {
     try {
-      const planPolyEnd = planningPolyline[planningPolyline.length - 1]!;
-      const osrmResult = await fetchOsrmDrivingRouteWithSteps({ lat, lng }, planPolyEnd);
+      const osrmResult = await fetchOsrmDrivingRouteWithSteps({ lat, lng }, osrmTarget);
       if (osrmResult) {
         osrmStepsCache = osrmResult.steps;
+
+        // Augment any straight_streak trigger with dense OSRM junction data.
+        // The sparse OSM pin queue (computeDriverRouteInstruction) only keeps
+        // 3 pins at a time, severely limiting how many crossroads the tracker
+        // can count.  OSRM step intersections give us every real junction
+        // (bearings.length ≥ 3) along the full planned route — typically
+        // 10–30+ crossroads — so the tracker can count them all.
+        const streakTrigger = eligible.find((t) => t.type === "straight_streak");
+        if (streakTrigger) {
+          const denseJunctions = extractDenseIntersections(osrmResult.steps, lat, lng);
+          if (denseJunctions.length > 0) {
+            const sparsePinCount = streakTrigger.crossroads?.length ?? 0;
+            streakTrigger.crossroads = denseJunctions;
+            console.log(
+              `[tick:detect] straight_streak: augmented with ${denseJunctions.length} dense OSRM junctions (was ${sparsePinCount} sparse pins)`,
+              { roomId },
+            );
+          }
+        }
+
         // Normal trigger window — only the nearest unfired step.
+        // Use osrmPolylineCheck (null when forward probe was used) so the
+        // on-route check is skipped when no reference polyline is available.
         const candidates = findNextStepCandidates(
           osrmResult.steps,
-          planningPolyline,
+          osrmPolylineCheck,
           lat,
           lng,
           NEXT_STEP_MIN_M,

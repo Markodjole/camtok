@@ -148,8 +148,13 @@ export const NEXT_STEP_MAX_M = 200;
 /**
  * Max perpendicular distance from the planning polyline for an OSRM step
  * maneuver point to be considered "on the same road" (m).
+ *
+ * Set to 100 m (previously 60 m) to tolerate geometry differences between
+ * OSRM and Google Maps road networks.  In urban areas these two can diverge
+ * by 30–80 m at turns or merges; 100 m keeps false positives low while
+ * ensuring legitimate maneuver points aren't silently filtered.
  */
-export const NEXT_STEP_ON_ROUTE_M = 60;
+export const NEXT_STEP_ON_ROUTE_M = 100;
 
 /**
  * Radius (m) within which the driver is considered to have "arrived" at

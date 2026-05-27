@@ -71,7 +71,18 @@ export type StreakAnalysis = {
 export type StraightStreakSubtitle = {
   expectedStreak: number;
   streakKey: string;
-  /** The expected crossroads (up to `expectedStreak`) to check at resolve. */
+  /**
+   * All crossroads the client tracker should count.
+   *
+   * Populated at market-open time from one of two sources:
+   *   - Sparse OSM pins (fallback): 3–4 "bettable" intersections from
+   *     `computeDriverRouteInstruction`, 200–400 m apart.
+   *   - Dense OSRM junctions (preferred): all real road junctions
+   *     (bearings.length ≥ 3) extracted from OSRM step `intersections`,
+   *     typically 10–30+ entries per km.  `bearingChangeDeg` and `isStraight`
+   *     are synthetic (0 / true) for this source — the resolver scores each
+   *     junction from actual GPS headings at settlement time.
+   */
   intersections: CrossroadBearing[];
 };
 

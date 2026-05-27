@@ -1251,10 +1251,34 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       ? viewerTurnTarget
       : null;
 
+  // Prefer the live market's stored maneuver point so ALL viewers see the orange
+  // pin the moment the next_step market opens — no bet required.
+  // Falls back to nextStepPending so the pin stays visible after the market
+  // closes until the server confirms resolution for users who placed a bet.
   const stepPin =
-    nextStepPending?.stepLat != null && nextStepPending?.stepLng != null
-      ? { lat: nextStepPending.stepLat, lng: nextStepPending.stepLng }
-      : null;
+    currentMarket?.marketType === "next_step" &&
+    currentMarket.turnPointLat != null &&
+    currentMarket.turnPointLng != null
+      ? { lat: currentMarket.turnPointLat, lng: currentMarket.turnPointLng }
+      : nextStepPending?.stepLat != null && nextStepPending?.stepLng != null
+        ? { lat: nextStepPending.stepLat, lng: nextStepPending.stepLng }
+        : null;
+
+  // Countdown props for the pin widget.
+  // Priority:
+  //   1. Active next_step market open → count from opensAt/estimatedSec (visible to ALL viewers).
+  //   2. Market closed but user has a pending bet → count from betPlacedAt (resolving state).
+  //   3. Nothing → null (widget hidden).
+  const nextStepCountdown: { betPlacedAtMs: number; remainingAtBetSec: number } | null = (() => {
+    if (currentMarket?.marketType === "next_step") {
+      const parsed = parseNextStepMarketMeta(currentMarket);
+      if (parsed) return { betPlacedAtMs: parsed.opensAtMs, remainingAtBetSec: parsed.estimatedSec };
+    }
+    if (nextStepPending) {
+      return { betPlacedAtMs: nextStepPending.betPlacedAtMs, remainingAtBetSec: nextStepPending.remainingAtBetSec };
+    }
+    return null;
+  })();
 
   const viewerDecisionLatLng =
     viewerTurnTargetForMap != null
@@ -2122,10 +2146,10 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             resolving={zoneExitResolving}
           />
         ) : null}
-        {nextStepPending ? (
+        {nextStepCountdown ? (
           <NextStepCountdownWidget
-            betPlacedAtMs={nextStepPending.betPlacedAtMs}
-            remainingAtBetSec={nextStepPending.remainingAtBetSec}
+            betPlacedAtMs={nextStepCountdown.betPlacedAtMs}
+            remainingAtBetSec={nextStepCountdown.remainingAtBetSec}
             resolving={nextStepResolving}
           />
         ) : null}

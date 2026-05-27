@@ -12,6 +12,27 @@ import type { LatLng } from "./geometry";
 // ─── Types ─────────────────────────────────────────────────────────────────
 
 /**
+ * A single road junction along an OSRM step (from the `intersections` array).
+ * Every junction the vehicle passes while driving a step is listed here —
+ * including minor side-street T-junctions, not just the final maneuver point.
+ */
+export type OsrmStepIntersection = {
+  /** Exact lat/lng of this junction on the road network. */
+  location: LatLng;
+  /**
+   * All road bearings at this junction (degrees, 0–360).
+   * Length ≥ 3 means a real side-road junction (T or 4-way).
+   * Length = 2 means a simple road continuation (curve/rename only).
+   */
+  bearings: number[];
+  /**
+   * Whether each bearing is a valid entry direction.
+   * Parallel to `bearings`.
+   */
+  entry: boolean[];
+};
+
+/**
  * A single OSRM driving step between two consecutive maneuvers.
  *
  * `maneuver.type` values (non-exhaustive):
@@ -46,6 +67,12 @@ export type OsrmStep = {
     /** Heading (degrees, 0–360) immediately after the maneuver. */
     bearingAfter: number;
   };
+  /**
+   * All road junctions the vehicle passes during this step, in traversal order.
+   * The first entry is the step start, the last is the maneuver point itself.
+   * Use these to get a dense list of every crossroad along the route.
+   */
+  intersections: OsrmStepIntersection[];
 };
 
 export type OsrmStepsResult = {
@@ -65,11 +92,18 @@ type RawManeuver = {
   bearing_after: number;
 };
 
+type RawIntersection = {
+  location: [number, number]; // [lng, lat]
+  bearings: number[];
+  entry: boolean[];
+};
+
 type RawStep = {
   distance: number;
   duration: number;
   name: string;
   maneuver: RawManeuver;
+  intersections?: RawIntersection[];
 };
 
 type RawLeg = {
@@ -142,6 +176,11 @@ export async function fetchOsrmDrivingRouteWithSteps(
           bearingBefore: s.maneuver.bearing_before,
           bearingAfter: s.maneuver.bearing_after,
         },
+        intersections: (s.intersections ?? []).map((i) => ({
+          location: { lat: i.location[1], lng: i.location[0] },
+          bearings: i.bearings,
+          entry: i.entry,
+        })),
       })),
     );
 
