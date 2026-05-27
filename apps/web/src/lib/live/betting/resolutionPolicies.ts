@@ -27,6 +27,8 @@
  */
 
 import {
+  NEXT_STEP_APPROACH_M,
+  NEXT_STEP_DEPARTURE_M,
   STRAIGHT_STREAK_COMMITTED_TURN_DEG,
   STRAIGHT_STREAK_INTERSECTIONS_TO_RESOLVE,
 } from "./betWindowConstants";
@@ -238,6 +240,30 @@ registerResolutionPolicy({
     {
       label: "cell_crossed",
       event: { type: "cell_crossed" },
+    },
+    {
+      label: "reveal_timeout",
+      event: { type: "reveal_timeout" },
+    },
+  ],
+});
+
+registerResolutionPolicy({
+  marketType: "next_step",
+  description:
+    "Settle when the driver reaches the OSRM step maneuver point: they come " +
+    `within ${NEXT_STEP_APPROACH_M} m AND start moving away (${NEXT_STEP_DEPARTURE_M} m ` +
+    "departure), or the overall heading changes ≥ 50° (early turn before the point). " +
+    "reveal_at is the unconditional safety cap.",
+  conditions: [
+    {
+      label: "step_reached",
+      event: {
+        type: "turn_pin_proximity",
+        approachRadiusM: NEXT_STEP_APPROACH_M,
+        departureM: NEXT_STEP_DEPARTURE_M,
+        headingFallbackDeg: 50,
+      },
     },
     {
       label: "reveal_timeout",

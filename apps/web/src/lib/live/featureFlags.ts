@@ -24,3 +24,17 @@ export const NEXT_TURN_BETS_ENABLED = false;
  * Set to `false` to suspend the trigger and opener without removing any code.
  */
 export const STRAIGHT_STREAK_BETS_ENABLED = true;
+
+/**
+ * `next_step` — time-to-reach-maneuver bet.
+ *
+ * Fires when the first OSRM step maneuver point that lies on the same road as
+ * the Google planning polyline is between NEXT_STEP_MIN_M and NEXT_STEP_MAX_M
+ * ahead of the driver.  Bettors predict whether the driver will arrive
+ * under / at / over the Google-projected ETA.
+ *
+ * When `false`:
+ *   • Server tick skips next_step trigger detection entirely.
+ *   • Existing open/locked next_step markets still settle normally.
+ */
+export const NEXT_STEP_BETS_ENABLED = true;

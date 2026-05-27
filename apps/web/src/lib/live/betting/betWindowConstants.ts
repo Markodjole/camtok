@@ -119,6 +119,43 @@ export const STRAIGHT_STREAK_COMMITTED_TURN_DEG = 40;
  */
 export const STRAIGHT_STREAK_INTERSECTIONS_TO_RESOLVE = 3;
 
+// ─── next_step ────────────────────────────────────────────────────────────────
+//
+// A market that bets on how long it takes the driver to reach the next OSRM
+// step maneuver point (turn, roundabout, etc.) that lies on the same planned
+// road as the Google Maps route.
+//
+//   TRIGGER: first OSRM step whose maneuver point is within
+//            [NEXT_STEP_MIN_M, NEXT_STEP_MAX_M] of the driver AND lies within
+//            NEXT_STEP_ON_ROUTE_M of the planning polyline.
+//   OPTIONS: < T / ≈ T (±20%) / > T  where T = Google-projected ETA to step.
+//   SETTLE:  when driver passes within NEXT_STEP_APPROACH_M of the maneuver
+//            point and starts moving away, or reveal_at safety fires.
+
+/** Min distance to OSRM step maneuver for a trigger to fire (m). */
+export const NEXT_STEP_MIN_M = 150;
+
+/** Max distance to OSRM step maneuver for a trigger to fire (m). */
+export const NEXT_STEP_MAX_M = 500;
+
+/**
+ * Max perpendicular distance from the planning polyline for an OSRM step
+ * maneuver point to be considered "on the same road" (m).
+ */
+export const NEXT_STEP_ON_ROUTE_M = 60;
+
+/**
+ * Radius (m) within which the driver is considered to have "arrived" at
+ * the step maneuver point, used by the resolution sweep and the resolver.
+ */
+export const NEXT_STEP_APPROACH_M = 40;
+
+/**
+ * Minimum departure distance (m) past the closest point to confirm the
+ * driver has left the maneuver area (prevents premature settle from GPS noise).
+ */
+export const NEXT_STEP_DEPARTURE_M = 15;
+
 // ─── Client-bet-at timing tolerance ──────────────────────────────────────────
 //
 // When the client sends `clientBetAt` (the epoch ms when the user tapped),

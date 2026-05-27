@@ -15,6 +15,7 @@ export type RoundState =
 
 export type BetTypeV2 =
   | "next_turn"
+  | "next_step"
   | "next_zone"
   | "zone_exit_time"
   | "straight_streak";

@@ -23,6 +23,7 @@ export type EngineMarketOption = {
  */
 export const ENGINE_BET_TYPES = new Set<string>([
   "next_turn",       // settle when driver commits turn heading
+  "next_step",       // settle when driver reaches OSRM step maneuver point
   "zone_exit_time",  // settle when driver leaves start cell or countdown elapses
   "straight_streak", // settle when driver takes a non-straight at any intersection
 ]);
@@ -102,6 +103,12 @@ export function provisionalOptionsForBetType(type: BetTypeV2): EngineMarketOptio
         { id: "streak_under", label: "Fewer straights than average", shortLabel: "< avg", displayOrder: 0 },
         { id: "streak_at",    label: "About average straights",       shortLabel: "= avg", displayOrder: 1 },
         { id: "streak_over",  label: "More straights than average",   shortLabel: "> avg", displayOrder: 2 },
+      ];
+    case "next_step":
+      return [
+        { id: "step_under", label: "Reaches turn faster than estimated", shortLabel: "< ETA", displayOrder: 0 },
+        { id: "step_at",    label: "Reaches turn at estimated time",      shortLabel: "≈ ETA", displayOrder: 1 },
+        { id: "step_over",  label: "Reaches turn slower than estimated",  shortLabel: "> ETA", displayOrder: 2 },
       ];
     default:
       return [];

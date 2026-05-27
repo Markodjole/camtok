@@ -16,6 +16,7 @@ import {
   shouldSettleEngineMarket,
   type ZoneExitPhase,
 } from "@/actions/live-engine-market";
+import { openNextStepMarketForRoom } from "@/actions/live-next-step-market";
 import { openNextTurnMarketForRoom } from "@/actions/live-next-turn-market";
 import { openStraightStreakMarketForRoom } from "@/actions/live-straight-streak-market";
 import { lockAndSettleMarket, lockMarket, revealAndSettleMarket } from "@/actions/live-settlement";
@@ -23,6 +24,9 @@ import { isEngineMarketType } from "@/lib/live/betting/engineMarketOptions";
 import {
   BET_OPEN_WINDOW_MS,
   BET_OPEN_WINDOW_IDLE_MS,
+  NEXT_STEP_MAX_M,
+  NEXT_STEP_MIN_M,
+  NEXT_STEP_ON_ROUTE_M,
   NEXT_TURN_PIN_MIN_M,
   NEXT_TURN_PIN_MAX_M,
   NEXT_ZONE_TRIGGER_M,
@@ -41,10 +45,18 @@ import {
   type CityGridSpecCompact,
 } from "@/lib/live/grid/cityGrid500";
 import { getOrBuildGridSpecForRoom } from "@/lib/live/grid/gridSpecForRoom";
-import { bearingDegrees, metersBetween } from "@/lib/live/routing/geometry";
+import { bearingDegrees, metersBetween, projectOntoPolyline } from "@/lib/live/routing/geometry";
+import {
+  fetchOsrmDrivingRouteWithSteps,
+  isBookendManeuver,
+} from "@/lib/live/routing/osrmSteps";
 import { computeDriverRouteInstruction } from "@/lib/live/routing/computeDriverRouteInstruction";
 import { analyzeStreakAhead } from "@/lib/live/routing/straightStreakAnalyzer";
-import { NEXT_TURN_BETS_ENABLED, STRAIGHT_STREAK_BETS_ENABLED } from "@/lib/live/featureFlags";
+import {
+  NEXT_STEP_BETS_ENABLED,
+  NEXT_TURN_BETS_ENABLED,
+  STRAIGHT_STREAK_BETS_ENABLED,
+} from "@/lib/live/featureFlags";
 
 // ─── Sweep diagnostic log ─────────────────────────────────────────────────────
 //
@@ -127,11 +139,23 @@ type QueuedStraightStreak = {
   expectedStreak?: number;
   crossroads?: import("@/lib/live/routing/straightStreakAnalyzer").CrossroadBearing[];
 };
+type QueuedNextStep = {
+  type: "next_step";
+  /** De-dupe key — "step:{lat4}:{lng4}" of the OSRM maneuver point. */
+  stepKey: string;
+  stepLat: number;
+  stepLng: number;
+  maneuverType: string;
+  maneuverModifier?: string;
+  stepName: string;
+  queuedAt: number;
+};
 export type QueuedTrigger =
   | QueuedNextTurn
   | QueuedNextZone
   | QueuedZoneExit
-  | QueuedStraightStreak;
+  | QueuedStraightStreak
+  | QueuedNextStep;
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
@@ -334,7 +358,7 @@ export async function runRoomTick(
 // ─── Queue helpers ────────────────────────────────────────────────────────────
 
 type FreshTrigger = {
-  type: "next_turn" | "next_zone" | "zone_exit_time" | "straight_streak";
+  type: "next_turn" | "next_zone" | "zone_exit_time" | "straight_streak" | "next_step";
   pinKey?: string;
   pinId?: number;
   pinLat?: number;
@@ -347,12 +371,20 @@ type FreshTrigger = {
   /** straight_streak only: pre-computed analysis to pass through to opener. */
   expectedStreak?: number;
   crossroads?: import("@/lib/live/routing/straightStreakAnalyzer").CrossroadBearing[];
+  /** next_step only: OSRM step maneuver data. */
+  stepKey?: string;
+  stepLat?: number;
+  stepLng?: number;
+  maneuverType?: string;
+  maneuverModifier?: string;
+  stepName?: string;
 };
 
 function triggerKey(t: QueuedTrigger): string {
   if (t.type === "next_turn") return `next_turn:${t.pinKey}`;
   if (t.type === "next_zone") return `next_zone:${t.cellKey}`;
   if (t.type === "straight_streak") return `straight_streak:${t.streakKey}`;
+  if (t.type === "next_step") return `next_step:${t.stepKey}`;
   return `zone_exit_time:${t.cellKey}:${t.phase}`;
 }
 
@@ -360,6 +392,7 @@ function freshTriggerKey(t: FreshTrigger): string {
   if (t.type === "next_turn") return `next_turn:${t.pinKey}`;
   if (t.type === "next_zone") return `next_zone:${t.cellKey}`;
   if (t.type === "straight_streak") return `straight_streak:${t.streakKey}`;
+  if (t.type === "next_step") return `next_step:${t.stepKey}`;
   return `zone_exit_time:${t.cellKey}:${t.phase}`;
 }
 
@@ -393,6 +426,17 @@ function buildUpdatedQueue(
         queuedAt: now,
         expectedStreak: ft.expectedStreak,
         crossroads: ft.crossroads,
+      });
+    } else if (ft.type === "next_step") {
+      alive.push({
+        type: "next_step",
+        stepKey: ft.stepKey!,
+        stepLat: ft.stepLat!,
+        stepLng: ft.stepLng!,
+        maneuverType: ft.maneuverType!,
+        maneuverModifier: ft.maneuverModifier,
+        stepName: ft.stepName ?? "",
+        queuedAt: now,
       });
     } else {
       alive.push({
@@ -491,18 +535,20 @@ async function openFromQueueOrTriggers(
 
 function triggerPriority(t: QueuedTrigger): number {
   if (t.type === "next_turn") return 1;
-  if (t.type === "next_zone") return 2;
-  if (t.type === "straight_streak") return 3;
+  if (t.type === "next_step") return 2;
+  if (t.type === "next_zone") return 3;
+  if (t.type === "straight_streak") return 4;
   const phases: ZoneExitPhase[] = ["entry", "center_70m", "exit_outer"];
-  return 4 + phases.indexOf(t.phase as ZoneExitPhase);
+  return 5 + phases.indexOf(t.phase as ZoneExitPhase);
 }
 
 function freshPriority(t: FreshTrigger): number {
   if (t.type === "next_turn") return 1;
-  if (t.type === "next_zone") return 2;
-  if (t.type === "straight_streak") return 3;
+  if (t.type === "next_step") return 2;
+  if (t.type === "next_zone") return 3;
+  if (t.type === "straight_streak") return 4;
   const phases: ZoneExitPhase[] = ["entry", "center_70m", "exit_outer"];
-  return 4 + phases.indexOf(t.phase as ZoneExitPhase);
+  return 5 + phases.indexOf(t.phase as ZoneExitPhase);
 }
 
 /**
@@ -523,6 +569,17 @@ async function openQueuedTrigger(
   if (trigger.type === "next_turn") {
     return openNextTurnMarketForRoom(roomId, { queuedPinId: trigger.pinId, windowMs });
   }
+  if (trigger.type === "next_step") {
+    return openNextStepMarketForRoom(roomId, {
+      windowMs,
+      stepKey: trigger.stepKey,
+      stepLat: trigger.stepLat,
+      stepLng: trigger.stepLng,
+      maneuverType: trigger.maneuverType,
+      maneuverModifier: trigger.maneuverModifier,
+      stepName: trigger.stepName,
+    });
+  }
   if (trigger.type === "next_zone") return openCityGridMarketForRoom(roomId, { windowMs });
   if (trigger.type === "straight_streak") {
     return openStraightStreakMarketForRoom(roomId, {
@@ -542,6 +599,17 @@ async function openFreshTrigger(
 ) {
   const windowMs = betWindowMs(remainingFreshCount);
   if (ft.type === "next_turn") return openNextTurnMarketForRoom(roomId, { windowMs });
+  if (ft.type === "next_step") {
+    return openNextStepMarketForRoom(roomId, {
+      windowMs,
+      stepKey: ft.stepKey,
+      stepLat: ft.stepLat,
+      stepLng: ft.stepLng,
+      maneuverType: ft.maneuverType,
+      maneuverModifier: ft.maneuverModifier,
+      stepName: ft.stepName,
+    });
+  }
   if (ft.type === "next_zone") return openCityGridMarketForRoom(roomId, { windowMs });
   if (ft.type === "straight_streak") {
     return openStraightStreakMarketForRoom(roomId, {
@@ -707,6 +775,61 @@ async function detectEligibleTriggers(
     }
   }
 
+  // ── next_step: OSRM step maneuver bet ──────────────────────────────────────
+  const planningPolyline =
+    drvResult && "planningPolyline" in drvResult ? drvResult.planningPolyline : null;
+
+  if (NEXT_STEP_BETS_ENABLED && planningPolyline && planningPolyline.length >= 2) {
+    try {
+      // Use the end of the planning polyline as the OSRM destination so steps
+      // are fetched for the same ~1500 m road segment the planner is using.
+      const planPolyEnd = planningPolyline[planningPolyline.length - 1]!;
+      const osrmResult = await fetchOsrmDrivingRouteWithSteps(
+        { lat, lng },
+        planPolyEnd,
+      );
+
+      if (osrmResult) {
+        for (const step of osrmResult.steps) {
+          if (isBookendManeuver(step.maneuver.type)) continue;
+
+          const distToStep = metersBetween(
+            { lat, lng },
+            step.maneuver.location,
+          );
+
+          if (distToStep < NEXT_STEP_MIN_M || distToStep > NEXT_STEP_MAX_M) continue;
+
+          // Verify the step maneuver point lies on the planning polyline
+          // (both routing engines agree on the road).
+          const proj = projectOntoPolyline(planningPolyline, step.maneuver.location);
+          if (!proj || proj.distanceMeters > NEXT_STEP_ON_ROUTE_M) continue;
+
+          const stepKey = `step:${step.maneuver.location.lat.toFixed(4)}:${step.maneuver.location.lng.toFixed(4)}`;
+          const fired = await hasFiredNextStep(service, sessionId, stepKey);
+
+          if (!fired) {
+            console.log(`[tick:detect] next_step: ${stepKey} (${step.maneuver.type} ${step.maneuver.modifier ?? ""}) dist=${Math.round(distToStep)}m`, { roomId });
+            eligible.push({
+              type: "next_step",
+              stepKey,
+              stepLat: step.maneuver.location.lat,
+              stepLng: step.maneuver.location.lng,
+              maneuverType: step.maneuver.type,
+              maneuverModifier: step.maneuver.modifier,
+              stepName: step.name,
+            });
+            break; // Only trigger on the first eligible step per tick.
+          } else {
+            console.log(`[tick:detect] next_step: ${stepKey} already fired this session`, { roomId });
+          }
+        }
+      }
+    } catch (err) {
+      console.error(`[tick:detect] next_step analysis error`, err, { roomId });
+    }
+  }
+
   return eligible;
 }
 
@@ -774,6 +897,30 @@ async function hasFiredStraightStreak(
         (row as { subtitle: string | null }).subtitle ?? "{}",
       ) as { streakKey?: string };
       return meta.streakKey === streakKey;
+    } catch {
+      return false;
+    }
+  });
+}
+
+async function hasFiredNextStep(
+  service: Awaited<ReturnType<typeof createServiceClient>>,
+  sessionId: string,
+  stepKey: string,
+): Promise<boolean> {
+  const { data } = await service
+    .from("live_betting_markets")
+    .select("subtitle")
+    .eq("live_session_id", sessionId)
+    .eq("market_type", "next_step")
+    .order("opens_at", { ascending: false })
+    .limit(20);
+  return (data ?? []).some((row) => {
+    try {
+      const meta = JSON.parse(
+        (row as { subtitle: string | null }).subtitle ?? "{}",
+      ) as { stepKey?: string };
+      return meta.stepKey === stepKey;
     } catch {
       return false;
     }
