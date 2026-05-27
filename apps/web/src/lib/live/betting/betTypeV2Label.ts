@@ -3,7 +3,7 @@ import type { BetTypeV2 } from "@bettok/live";
 /** Short product labels for engine pills and sheet titles. */
 const LABELS: Record<BetTypeV2, string> = {
   next_turn: "Next junction",
-  next_step: "Time to maneuver",
+  next_step: "Time to pin",
   next_zone: "Next grid square",
   zone_exit_time: "Time to exit zone",
   straight_streak: "Straights in a row",

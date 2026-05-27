@@ -132,11 +132,18 @@ export const STRAIGHT_STREAK_INTERSECTIONS_TO_RESOLVE = 3;
 //   SETTLE:  when driver passes within NEXT_STEP_APPROACH_M of the maneuver
 //            point and starts moving away, or reveal_at safety fires.
 
-/** Min distance to OSRM step maneuver for a trigger to fire (m). */
-export const NEXT_STEP_MIN_M = 150;
+/**
+ * Min distance to OSRM step maneuver for a trigger to fire (m).
+ * Kept small so the market fires shortly before the driver reaches the pin.
+ */
+export const NEXT_STEP_MIN_M = 80;
 
-/** Max distance to OSRM step maneuver for a trigger to fire (m). */
-export const NEXT_STEP_MAX_M = 500;
+/**
+ * Max distance to OSRM step maneuver for a trigger to fire (m).
+ * Tight window (~150 m approach) so the bet is a "fast" countdown —
+ * the driver is already close and will reach the pin within seconds.
+ */
+export const NEXT_STEP_MAX_M = 200;
 
 /**
  * Max perpendicular distance from the planning polyline for an OSRM step
