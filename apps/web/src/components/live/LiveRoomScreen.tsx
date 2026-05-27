@@ -338,6 +338,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     marketId: string;
     betPlacedAtMs: number;
     remainingAtBetSec: number;
+    stepLat?: number;
+    stepLng?: number;
   } | null>(null);
   const nextStepDismissedRef = useRef<Set<string>>(new Set());
   /** Active next_zone (city_grid) bet — tracks start cell to detect border crossing. */
@@ -963,6 +965,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           marketId: market.id,
           betPlacedAtMs: now,
           remainingAtBetSec: remaining,
+          stepLat: market.turnPointLat ?? undefined,
+          stepLng: market.turnPointLng ?? undefined,
         });
       }
     }
@@ -1240,10 +1244,16 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   /** Hide blue pin once we're essentially at the maneuver (matches server pass semantics). */
   const viewerTurnTargetForMap =
     currentMarket?.marketType !== "city_grid" &&
+    currentMarket?.marketType !== "next_step" &&
     viewerTurnTarget &&
     currentMarket &&
     !passedMarketTurn
       ? viewerTurnTarget
+      : null;
+
+  const stepPin =
+    nextStepPending?.stepLat != null && nextStepPending?.stepLng != null
+      ? { lat: nextStepPending.stepLat, lng: nextStepPending.stepLng }
       : null;
 
   const viewerDecisionLatLng =
@@ -1464,6 +1474,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       marketId: currentMarket.id,
       betPlacedAtMs: now,
       remainingAtBetSec: remaining,
+      stepLat: currentMarket.turnPointLat ?? undefined,
+      stepLng: currentMarket.turnPointLng ?? undefined,
     });
   }, [
     currentMarket,
@@ -1471,6 +1483,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     currentMarket?.marketType,
     currentMarket?.opensAt,
     currentMarket?.meta,
+    currentMarket?.turnPointLat,
+    currentMarket?.turnPointLng,
     lastBetMarketId,
     nextStepPending?.marketId,
   ]);
@@ -1981,6 +1995,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             zonesVisualStyle={zonesVisualStyleForBet}
             showCheckpoints={true}
             turnTarget={viewerTurnTargetForMap}
+            stepPin={stepPin}
             driverPins={viewerOsrmPreviewPins}
             approachLine={approachLine}
             railPhase={viewerRailPhase}
@@ -2183,6 +2198,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               zonesVisualStyle={zonesVisualStyleForBet}
               showCheckpoints={true}
               turnTarget={viewerTurnTargetForMap}
+              stepPin={stepPin}
               driverPins={viewerOsrmPreviewPins}
               approachLine={approachLine}
               railPhase={viewerRailPhase}
@@ -2884,6 +2900,7 @@ function zoneTimeOptionLabel(optionId: string, remainingSec: number | null): str
 
 const MarketTimer = memo(function MarketTimer({ locksAt }: { locksAt: string }) {
   const { secondsLeft, label } = useCountdown(locksAt);
+  if (secondsLeft === -1) return null;
   const locked = secondsLeft <= 0;
   return (
     <span

@@ -804,15 +804,27 @@ function findNextStepCandidates(
     if (planningPolyline) {
       const proj = projectOntoPolyline(planningPolyline, step.maneuver.location);
       if (!proj || proj.distanceMeters > NEXT_STEP_ON_ROUTE_M) continue;
+      // Snap the pin to the Google Maps polyline so it sits exactly on the
+      // path the driver is following rather than at the OSRM node position
+      // which can be off by tens of metres.
+      results.push({
+        stepKey: `step:${step.maneuver.location.lat.toFixed(4)}:${step.maneuver.location.lng.toFixed(4)}`,
+        stepLat: proj.projection.lat,
+        stepLng: proj.projection.lng,
+        maneuverType: step.maneuver.type,
+        maneuverModifier: step.maneuver.modifier,
+        stepName: step.name,
+      });
+    } else {
+      results.push({
+        stepKey: `step:${step.maneuver.location.lat.toFixed(4)}:${step.maneuver.location.lng.toFixed(4)}`,
+        stepLat: step.maneuver.location.lat,
+        stepLng: step.maneuver.location.lng,
+        maneuverType: step.maneuver.type,
+        maneuverModifier: step.maneuver.modifier,
+        stepName: step.name,
+      });
     }
-    results.push({
-      stepKey: `step:${step.maneuver.location.lat.toFixed(4)}:${step.maneuver.location.lng.toFixed(4)}`,
-      stepLat: step.maneuver.location.lat,
-      stepLng: step.maneuver.location.lng,
-      maneuverType: step.maneuver.type,
-      maneuverModifier: step.maneuver.modifier,
-      stepName: step.name,
-    });
   }
   return results;
 }

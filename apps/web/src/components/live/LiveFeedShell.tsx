@@ -161,6 +161,7 @@ function MarketStrip({ row }: { row: LiveFeedRow }) {
 
 function LockCountdown({ locksAt }: { locksAt: string }) {
   const { secondsLeft, label } = useCountdown(locksAt);
+  if (secondsLeft === -1) return null;
   if (secondsLeft <= 0) {
     return <span className="text-white/50 drop-shadow">locked</span>;
   }

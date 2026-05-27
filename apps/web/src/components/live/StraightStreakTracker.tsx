@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState, useMemo } from "react";
 import { metersBetween } from "@/lib/live/routing/geometry";
-import { STREAK_CROSSROAD_PROXIMITY_M } from "@/lib/live/betting/betWindowConstants";
 import type { StraightStreakSubtitle } from "@/lib/live/routing/straightStreakAnalyzer";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -21,11 +20,22 @@ type Props = {
 
 // ─── Proximity thresholds ─────────────────────────────────────────────────────
 
-/** Distance (m) at which the vehicle is considered to be "in" an intersection. */
-const IN_RANGE_M = STREAK_CROSSROAD_PROXIMITY_M; // 45 m — same as resolver
+/**
+ * Radius used to decide the vehicle "was near" an intersection.
+ * Larger than the server's 45 m so infrequent GPS ticks (~1 Hz at 80 km/h
+ * cover 22 m/s) can't skip the entry zone entirely.
+ */
+const IN_RANGE_M = 80;
 
-/** Distance (m) past which the vehicle has clearly left the intersection. */
-const EXITED_M = IN_RANGE_M + 20; // 65 m
+/**
+ * Once the vehicle was within IN_RANGE_M, wait until it is EXITED_M away
+ * before marking the intersection as passed.  Keeps the counter from
+ * firing while the driver is still inside the junction box.
+ */
+const EXITED_M = 90;
+
+/** How many GPS positions to keep in the rolling history buffer. */
+const HISTORY_SIZE = 40;
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
@@ -67,8 +77,12 @@ export function StraightStreakTracker({ marketMeta, marketId, vehiclePosition }:
    */
   const [floatTokens, setFloatTokens] = useState<number[]>([]);
 
-  /** Node IDs currently within the proximity radius. */
-  const approachingRef = useRef<Set<number>>(new Set());
+  /**
+   * Rolling GPS history buffer.  We keep the last HISTORY_SIZE positions so
+   * we can detect whether the vehicle was ever near an intersection even when
+   * the current GPS tick has already moved past it.
+   */
+  const gpsHistoryRef = useRef<Array<{ lat: number; lng: number }>>([]);
   /** Node IDs that have already been counted this market. */
   const passedRef = useRef<Set<number>>(new Set());
   const tokenCounterRef = useRef(0);
@@ -77,30 +91,39 @@ export function StraightStreakTracker({ marketMeta, marketId, vehiclePosition }:
   useEffect(() => {
     setPassedCount(0);
     setFloatTokens([]);
-    approachingRef.current = new Set();
+    gpsHistoryRef.current = [];
     passedRef.current = new Set();
     tokenCounterRef.current = 0;
   }, [marketId]);
 
-  // ── Proximity detection ────────────────────────────────────────────────────
+  // ── Proximity detection (history-aware) ───────────────────────────────────
   useEffect(() => {
     if (!streakData || !vehiclePosition) return;
 
+    // Append the new position to the rolling history buffer.
+    gpsHistoryRef.current = [
+      ...gpsHistoryRef.current.slice(-(HISTORY_SIZE - 1)),
+      vehiclePosition,
+    ];
+
     let newPassed = 0;
     const newTokens: number[] = [];
+    const history = gpsHistoryRef.current;
 
     for (const intersection of streakData.intersections) {
       const nodeId = intersection.nodeId;
-      if (passedRef.current.has(nodeId)) continue; // already counted
+      if (passedRef.current.has(nodeId)) continue;
 
-      const dist = metersBetween(vehiclePosition, intersection);
+      const currentDist = metersBetween(vehiclePosition, intersection);
 
-      if (dist <= IN_RANGE_M) {
-        // Vehicle is inside the proximity zone.
-        approachingRef.current.add(nodeId);
-      } else if (approachingRef.current.has(nodeId) && dist >= EXITED_M) {
-        // Vehicle was inside the zone and has now clearly exited → passage!
-        approachingRef.current.delete(nodeId);
+      // Check if the vehicle was near this intersection at any point in the
+      // recent history buffer — catches GPS ticks that skipped the entry zone.
+      const wasNear = history.some(
+        (p) => metersBetween(p, intersection) <= IN_RANGE_M,
+      );
+
+      if (wasNear && currentDist >= EXITED_M) {
+        // Vehicle passed through (was near and has now clearly moved away).
         passedRef.current.add(nodeId);
         newPassed++;
         tokenCounterRef.current++;
@@ -132,12 +155,12 @@ export function StraightStreakTracker({ marketMeta, marketId, vehiclePosition }:
   return (
     <div className="pointer-events-none absolute inset-x-0 bottom-28 z-[195] flex flex-col items-center gap-0">
       {/* Float-up "+1" tokens */}
-      <div className="relative flex justify-center" style={{ height: 44 }}>
+      <div className="relative flex justify-center" style={{ height: 64 }}>
         {floatTokens.map((token) => (
           <span
             key={token}
-            className="absolute bottom-0 animate-float-up select-none text-lg font-black text-emerald-400 drop-shadow"
-            style={{ textShadow: "0 0 8px rgba(52,211,153,0.8)" }}
+            className="absolute bottom-0 animate-float-up select-none text-4xl font-black text-emerald-400 drop-shadow"
+            style={{ textShadow: "0 0 14px rgba(52,211,153,0.9)" }}
           >
             +1
           </span>

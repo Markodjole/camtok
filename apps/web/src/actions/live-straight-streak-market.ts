@@ -186,8 +186,9 @@ export async function openStraightStreakMarketForRoom(
   const subtitle: StraightStreakSubtitle = {
     expectedStreak,
     streakKey,
-    // Store only the crossroads in the streak (not the first non-straight one).
-    intersections: crossroads.slice(0, expectedStreak),
+    // Store ALL available crossroads so the client tracker can count every
+    // intersection the driver passes, not just the expected-streak window.
+    intersections: crossroads,
   };
 
   // ── Timing ────────────────────────────────────────────────────────────────

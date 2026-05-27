@@ -75,6 +75,11 @@ export interface LiveMapProps {
     label?: string;
   } | null;
   /**
+   * Independent orange pin for an active `next_step` (time-to-pin) bet.
+   * Persists as long as the bet is alive — unaffected by zone market changes.
+   */
+  stepPin?: { lat: number; lng: number } | null;
+  /**
    * Up to 3 AI-chosen pins ahead of the driver, ordered by road distance.
    * Each pin is a crossroad the vehicle will physically reach; the first
    * one is the next decision point. Pins persist until the vehicle passes
@@ -309,6 +314,7 @@ function LiveMapInner({
   followMode = true,
   onUserInteract,
   turnTarget = null,
+  stepPin = null,
   driverPins = null,
   approachLine = null,
   railPhase = "none",
@@ -339,6 +345,7 @@ function LiveMapInner({
   const checkpointLayerRef = useRef<import("leaflet").LayerGroup | null>(null);
   const turnLayerRef = useRef<import("leaflet").LayerGroup | null>(null);
   const railLayerRef = useRef<import("leaflet").LayerGroup | null>(null);
+  const stepPinLayerRef = useRef<import("leaflet").LayerGroup | null>(null);
   const destLayerRef = useRef<import("leaflet").LayerGroup | null>(null);
   const camLayerRef = useRef<import("leaflet").LayerGroup | null>(null);
   const hasAppliedInitialZoomRef = useRef(false);
@@ -664,6 +671,7 @@ function LiveMapInner({
       camLayerRef.current = L.layerGroup().addTo(m);
       railLayerRef.current = L.layerGroup().addTo(m);
       turnLayerRef.current = L.layerGroup().addTo(m);
+      stepPinLayerRef.current = L.layerGroup().addTo(m);
       turnLayerFingerprintRef.current = ""; // ensure first draw always runs
       // Vehicle pane sits above all polylines, markers, and turn pins (z-index 640 >
       // marker pane 600 > overlay/SVG pane 400). Only tooltips (650) and popups (700) beat it.
@@ -695,6 +703,7 @@ function LiveMapInner({
       camLayerRef.current = null;
       railLayerRef.current = null;
       turnLayerRef.current = null;
+      stepPinLayerRef.current = null;
       mapRef.current?.remove();
       mapRef.current = null;
       layerRef.current = null;
@@ -1134,6 +1143,32 @@ function LiveMapInner({
       }).addTo(rail);
     })();
   }, [turnTarget, driverPins, approachLine, mapReady, audienceRole]);
+
+  // Render the independent orange step-pin for active `next_step` bets.
+  useEffect(() => {
+    const group = stepPinLayerRef.current;
+    if (!group) return;
+    (async () => {
+      const L = (await import("leaflet")).default;
+      group.clearLayers();
+      if (!stepPin) return;
+      L.circle([stepPin.lat, stepPin.lng], {
+        radius: 16,
+        color: "#ea580c",
+        weight: 2,
+        fillColor: "#f97316",
+        fillOpacity: 0.22,
+        opacity: 0.9,
+      }).addTo(group);
+      L.circleMarker([stepPin.lat, stepPin.lng], {
+        radius: 7,
+        color: "#ffffff",
+        weight: 2,
+        fillColor: "#ea580c",
+        fillOpacity: 1,
+      }).addTo(group);
+    })();
+  }, [stepPin, mapReady]);
 
   useEffect(() => {
     const m = mapRef.current;

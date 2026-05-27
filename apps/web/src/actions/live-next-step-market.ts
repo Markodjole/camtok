@@ -248,7 +248,7 @@ export async function openNextStepMarketForRoom(
       room_id: roomId,
       live_session_id: sessionId,
       source: "system_generated",
-      title: `How fast does ${characterName} reach the next turn?`,
+      title: `How fast does ${characterName} reach the next pin?`,
       subtitle: JSON.stringify(subtitle),
       market_type: "next_step",
       option_set: options,
@@ -283,7 +283,7 @@ export async function openNextStepMarketForRoom(
     market_id: (market as { id: string }).id,
     event_type: "market_open",
     payload: {
-      title: `How fast does ${characterName} reach the next turn?`,
+      title: `How fast does ${characterName} reach the next pin?`,
       optionCount: options.length,
       betType: "next_step",
       stepKey,
