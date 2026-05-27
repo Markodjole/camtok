@@ -34,6 +34,8 @@ import {
   ZONE_EXIT_CENTER_TRIGGER_M,
   ZONE_EXIT_OUTER_TRIGGER_MIN_M,
 } from "@/lib/live/betting/betWindowConstants";
+import { betSchedulePriority, getFillerEntries } from "@/lib/live/betting/betScheduleConfig";
+import type { OsrmStep } from "@/lib/live/routing/osrmSteps";
 import {
   evaluateResolutionConditions,
   type MarketSweepRow,
@@ -251,11 +253,10 @@ export async function runRoomTick(
       const status = (market as { status: string }).status;
       const mType = (market as { market_type: string }).market_type;
       const locksAtMs = new Date((market as { locks_at: string }).locks_at).getTime();
-      const isActiveType =
-        mType === "next_turn" ||
-        mType === "city_grid" ||
-        mType === "zone_exit_time" ||
-        mType === "straight_streak"; // deferred-settle: must wait for locks_at
+      // Any market type that has a meaningful locks_at window — lock only when
+      // the timer expires rather than immediately.  Derived from the schedule
+      // so new bet types are covered automatically once they appear there.
+      const isActiveType = isEngineMarketType(mType) || mType === "next_turn" || mType === "city_grid";
       const shouldLockNow = status === "open" && (Date.now() >= locksAtMs || !isActiveType);
       if (shouldLockNow) {
         if (isEngineMarketType(mType)) {
@@ -297,7 +298,12 @@ export async function runRoomTick(
   }
 
   // ─── 3. Detect fresh triggers ────────────────────────────────────────────
-  const freshTriggers = await detectEligibleTriggers(service, roomId, sessionId, capturedZone);
+  const { eligible: freshTriggers, routeCtx } = await detectEligibleTriggers(
+    service,
+    roomId,
+    sessionId,
+    capturedZone,
+  );
 
   if (phaseNow === "market_open") {
     const updatedQueue = buildUpdatedQueue(currentQueue, freshTriggers);
@@ -312,6 +318,18 @@ export async function runRoomTick(
 
   if (phaseNow === "waiting_for_next_market") {
     const opened = await openFromQueueOrTriggers(service, roomId, currentQueue, freshTriggers);
+
+    // ── Gap-filler ──────────────────────────────────────────────────────────
+    // When no context-dependent bet is available, immediately try opening a
+    // filler market (next_step with relaxed distance window) so dead-air
+    // between bets is kept to a minimum.
+    if (opened.action === "no_eligible_bet") {
+      const fillerOpened = await tryFillerNextStep(service, roomId, sessionId, routeCtx);
+      if (fillerOpened) {
+        return { action: fillerOpened.action, ...(fillerOpened.detail ?? {}), settled: settleNotes };
+      }
+    }
+
     return { action: opened.action, ...(opened.detail ?? {}), settled: settleNotes };
   }
 
@@ -534,21 +552,24 @@ async function openFromQueueOrTriggers(
 }
 
 function triggerPriority(t: QueuedTrigger): number {
-  if (t.type === "next_turn") return 1;
-  if (t.type === "next_step") return 2;
-  if (t.type === "next_zone") return 3;
-  if (t.type === "straight_streak") return 4;
-  const phases: ZoneExitPhase[] = ["entry", "center_70m", "exit_outer"];
-  return 5 + phases.indexOf(t.phase as ZoneExitPhase);
+  // next_zone is the city_grid market type in disguise.
+  const mType = t.type === "next_zone" ? "city_grid" : t.type;
+  const base = betSchedulePriority(mType);
+  if (t.type === "zone_exit_time") {
+    const phases: ZoneExitPhase[] = ["entry", "center_70m", "exit_outer"];
+    return base + phases.indexOf(t.phase as ZoneExitPhase) * 0.1;
+  }
+  return base;
 }
 
 function freshPriority(t: FreshTrigger): number {
-  if (t.type === "next_turn") return 1;
-  if (t.type === "next_step") return 2;
-  if (t.type === "next_zone") return 3;
-  if (t.type === "straight_streak") return 4;
-  const phases: ZoneExitPhase[] = ["entry", "center_70m", "exit_outer"];
-  return 5 + phases.indexOf(t.phase as ZoneExitPhase);
+  const mType = t.type === "next_zone" ? "city_grid" : t.type;
+  const base = betSchedulePriority(mType);
+  if (t.type === "zone_exit_time") {
+    const phases: ZoneExitPhase[] = ["entry", "center_70m", "exit_outer"];
+    return base + phases.indexOf(t.phase as ZoneExitPhase) * 0.1;
+  }
+  return base;
 }
 
 /**
@@ -622,6 +643,133 @@ async function openFreshTrigger(
   return openEngineMarketForRoom(roomId, { phase: ft.phase as ZoneExitPhase, windowMs });
 }
 
+// ─── Gap-filler ───────────────────────────────────────────────────────────────
+
+/**
+ * Try to open a `next_step` bet using the RELAXED filler distance window
+ * from `betScheduleConfig`.  Called only when no normal trigger is available
+ * (`openFromQueueOrTriggers` returned `no_eligible_bet`).
+ *
+ * Reuses the `routeCtx` produced by `detectEligibleTriggers` (same planning
+ * polyline + OSRM steps) so no additional network calls are needed.
+ * Returns a partial tick-result on success, null if nothing was opened.
+ */
+async function tryFillerNextStep(
+  service: Awaited<ReturnType<typeof createServiceClient>>,
+  roomId: string,
+  sessionId: string,
+  routeCtx: RouteCtx | null,
+): Promise<{ action: string; detail?: Record<string, unknown> } | null> {
+  if (!NEXT_STEP_BETS_ENABLED) return null;
+  if (!routeCtx?.planningPolyline || !routeCtx.osrmSteps) return null;
+
+  const fillerEntry = getFillerEntries().find((e) => e.marketType === "next_step");
+  if (!fillerEntry) return null;
+
+  const candidates = findNextStepCandidates(
+    routeCtx.osrmSteps,
+    routeCtx.planningPolyline,
+    routeCtx.lat,
+    routeCtx.lng,
+    fillerEntry.fillerMinM ?? NEXT_STEP_MIN_M,
+    fillerEntry.fillerMaxM ?? NEXT_STEP_MAX_M,
+  );
+
+  for (const candidate of candidates) {
+    const fired = await hasFiredNextStep(service, sessionId, candidate.stepKey);
+    if (fired) {
+      console.log(`[tick:filler] next_step: ${candidate.stepKey} already fired — trying next`, { roomId });
+      continue;
+    }
+
+    console.log(
+      `[tick:filler] next_step: ${candidate.stepKey} (${candidate.maneuverType} ${candidate.maneuverModifier ?? ""}) filler window [${fillerEntry.fillerMinM ?? NEXT_STEP_MIN_M},${fillerEntry.fillerMaxM ?? NEXT_STEP_MAX_M}]m`,
+      { roomId },
+    );
+
+    const res = await openNextStepMarketForRoom(roomId, {
+      windowMs: BET_OPEN_WINDOW_IDLE_MS,
+      stepKey: candidate.stepKey,
+      stepLat: candidate.stepLat,
+      stepLng: candidate.stepLng,
+      maneuverType: candidate.maneuverType,
+      maneuverModifier: candidate.maneuverModifier,
+      stepName: candidate.stepName,
+    });
+
+    if ("marketId" in res && res.marketId) {
+      return { action: "opened_next_step_filler", detail: { marketId: res.marketId } };
+    }
+
+    // Opener failed (de-dupe, GPS stale, etc.) — try next candidate.
+    console.warn(`[tick:filler] next_step opener failed for ${candidate.stepKey}`, res, { roomId });
+  }
+
+  return null;
+}
+
+// ─── Route context returned from detection ────────────────────────────────────
+
+type RouteCtx = {
+  lat: number;
+  lng: number;
+  /** Decoded Google / OSRM planning polyline for the next ~1500 m. */
+  planningPolyline: import("@/lib/live/routing/geometry").LatLng[] | null;
+  /** OSRM step list fetched for the same segment.  Null when unavailable. */
+  osrmSteps: OsrmStep[] | null;
+};
+
+type DetectResult = {
+  eligible: FreshTrigger[];
+  /** Route context that the filler path can reuse without re-fetching. */
+  routeCtx: RouteCtx | null;
+};
+
+// ─── Pure helper: filter OSRM steps to eligible next_step candidates ─────────
+
+/**
+ * Scan an OSRM step list and return every step whose maneuver point:
+ *   - is not a bookend (depart / arrive)
+ *   - is between minM and maxM from the driver
+ *   - lies within NEXT_STEP_ON_ROUTE_M of the planning polyline
+ *
+ * The first entry is the nearest eligible step.  The caller decides how many
+ * to use (normal detection takes only [0], filler iterates until one is unfired).
+ */
+function findNextStepCandidates(
+  osrmSteps: OsrmStep[],
+  planningPolyline: import("@/lib/live/routing/geometry").LatLng[],
+  lat: number,
+  lng: number,
+  minM: number,
+  maxM: number,
+): Array<{
+  stepKey: string;
+  stepLat: number;
+  stepLng: number;
+  maneuverType: string;
+  maneuverModifier: string | undefined;
+  stepName: string | undefined;
+}> {
+  const results = [];
+  for (const step of osrmSteps) {
+    if (isBookendManeuver(step.maneuver.type)) continue;
+    const dist = metersBetween({ lat, lng }, step.maneuver.location);
+    if (dist < minM || dist > maxM) continue;
+    const proj = projectOntoPolyline(planningPolyline, step.maneuver.location);
+    if (!proj || proj.distanceMeters > NEXT_STEP_ON_ROUTE_M) continue;
+    results.push({
+      stepKey: `step:${step.maneuver.location.lat.toFixed(4)}:${step.maneuver.location.lng.toFixed(4)}`,
+      stepLat: step.maneuver.location.lat,
+      stepLng: step.maneuver.location.lng,
+      maneuverType: step.maneuver.type,
+      maneuverModifier: step.maneuver.modifier,
+      stepName: step.name,
+    });
+  }
+  return results;
+}
+
 // ─── Trigger detection ────────────────────────────────────────────────────────
 
 async function detectEligibleTriggers(
@@ -629,7 +777,7 @@ async function detectEligibleTriggers(
   roomId: string,
   sessionId: string,
   capturedZone: string | null,
-): Promise<FreshTrigger[]> {
+): Promise<DetectResult> {
   const eligible: FreshTrigger[] = [];
 
   const { data: gpsRow } = await service
@@ -639,7 +787,7 @@ async function detectEligibleTriggers(
     .order("recorded_at", { ascending: false })
     .limit(1)
     .maybeSingle();
-  if (!gpsRow) return eligible;
+  if (!gpsRow) return { eligible, routeCtx: null };
   const g = gpsRow as {
     normalized_lat: number | null;
     normalized_lng: number | null;
@@ -692,11 +840,11 @@ async function detectEligibleTriggers(
     }
   }
 
-  // ── next_turn + straight_streak triggers ─────────────────────────────────
+  // ── next_turn + straight_streak + next_step triggers ─────────────────────
   //
-  // Both bet types share a single `computeDriverRouteInstruction` call to
-  // avoid fetching the route twice.  Results are used independently.
-  const needsRoute = NEXT_TURN_BETS_ENABLED || STRAIGHT_STREAK_BETS_ENABLED;
+  // All three route-dependent bet types share a single
+  // `computeDriverRouteInstruction` call to avoid fetching the route twice.
+  const needsRoute = NEXT_TURN_BETS_ENABLED || STRAIGHT_STREAK_BETS_ENABLED || NEXT_STEP_BETS_ENABLED;
   let drvResult: Awaited<ReturnType<typeof computeDriverRouteInstruction>> | null = null;
   if (needsRoute) {
     try {
@@ -776,52 +924,48 @@ async function detectEligibleTriggers(
   }
 
   // ── next_step: OSRM step maneuver bet ──────────────────────────────────────
+  //
+  // OSRM steps are fetched once here and stored in `osrmStepsCache` so the
+  // filler path (tryFillerNextStep) can reuse them via routeCtx without a
+  // second network call.
   const planningPolyline =
     drvResult && "planningPolyline" in drvResult ? drvResult.planningPolyline : null;
+  let osrmStepsCache: OsrmStep[] | null = null;
 
   if (NEXT_STEP_BETS_ENABLED && planningPolyline && planningPolyline.length >= 2) {
     try {
-      // Use the end of the planning polyline as the OSRM destination so steps
-      // are fetched for the same ~1500 m road segment the planner is using.
       const planPolyEnd = planningPolyline[planningPolyline.length - 1]!;
-      const osrmResult = await fetchOsrmDrivingRouteWithSteps(
-        { lat, lng },
-        planPolyEnd,
-      );
-
+      const osrmResult = await fetchOsrmDrivingRouteWithSteps({ lat, lng }, planPolyEnd);
       if (osrmResult) {
-        for (const step of osrmResult.steps) {
-          if (isBookendManeuver(step.maneuver.type)) continue;
-
-          const distToStep = metersBetween(
-            { lat, lng },
-            step.maneuver.location,
-          );
-
-          if (distToStep < NEXT_STEP_MIN_M || distToStep > NEXT_STEP_MAX_M) continue;
-
-          // Verify the step maneuver point lies on the planning polyline
-          // (both routing engines agree on the road).
-          const proj = projectOntoPolyline(planningPolyline, step.maneuver.location);
-          if (!proj || proj.distanceMeters > NEXT_STEP_ON_ROUTE_M) continue;
-
-          const stepKey = `step:${step.maneuver.location.lat.toFixed(4)}:${step.maneuver.location.lng.toFixed(4)}`;
-          const fired = await hasFiredNextStep(service, sessionId, stepKey);
-
+        osrmStepsCache = osrmResult.steps;
+        // Normal trigger window — only the nearest unfired step.
+        const candidates = findNextStepCandidates(
+          osrmResult.steps,
+          planningPolyline,
+          lat,
+          lng,
+          NEXT_STEP_MIN_M,
+          NEXT_STEP_MAX_M,
+        );
+        for (const c of candidates) {
+          const fired = await hasFiredNextStep(service, sessionId, c.stepKey);
           if (!fired) {
-            console.log(`[tick:detect] next_step: ${stepKey} (${step.maneuver.type} ${step.maneuver.modifier ?? ""}) dist=${Math.round(distToStep)}m`, { roomId });
+            console.log(
+              `[tick:detect] next_step: ${c.stepKey} (${c.maneuverType} ${c.maneuverModifier ?? ""}) dist in [${NEXT_STEP_MIN_M},${NEXT_STEP_MAX_M}]m`,
+              { roomId },
+            );
             eligible.push({
               type: "next_step",
-              stepKey,
-              stepLat: step.maneuver.location.lat,
-              stepLng: step.maneuver.location.lng,
-              maneuverType: step.maneuver.type,
-              maneuverModifier: step.maneuver.modifier,
-              stepName: step.name,
+              stepKey: c.stepKey,
+              stepLat: c.stepLat,
+              stepLng: c.stepLng,
+              maneuverType: c.maneuverType,
+              maneuverModifier: c.maneuverModifier,
+              stepName: c.stepName,
             });
-            break; // Only trigger on the first eligible step per tick.
+            break; // Only queue the nearest unfired step per tick.
           } else {
-            console.log(`[tick:detect] next_step: ${stepKey} already fired this session`, { roomId });
+            console.log(`[tick:detect] next_step: ${c.stepKey} already fired this session`, { roomId });
           }
         }
       }
@@ -830,7 +974,12 @@ async function detectEligibleTriggers(
     }
   }
 
-  return eligible;
+  const routeCtx: RouteCtx | null =
+    planningPolyline
+      ? { lat, lng, planningPolyline, osrmSteps: osrmStepsCache }
+      : null;
+
+  return { eligible, routeCtx };
 }
 
 // ─── DB helpers ───────────────────────────────────────────────────────────────
