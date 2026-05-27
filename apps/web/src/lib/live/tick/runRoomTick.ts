@@ -27,10 +27,13 @@ import {
   NEXT_TURN_PIN_MAX_M,
   NEXT_ZONE_TRIGGER_M,
   STRAIGHT_STREAK_MIN_LENGTH,
-  STRAIGHT_STREAK_COMMITTED_TURN_DEG,
   ZONE_EXIT_CENTER_TRIGGER_M,
   ZONE_EXIT_OUTER_TRIGGER_MIN_M,
 } from "@/lib/live/betting/betWindowConstants";
+import {
+  evaluateResolutionConditions,
+  type MarketSweepRow,
+} from "@/lib/live/market-resolvers/resolutionEvaluator";
 import {
   cellIdForPosition,
   gridCellCenter,
@@ -862,9 +865,9 @@ async function sweepPendingSettlements(
     const mid = (row as { id: string }).id;
     const marketType = (row as { market_type: string }).market_type;
     const locksAtStr = (row as { locks_at: string }).locks_at;
-    const revealAtMs = new Date((row as { reveal_at: string }).reveal_at).getTime();
     const sessionId = (row as { live_session_id: string | null }).live_session_id;
     const opensAtStr = (row as { opens_at: string }).opens_at;
+    const revealAtStr = (row as { reveal_at: string }).reveal_at;
 
     // ── Per-market error isolation ──────────────────────────────────────────
     // A single failed settlement must NEVER abort the loop for other markets.
@@ -872,50 +875,9 @@ async function sweepPendingSettlements(
       let settled = false;
       let reason = "pending";
 
-      if (Number.isFinite(revealAtMs) && nowMs >= revealAtMs) {
-        appendSweepLog(mid, {
-          marketType,
-          check: "reveal_at",
-          result: true,
-          detail: `reveal_at passed by ${Math.round((nowMs - revealAtMs) / 1000)}s`,
-        });
-        console.log(`[tick:sweep] reveal_at timeout — settling ${mid} (${marketType})`);
-        await revealAndSettleMarket(mid);
-        settled = true;
-        reason = "reveal_timeout";
-      } else if (marketType === "city_grid") {
-        const crossed = await driverCrossedCell(service, { row, sessionId });
-        appendSweepLog(mid, { marketType, check: "cell_crossed", result: crossed, detail: "" });
-        if (crossed) {
-          console.log(`[tick:sweep] city_grid cell crossed — settling ${mid}`);
-          await revealAndSettleMarket(mid);
-          settled = true;
-          reason = "cell_crossed";
-        }
-      } else if (marketType === "next_turn") {
-        const committed = await driverCommittedTurnDecision(service, { row, sessionId });
-        appendSweepLog(mid, { marketType, check: "turn_committed", result: committed, detail: "" });
-        if (committed) {
-          console.log(`[tick:sweep] next_turn committed — settling ${mid}`);
-          await revealAndSettleMarket(mid);
-          settled = true;
-          reason = "turn_committed";
-        }
-      } else if (marketType === "straight_streak") {
-        const committed = await driverCommittedStreakDecision(service, { row, sessionId });
-        appendSweepLog(mid, {
-          marketType,
-          check: "streak_turn_committed",
-          result: committed,
-          detail: `opensAt=${opensAtStr}`,
-        });
-        if (committed) {
-          console.log(`[tick:sweep] straight_streak turn committed — settling ${mid}`);
-          await revealAndSettleMarket(mid);
-          settled = true;
-          reason = "streak_turn_committed";
-        }
-      } else if (isEngineMarketType(marketType)) {
+      if (marketType === "zone_exit_time") {
+        // zone_exit_time has its own dedicated engine (timer + zone-exit logic)
+        // that is intentionally separate from the policy system.
         const settle = await shouldSettleEngineMarket(service, {
           marketId: mid,
           marketType,
@@ -939,12 +901,44 @@ async function sweepPendingSettlements(
           reason = `engine_${marketType}`;
         }
       } else {
+        // All other market types resolve via the policy-driven evaluator.
+        // Policies are registered in resolutionPolicies.ts; unknown types
+        // fall back to reveal_timeout-only so they always settle eventually.
+        const sweepRow: MarketSweepRow = {
+          id: mid,
+          market_type: marketType,
+          live_session_id: sessionId,
+          opens_at: opensAtStr,
+          reveal_at: revealAtStr,
+          subtitle: (row as { subtitle: string | null }).subtitle,
+          turn_point_lat: (row as { turn_point_lat: number | null }).turn_point_lat,
+          turn_point_lng: (row as { turn_point_lng: number | null }).turn_point_lng,
+          city_grid_spec: (row as { city_grid_spec: import("@/lib/live/grid/cityGrid500").CityGridSpecCompact | null }).city_grid_spec,
+        };
+
+        const { shouldSettle, firedLabel } = await evaluateResolutionConditions(
+          service,
+          sweepRow,
+          nowMs,
+        );
+
         appendSweepLog(mid, {
           marketType,
-          check: "no_handler",
-          result: false,
-          detail: "market type has no sweep handler",
+          check: firedLabel ?? "policy_check",
+          result: shouldSettle,
+          detail: firedLabel
+            ? `condition fired: ${firedLabel}`
+            : `opensAt=${opensAtStr}`,
         });
+
+        if (shouldSettle) {
+          console.log(
+            `[tick:sweep] policy condition "${firedLabel}" fired — settling ${mid} (${marketType})`,
+          );
+          await revealAndSettleMarket(mid);
+          settled = true;
+          reason = firedLabel ?? "policy_settled";
+        }
       }
 
       if (settled) {
@@ -961,144 +955,3 @@ async function sweepPendingSettlements(
   return notes;
 }
 
-async function driverCrossedCell(
-  service: Awaited<ReturnType<typeof createServiceClient>>,
-  args: { row: unknown; sessionId: string | null },
-): Promise<boolean> {
-  const gridSpec = (args.row as { city_grid_spec: CityGridSpecCompact | null }).city_grid_spec;
-  if (!gridSpec || !args.sessionId) return false;
-
-  const subtitleStr = (args.row as { subtitle: string | null }).subtitle;
-  let startRow: number | null = null;
-  let startCol: number | null = null;
-  try {
-    const meta = JSON.parse(subtitleStr ?? "{}") as { startRow?: number; startCol?: number };
-    if (typeof meta.startRow === "number") startRow = meta.startRow;
-    if (typeof meta.startCol === "number") startCol = meta.startCol;
-  } catch {
-    // ignore
-  }
-  if (startRow == null || startCol == null) return false;
-
-  const { data: latest } = await service
-    .from("live_route_snapshots")
-    .select("normalized_lat,normalized_lng,raw_lat,raw_lng")
-    .eq("live_session_id", args.sessionId)
-    .order("recorded_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (!latest) return false;
-  const g = latest as {
-    normalized_lat: number | null;
-    normalized_lng: number | null;
-    raw_lat: number;
-    raw_lng: number;
-  };
-  const currentCell = cellIdForPosition(gridSpec, g.normalized_lat ?? g.raw_lat, g.normalized_lng ?? g.raw_lng);
-  if (!currentCell) return false;
-  return currentCell !== `grid:r${startRow}:c${startCol}`;
-}
-
-async function driverCommittedTurnDecision(
-  service: Awaited<ReturnType<typeof createServiceClient>>,
-  args: { row: unknown; sessionId: string | null },
-): Promise<boolean> {
-  if (!args.sessionId) return false;
-  const turnLat = (args.row as { turn_point_lat: number | null }).turn_point_lat;
-  const turnLng = (args.row as { turn_point_lng: number | null }).turn_point_lng;
-  if (turnLat == null || turnLng == null) return false;
-  const opensAt =
-    (args.row as { opens_at?: string | null }).opens_at ??
-    new Date(Date.now() - 30_000).toISOString();
-
-  const { data: points } = await service
-    .from("live_route_snapshots")
-    .select("recorded_at, normalized_lat,normalized_lng,raw_lat,raw_lng,heading_deg")
-    .eq("live_session_id", args.sessionId)
-    .gte("recorded_at", opensAt)
-    .order("recorded_at", { ascending: true })
-    .limit(120);
-
-  const samples = ((points ?? []) as Array<{
-    normalized_lat: number | null;
-    normalized_lng: number | null;
-    raw_lat: number;
-    raw_lng: number;
-    heading_deg: number | null;
-  }>).map((p) => ({
-    lat: p.normalized_lat ?? p.raw_lat,
-    lng: p.normalized_lng ?? p.raw_lng,
-    heading: p.heading_deg,
-  }));
-  if (samples.length < 2) return false;
-
-  const firstHeading = samples.find((p) => p.heading != null)?.heading ?? null;
-  const lastHeading = [...samples].reverse().find((p) => p.heading != null)?.heading ?? null;
-  const turned =
-    firstHeading != null &&
-    lastHeading != null &&
-    Math.abs(angleDelta(firstHeading, lastHeading)) >= 50;
-  if (turned) return true;
-
-  const distances = samples.map((p) =>
-    metersBetween({ lat: p.lat, lng: p.lng }, { lat: turnLat, lng: turnLng }),
-  );
-  const minDistance = Math.min(...distances);
-  const latestDistance = distances[distances.length - 1] ?? Number.POSITIVE_INFINITY;
-
-  // Straight/forward case: settle once the vehicle has crossed the pin area
-  // and is moving away again, even if it never hits the exact GPS point.
-  return minDistance <= 35 && latestDistance >= minDistance + 12;
-}
-
-/**
- * Decide whether a `straight_streak` market is ready for settlement.
- *
- * Returns `true` once the first heading to last heading span since `opens_at`
- * exceeds STRAIGHT_STREAK_COMMITTED_TURN_DEG — meaning the driver has clearly
- * taken a turn, ending the straight streak.  The resolver will then count how
- * many crossroads they passed straight through.
- *
- * Note: `reveal_at` serves as the safety-cap for cases where the driver keeps
- * going straight indefinitely (streak_over).
- */
-async function driverCommittedStreakDecision(
-  service: Awaited<ReturnType<typeof createServiceClient>>,
-  args: { row: unknown; sessionId: string | null },
-): Promise<boolean> {
-  if (!args.sessionId) return false;
-  const opensAt =
-    (args.row as { opens_at?: string | null }).opens_at ??
-    new Date(Date.now() - 60_000).toISOString();
-
-  const { data: points } = await service
-    .from("live_route_snapshots")
-    .select("heading_deg")
-    .eq("live_session_id", args.sessionId)
-    .gte("recorded_at", opensAt)
-    .order("recorded_at", { ascending: true })
-    .limit(120);
-
-  if (!points || points.length < 4) return false;
-
-  const headings = (
-    points as Array<{ heading_deg: number | null }>
-  )
-    .map((p) => p.heading_deg)
-    .filter((h): h is number => h != null);
-
-  if (headings.length < 2) return false;
-
-  const firstHeading = headings[0]!;
-  const lastHeading = headings[headings.length - 1]!;
-  const delta = Math.abs(angleDelta(firstHeading, lastHeading));
-
-  return delta >= STRAIGHT_STREAK_COMMITTED_TURN_DEG;
-}
-
-function angleDelta(fromDeg: number, toDeg: number): number {
-  let d = toDeg - fromDeg;
-  while (d > 180) d -= 360;
-  while (d < -180) d += 360;
-  return d;
-}

@@ -107,6 +107,18 @@ export const STREAK_CROSSROAD_PROXIMITY_M = 45;
  */
 export const STRAIGHT_STREAK_COMMITTED_TURN_DEG = 40;
 
+/**
+ * Number of intersections the driver must physically pass through for the
+ * `intersections_passed` resolution condition to fire on a `straight_streak`
+ * market.  Whichever arrives first — this count OR a heading change ≥
+ * STRAIGHT_STREAK_COMMITTED_TURN_DEG — triggers settlement.
+ *
+ * Set to 3 so that even when the driver goes dead-straight through every
+ * crossroad (heading delta stays near 0°) the market still resolves after
+ * the third intersection rather than waiting for the reveal_at safety cap.
+ */
+export const STRAIGHT_STREAK_INTERSECTIONS_TO_RESOLVE = 3;
+
 // ─── Client-bet-at timing tolerance ──────────────────────────────────────────
 //
 // When the client sends `clientBetAt` (the epoch ms when the user tapped),
