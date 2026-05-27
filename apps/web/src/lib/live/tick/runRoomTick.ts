@@ -47,7 +47,7 @@ import {
   type CityGridSpecCompact,
 } from "@/lib/live/grid/cityGrid500";
 import { getOrBuildGridSpecForRoom } from "@/lib/live/grid/gridSpecForRoom";
-import { bearingDegrees, metersBetween, projectOntoPolyline } from "@/lib/live/routing/geometry";
+import { bearingDegrees, metersBetween, projectOntoPolyline, projectPoint } from "@/lib/live/routing/geometry";
 import {
   fetchOsrmDrivingRouteWithSteps,
   isBookendManeuver,
@@ -645,14 +645,25 @@ async function openFreshTrigger(
 
 // ─── Gap-filler ───────────────────────────────────────────────────────────────
 
+/** Look-ahead distance used when projecting a forward OSRM probe target (m). */
+const FILLER_FORWARD_PROBE_M = 1_500;
+
 /**
  * Try to open a `next_step` bet using the RELAXED filler distance window
  * from `betScheduleConfig`.  Called only when no normal trigger is available
  * (`openFromQueueOrTriggers` returned `no_eligible_bet`).
  *
- * Reuses the `routeCtx` produced by `detectEligibleTriggers` (same planning
- * polyline + OSRM steps) so no additional network calls are needed.
- * Returns a partial tick-result on success, null if nothing was opened.
+ * Two paths:
+ *
+ *   Happy path   — reuses `routeCtx.planningPolyline` + `routeCtx.osrmSteps`
+ *                  already fetched by `detectEligibleTriggers`, zero extra
+ *                  network calls.
+ *
+ *   Fallback path — when the route planning failed (planningPolyline = null),
+ *                  fetches OSRM steps independently using GPS + heading and
+ *                  skips the planning-polyline alignment check.  Ensures the
+ *                  filler still fires even when `computeDriverRouteInstruction`
+ *                  is unavailable (Overpass down, no destination, etc.).
  */
 async function tryFillerNextStep(
   service: Awaited<ReturnType<typeof createServiceClient>>,
@@ -661,18 +672,43 @@ async function tryFillerNextStep(
   routeCtx: RouteCtx | null,
 ): Promise<{ action: string; detail?: Record<string, unknown> } | null> {
   if (!NEXT_STEP_BETS_ENABLED) return null;
-  if (!routeCtx?.planningPolyline || !routeCtx.osrmSteps) return null;
+  if (!routeCtx) return null;
 
   const fillerEntry = getFillerEntries().find((e) => e.marketType === "next_step");
   if (!fillerEntry) return null;
 
+  const minM = fillerEntry.fillerMinM ?? NEXT_STEP_MIN_M;
+  const maxM = fillerEntry.fillerMaxM ?? NEXT_STEP_MAX_M;
+
+  let steps = routeCtx.osrmSteps;
+  let polylineForCheck = routeCtx.planningPolyline;
+
+  // ── Fallback: fetch OSRM steps directly when planning polyline is absent ──
+  if (!steps || !polylineForCheck) {
+    const { heading, lat, lng } = routeCtx;
+    if (heading == null) return null; // can't project a forward target without heading
+
+    const forwardTarget = projectPoint({ lat, lng }, heading, FILLER_FORWARD_PROBE_M);
+    try {
+      const osrmResult = await fetchOsrmDrivingRouteWithSteps({ lat, lng }, forwardTarget);
+      if (!osrmResult) return null;
+      steps = osrmResult.steps;
+      // polylineForCheck stays null → findNextStepCandidates skips the on-route check
+      polylineForCheck = null;
+      console.log(`[tick:filler] next_step: using fallback OSRM fetch (no planningPolyline), ${steps.length} steps`, { roomId });
+    } catch (err) {
+      console.error(`[tick:filler] next_step: fallback OSRM fetch failed`, err, { roomId });
+      return null;
+    }
+  }
+
   const candidates = findNextStepCandidates(
-    routeCtx.osrmSteps,
-    routeCtx.planningPolyline,
+    steps,
+    polylineForCheck,
     routeCtx.lat,
     routeCtx.lng,
-    fillerEntry.fillerMinM ?? NEXT_STEP_MIN_M,
-    fillerEntry.fillerMaxM ?? NEXT_STEP_MAX_M,
+    minM,
+    maxM,
   );
 
   for (const candidate of candidates) {
@@ -683,7 +719,7 @@ async function tryFillerNextStep(
     }
 
     console.log(
-      `[tick:filler] next_step: ${candidate.stepKey} (${candidate.maneuverType} ${candidate.maneuverModifier ?? ""}) filler window [${fillerEntry.fillerMinM ?? NEXT_STEP_MIN_M},${fillerEntry.fillerMaxM ?? NEXT_STEP_MAX_M}]m`,
+      `[tick:filler] next_step: ${candidate.stepKey} (${candidate.maneuverType} ${candidate.maneuverModifier ?? ""}) window [${minM},${maxM}]m`,
       { roomId },
     );
 
@@ -701,7 +737,6 @@ async function tryFillerNextStep(
       return { action: "opened_next_step_filler", detail: { marketId: res.marketId } };
     }
 
-    // Opener failed (de-dupe, GPS stale, etc.) — try next candidate.
     console.warn(`[tick:filler] next_step opener failed for ${candidate.stepKey}`, res, { roomId });
   }
 
@@ -713,6 +748,8 @@ async function tryFillerNextStep(
 type RouteCtx = {
   lat: number;
   lng: number;
+  /** Driver heading in degrees (null when the vehicle is stationary). */
+  heading: number | null;
   /** Decoded Google / OSRM planning polyline for the next ~1500 m. */
   planningPolyline: import("@/lib/live/routing/geometry").LatLng[] | null;
   /** OSRM step list fetched for the same segment.  Null when unavailable. */
@@ -721,7 +758,11 @@ type RouteCtx = {
 
 type DetectResult = {
   eligible: FreshTrigger[];
-  /** Route context that the filler path can reuse without re-fetching. */
+  /**
+   * Route context that the filler path can reuse without re-fetching.
+   * Always non-null when GPS is available — planningPolyline/osrmSteps
+   * may still be null when the route calculation failed.
+   */
   routeCtx: RouteCtx | null;
 };
 
@@ -732,13 +773,14 @@ type DetectResult = {
  *   - is not a bookend (depart / arrive)
  *   - is between minM and maxM from the driver
  *   - lies within NEXT_STEP_ON_ROUTE_M of the planning polyline
+ *     (skip this check when `planningPolyline` is null — fallback / filler mode)
  *
  * The first entry is the nearest eligible step.  The caller decides how many
  * to use (normal detection takes only [0], filler iterates until one is unfired).
  */
 function findNextStepCandidates(
   osrmSteps: OsrmStep[],
-  planningPolyline: import("@/lib/live/routing/geometry").LatLng[],
+  planningPolyline: import("@/lib/live/routing/geometry").LatLng[] | null,
   lat: number,
   lng: number,
   minM: number,
@@ -756,8 +798,13 @@ function findNextStepCandidates(
     if (isBookendManeuver(step.maneuver.type)) continue;
     const dist = metersBetween({ lat, lng }, step.maneuver.location);
     if (dist < minM || dist > maxM) continue;
-    const proj = projectOntoPolyline(planningPolyline, step.maneuver.location);
-    if (!proj || proj.distanceMeters > NEXT_STEP_ON_ROUTE_M) continue;
+    // On-route check: verify step aligns with the planning polyline.
+    // Skipped in fallback / filler mode when no polyline is available —
+    // OSRM steps fetched via forward probe are already on the driver's road.
+    if (planningPolyline) {
+      const proj = projectOntoPolyline(planningPolyline, step.maneuver.location);
+      if (!proj || proj.distanceMeters > NEXT_STEP_ON_ROUTE_M) continue;
+    }
     results.push({
       stepKey: `step:${step.maneuver.location.lat.toFixed(4)}:${step.maneuver.location.lng.toFixed(4)}`,
       stepLat: step.maneuver.location.lat,
@@ -787,7 +834,7 @@ async function detectEligibleTriggers(
     .order("recorded_at", { ascending: false })
     .limit(1)
     .maybeSingle();
-  if (!gpsRow) return { eligible, routeCtx: null };
+  if (!gpsRow) return { eligible, routeCtx: null }; // no position — filler can't run either
   const g = gpsRow as {
     normalized_lat: number | null;
     normalized_lng: number | null;
@@ -974,10 +1021,15 @@ async function detectEligibleTriggers(
     }
   }
 
-  const routeCtx: RouteCtx | null =
-    planningPolyline
-      ? { lat, lng, planningPolyline, osrmSteps: osrmStepsCache }
-      : null;
+  // Always provide lat/lng/heading so the filler can attempt a direct OSRM
+  // fetch even when the full route planning (computeDriverRouteInstruction) failed.
+  const routeCtx: RouteCtx = {
+    lat,
+    lng,
+    heading: driverHeadingDeg,
+    planningPolyline,
+    osrmSteps: osrmStepsCache,
+  };
 
   return { eligible, routeCtx };
 }
