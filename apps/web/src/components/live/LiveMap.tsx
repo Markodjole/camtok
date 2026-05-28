@@ -655,7 +655,7 @@ function LiveMapInner({
       });
       const maptilerKey = process.env.NEXT_PUBLIC_MAPTILER_KEY;
       const tileUrl = maptilerKey
-        ? `https://api.maptiler.com/maps/streets-v2/{z}/{x}/{y}.png?key=${maptilerKey}`
+        ? `https://api.maptiler.com/maps/streets-v4/{z}/{x}/{y}.png?key=${maptilerKey}`
         : "https://tiles.stadiamaps.com/tiles/alidade_smooth/{z}/{x}/{y}{r}.png";
       const attribution = maptilerKey
         ? '&copy; <a href="https://www.maptiler.com/copyright/">MapTiler</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
