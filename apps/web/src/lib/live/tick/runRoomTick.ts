@@ -25,6 +25,8 @@ import {
   BET_OPEN_WINDOW_MS,
   BET_OPEN_WINDOW_IDLE_MS,
   NEXT_STEP_FILLER_MAX_ROAD_M,
+  NEXT_STEP_FORWARD_PIN_BUCKET_M,
+  NEXT_STEP_FORWARD_PIN_ROAD_M,
   NEXT_STEP_MAX_ROAD_M,
   NEXT_STEP_MIN_ROAD_M,
   NEXT_STEP_ON_ROUTE_M,
@@ -50,10 +52,13 @@ import {
 import { getOrBuildGridSpecForRoom } from "@/lib/live/grid/gridSpecForRoom";
 import {
   bearingDegrees,
+  cumulativeMetersAt,
+  type LatLng,
   metersBetween,
   projectOntoPolyline,
   projectPoint,
   roadDistanceAlongPolyline,
+  slicePolylineByDistance,
 } from "@/lib/live/routing/geometry";
 import {
   fetchOsrmDrivingRouteWithSteps,
@@ -681,77 +686,92 @@ async function tryFillerNextStep(
   if (!NEXT_STEP_BETS_ENABLED) return null;
   if (!routeCtx) return null;
 
-  const fillerEntry = getFillerEntries().find((e) => e.marketType === "next_step");
-  if (!fillerEntry) return null;
+  // ── PRIMARY: forward-pin (200 m straight ahead on Google Maps polyline) ────
+  //
+  // Place a pin exactly NEXT_STEP_FORWARD_PIN_ROAD_M metres ahead on the
+  // planned route.  This:
+  //   • Never shows a pin behind the vehicle (road distance is always > 0 by
+  //     construction)
+  //   • Requires no OSRM call — only the Google Routes planning polyline
+  //   • Works on straight roads where there are no OSRM maneuver points
+  //   • Is deduped by NEXT_STEP_FORWARD_PIN_BUCKET_M so it opens at most once
+  //     per bucket of travel
+  if (routeCtx.planningPolyline && routeCtx.planningPolyline.length >= 2) {
+    const fwd = findForwardPinCandidate(
+      routeCtx.planningPolyline,
+      routeCtx.lat,
+      routeCtx.lng,
+    );
 
-  const minM = fillerEntry.fillerMinM ?? NEXT_STEP_MIN_ROAD_M;
-  const maxM = fillerEntry.fillerMaxM ?? NEXT_STEP_FILLER_MAX_ROAD_M;
+    if (fwd) {
+      const fired = await hasFiredNextStep(service, sessionId, fwd.stepKey);
+      if (!fired) {
+        console.log(
+          `[tick:filler] next_step: forward-pin ${fwd.stepKey} at ${Math.round(fwd.roadMeters)}m ahead — opening`,
+          { roomId },
+        );
+
+        const res = await openNextStepMarketForRoom(roomId, {
+          windowMs: BET_OPEN_WINDOW_IDLE_MS,
+          stepKey: fwd.stepKey,
+          stepLat: fwd.stepLat,
+          stepLng: fwd.stepLng,
+          maneuverType: "continue",
+          maneuverModifier: "straight",
+          stepName: undefined,
+        });
+
+        if ("marketId" in res && res.marketId) {
+          return { action: "opened_next_step_filler_fwd", detail: { marketId: res.marketId } };
+        }
+
+        console.warn(`[tick:filler] next_step: forward-pin opener failed for ${fwd.stepKey}`, res, { roomId });
+      } else {
+        console.log(`[tick:filler] next_step: forward-pin ${fwd.stepKey} already fired — skipping`, { roomId });
+      }
+    }
+    // Forward-pin attempted (success or dedup) — do not fall through to OSRM.
+    return null;
+  }
+
+  // ── SECONDARY: OSRM-step fallback (no planning polyline available) ─────────
+  //
+  // When Google Routes hasn't returned a polyline yet we fall back to OSRM
+  // steps in the wider [NEXT_STEP_MIN_ROAD_M, NEXT_STEP_FILLER_MAX_ROAD_M]
+  // window.
+  const minM = NEXT_STEP_MIN_ROAD_M;
+  const maxM = NEXT_STEP_FILLER_MAX_ROAD_M;
 
   let steps = routeCtx.osrmSteps;
-  let polylineForCheck = routeCtx.planningPolyline;
 
-  // ── Fallback: fetch OSRM steps when the normal detection path didn't ──────
-  //
-  // Two sub-cases:
-  //   A) planningPolyline available but steps = null (computeDriverRouteInstruction
-  //      succeeded but OSRM step fetch was skipped due to a feature-flag or error).
-  //      → Route to planPolyEnd so the on-route check can still run.
-  //   B) planningPolyline = null (full route planning failed, e.g. Overpass down).
-  //      → Project a forward probe using GPS heading.  If heading is also null
-  //        (driver stopped) skip the on-route check but still try OSRM.
   if (!steps) {
     const { heading, lat, lng } = routeCtx;
-    let forwardTarget: import("@/lib/live/routing/geometry").LatLng;
-    let keepPolylineCheck = false;
-
-    if (polylineForCheck && polylineForCheck.length >= 2) {
-      // Sub-case A: planning polyline is known → route to its end point.
-      forwardTarget = polylineForCheck[polylineForCheck.length - 1]!;
-      keepPolylineCheck = true;
-    } else if (heading != null) {
-      // Sub-case B: no polyline → forward probe in heading direction.
-      forwardTarget = projectPoint({ lat, lng }, heading, FILLER_FORWARD_PROBE_M);
-    } else {
-      // No polyline and no heading → can't project a target; bail out.
-      console.log(`[tick:filler] next_step: no steps, no polyline, no heading — skipping`, { roomId });
+    if (heading == null) {
+      console.log(`[tick:filler] next_step: no polyline, no heading — skipping`, { roomId });
       return null;
     }
 
+    const forwardTarget = projectPoint({ lat, lng }, heading, FILLER_FORWARD_PROBE_M);
     try {
       const osrmResult = await fetchOsrmDrivingRouteWithSteps({ lat, lng }, forwardTarget);
       if (!osrmResult) return null;
       steps = osrmResult.steps;
-      // If we used the planning polyline as the OSRM target, keep the polyline
-      // for the on-route check.  Otherwise clear it so the check is skipped.
-      if (!keepPolylineCheck) polylineForCheck = null;
-      console.log(
-        `[tick:filler] next_step: fetched ${steps.length} OSRM steps via ${keepPolylineCheck ? "planPoly" : "forward-probe"} fallback`,
-        { roomId },
-      );
+      console.log(`[tick:filler] next_step: fetched ${steps.length} OSRM steps via forward-probe`, { roomId });
     } catch (err) {
-      console.error(`[tick:filler] next_step: fallback OSRM fetch failed`, err, { roomId });
+      console.error(`[tick:filler] next_step: OSRM fetch failed`, err, { roomId });
       return null;
     }
   }
 
-  const candidates = findNextStepCandidates(
-    steps,
-    polylineForCheck,
-    routeCtx.lat,
-    routeCtx.lng,
-    minM,
-    maxM,
-  );
+  // Use straight-line distance since there is no planning polyline.
+  const candidates = findNextStepCandidates(steps, null, routeCtx.lat, routeCtx.lng, minM, maxM);
 
   for (const candidate of candidates) {
     const fired = await hasFiredNextStep(service, sessionId, candidate.stepKey);
-    if (fired) {
-      console.log(`[tick:filler] next_step: ${candidate.stepKey} already fired — trying next`, { roomId });
-      continue;
-    }
+    if (fired) continue;
 
     console.log(
-      `[tick:filler] next_step: ${candidate.stepKey} (${candidate.maneuverType} ${candidate.maneuverModifier ?? ""}) road dist ${Math.round(candidate.roadMeters)}m window [${minM},${maxM}]m`,
+      `[tick:filler] next_step (OSRM fallback): ${candidate.stepKey} (${candidate.maneuverType}) road dist ${Math.round(candidate.roadMeters)}m`,
       { roomId },
     );
 
@@ -766,10 +786,10 @@ async function tryFillerNextStep(
     });
 
     if ("marketId" in res && res.marketId) {
-      return { action: "opened_next_step_filler", detail: { marketId: res.marketId } };
+      return { action: "opened_next_step_filler_osrm", detail: { marketId: res.marketId } };
     }
 
-    console.warn(`[tick:filler] next_step opener failed for ${candidate.stepKey}`, res, { roomId });
+    console.warn(`[tick:filler] next_step: OSRM opener failed for ${candidate.stepKey}`, res, { roomId });
   }
 
   return null;
@@ -783,7 +803,7 @@ type RouteCtx = {
   /** Driver heading in degrees (null when the vehicle is stationary). */
   heading: number | null;
   /** Decoded Google / OSRM planning polyline for the next ~1500 m. */
-  planningPolyline: import("@/lib/live/routing/geometry").LatLng[] | null;
+  planningPolyline: LatLng[] | null;
   /** OSRM step list fetched for the same segment.  Null when unavailable. */
   osrmSteps: OsrmStep[] | null;
 };
@@ -825,7 +845,7 @@ type DetectResult = {
  */
 function findNextStepCandidates(
   osrmSteps: OsrmStep[],
-  planningPolyline: import("@/lib/live/routing/geometry").LatLng[] | null,
+  planningPolyline: LatLng[] | null,
   lat: number,
   lng: number,
   minRoadM: number,
@@ -888,6 +908,56 @@ function findNextStepCandidates(
 
   // Sort by road distance ascending so callers can take results[0] for nearest.
   return results.sort((a, b) => a.roadMeters - b.roadMeters);
+}
+
+// ─── Forward-pin filler ───────────────────────────────────────────────────────
+
+/**
+ * Compute a "forward pin" — a point exactly NEXT_STEP_FORWARD_PIN_ROAD_M metres
+ * ahead of the driver along the Google Maps planning polyline.
+ *
+ * This is the primary gap-filler strategy.  It requires only the planning
+ * polyline (always available when Google Routes responds) and is guaranteed to
+ * produce a pin that is ahead of the driver, on the planned road.
+ *
+ * The stepKey is bucketed by NEXT_STEP_FORWARD_PIN_BUCKET_M so a new market
+ * opens at most once per bucket of travel (prevents rapid re-triggering while
+ * the previous bet is still live).
+ */
+function findForwardPinCandidate(
+  planningPolyline: LatLng[],
+  driverLat: number,
+  driverLng: number,
+): {
+  stepKey: string;
+  stepLat: number;
+  stepLng: number;
+  roadMeters: number;
+} | null {
+  const driverProj = projectOntoPolyline(planningPolyline, { lat: driverLat, lng: driverLng });
+  if (!driverProj) return null;
+
+  const driverAlong = cumulativeMetersAt(
+    planningPolyline,
+    driverProj.segmentIndex,
+    driverProj.t,
+  );
+
+  // Slice from driver position to NEXT_STEP_FORWARD_PIN_ROAD_M ahead.
+  const ahead = slicePolylineByDistance(
+    planningPolyline,
+    driverAlong,
+    driverAlong + NEXT_STEP_FORWARD_PIN_ROAD_M,
+  );
+  if (ahead.length === 0) return null;
+
+  const pin = ahead[ahead.length - 1]!;
+
+  // Bucket dedup key — one new market per NEXT_STEP_FORWARD_PIN_BUCKET_M of travel.
+  const bucket = Math.round(driverAlong / NEXT_STEP_FORWARD_PIN_BUCKET_M) * NEXT_STEP_FORWARD_PIN_BUCKET_M;
+  const stepKey = `fwd:${bucket}`;
+
+  return { stepKey, stepLat: pin.lat, stepLng: pin.lng, roadMeters: NEXT_STEP_FORWARD_PIN_ROAD_M };
 }
 
 // ─── Dense intersection extraction (for straight_streak) ─────────────────────
@@ -1132,7 +1202,7 @@ async function detectEligibleTriggers(
   const needsOsrm = NEXT_STEP_BETS_ENABLED || hasStreakTrigger;
 
   // Determine OSRM target: polyline end or forward probe.
-  let osrmTarget: import("@/lib/live/routing/geometry").LatLng | null = null;
+  let osrmTarget: LatLng | null = null;
   if (needsOsrm) {
     if (planningPolyline && planningPolyline.length >= 2) {
       osrmTarget = planningPolyline[planningPolyline.length - 1]!;

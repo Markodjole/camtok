@@ -2597,22 +2597,41 @@ const NextStepCountdownWidget = memo(function NextStepCountdownWidget({
   );
   const urgent = !resolving && remainingSec <= 5;
 
-  const headBg = resolving
-    ? "border-amber-400/50 bg-amber-600/30 text-amber-100"
+  const bg = resolving
+    ? "bg-amber-600/30 border-amber-400/50 text-amber-100"
     : urgent
-      ? "border-red-400/60 bg-red-600/40 text-red-100"
-      : "border-violet-400/40 bg-violet-900/55 text-violet-100";
+      ? "bg-red-600/40 border-red-400/60 text-red-100"
+      : "bg-orange-900/55 border-orange-400/40 text-orange-100";
 
-  const tipColor = resolving
-    ? "rgba(217,119,6,0.45)"
-    : urgent
-      ? "rgba(220,38,38,0.55)"
-      : "rgba(109,40,217,0.55)";
+  const pillarColor = resolving ? "#d97706" : urgent ? "#dc2626" : "#f97316";
+  const strokeColor = resolving ? "#fde68a" : urgent ? "#fca5a5" : "#fed7aa";
+
+  // Aerial gate SVG — two pillars + striped boom-bar, matches the map marker.
+  const gateSvg = `<svg width="38" height="14" viewBox="0 0 38 14" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <clipPath id="bc2"><rect x="8" y="4" width="22" height="6" rx="1"/></clipPath>
+    </defs>
+    <rect x="0.5" y="1" width="7" height="12" rx="1.5" fill="${pillarColor}" stroke="${strokeColor}" stroke-width="1.2"/>
+    <rect x="30.5" y="1" width="7" height="12" rx="1.5" fill="${pillarColor}" stroke="${strokeColor}" stroke-width="1.2"/>
+    <rect x="8" y="4" width="22" height="6" rx="1" fill="${pillarColor}" stroke="${strokeColor}" stroke-width="1"/>
+    <g clip-path="url(#bc2)" opacity="0.5">
+      <line x1="12" y1="4" x2="8"  y2="10" stroke="${strokeColor}" stroke-width="1.5"/>
+      <line x1="17" y1="4" x2="13" y2="10" stroke="${strokeColor}" stroke-width="1.5"/>
+      <line x1="22" y1="4" x2="18" y2="10" stroke="${strokeColor}" stroke-width="1.5"/>
+      <line x1="27" y1="4" x2="23" y2="10" stroke="${strokeColor}" stroke-width="1.5"/>
+    </g>
+  </svg>`;
 
   return (
-    <div className="pointer-events-none flex flex-col items-center" title={resolving ? "Awaiting pin result…" : "Time to pin"}>
+    <div className="pointer-events-none flex flex-col items-center gap-0.5" title={resolving ? "Awaiting gate result…" : "Time to gate"}>
+      {/* Gate icon above the countdown */}
       <div
-        className={`flex h-11 w-11 items-center justify-center rounded-full border text-sm font-bold tabular-nums transition-colors ${headBg}`}
+        className="opacity-90"
+        dangerouslySetInnerHTML={{ __html: gateSvg }}
+      />
+      {/* Countdown pill */}
+      <div
+        className={`flex h-10 w-10 items-center justify-center rounded-md border text-sm font-bold tabular-nums transition-colors ${bg}`}
       >
         {resolving ? (
           <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-amber-300/40 border-t-amber-200" />
@@ -2620,17 +2639,6 @@ const NextStepCountdownWidget = memo(function NextStepCountdownWidget({
           remainingSec
         )}
       </div>
-      {/* Pin point */}
-      <div
-        style={{
-          width: 0,
-          height: 0,
-          borderLeft: "7px solid transparent",
-          borderRight: "7px solid transparent",
-          borderTop: `10px solid ${tipColor}`,
-          marginTop: -1,
-        }}
-      />
     </div>
   );
 });
