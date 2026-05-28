@@ -981,6 +981,32 @@ function findNextStepCandidates(
  * opens at most once per bucket of travel (prevents rapid re-triggering while
  * the previous bet is still live).
  */
+/**
+ * Maximum bearing deviation (degrees) from the overall start→end direction
+ * for a route stretch to be classified as "straight".
+ *
+ * 30° is generous enough to handle gentle city bends but strict enough to
+ * block forward-pin bets when a real turn is coming within 300 m.
+ */
+const FORWARD_PIN_STRAIGHT_DEG_THRESHOLD = 30;
+
+/**
+ * Returns true when no segment of `polyline` deviates more than `thresholdDeg`
+ * from the overall start→end bearing.  Used to gate forward-pin bets so they
+ * only appear on visibly straight stretches of road.
+ */
+function isPolylineStraight(polyline: LatLng[], thresholdDeg: number): boolean {
+  if (polyline.length < 2) return false;
+  const overall = bearingDegrees(polyline[0]!, polyline[polyline.length - 1]!);
+  for (let i = 1; i < polyline.length; i++) {
+    const seg = bearingDegrees(polyline[i - 1]!, polyline[i]!);
+    let diff = Math.abs(seg - overall) % 360;
+    if (diff > 180) diff = 360 - diff;
+    if (diff > thresholdDeg) return false;
+  }
+  return true;
+}
+
 function findForwardPinCandidate(
   planningPolyline: LatLng[],
   driverLat: number,
@@ -1007,6 +1033,11 @@ function findForwardPinCandidate(
     driverAlong + NEXT_STEP_FORWARD_PIN_ROAD_M,
   );
   if (ahead.length === 0) return null;
+
+  // Only place a forward-pin bet when the Google Maps route is straight for the
+  // full NEXT_STEP_FORWARD_PIN_ROAD_M ahead.  On a curved or turning stretch the
+  // pin would land around a blind corner — unclear and confusing as a bet target.
+  if (!isPolylineStraight(ahead, FORWARD_PIN_STRAIGHT_DEG_THRESHOLD)) return null;
 
   const pin = ahead[ahead.length - 1]!;
 

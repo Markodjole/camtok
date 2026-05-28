@@ -171,10 +171,11 @@ export const NEXT_STEP_FILLER_MAX_ROAD_M = 400;
  * gap-filler fires.  The pin is placed exactly this far ahead on the Google
  * Maps planned route — never behind the vehicle, no OSRM dependency.
  *
- * Configurable: increase for faster roads (driver covers it in fewer seconds),
- * decrease for city driving where a shorter countdown feels more exciting.
+ * 300 m gives a comfortable countdown (~21 s at 50 km/h) and ensures the
+ * route ahead is verified as straight for the full distance before the bet
+ * opens (see FORWARD_PIN_STRAIGHT_DEG_THRESHOLD in runRoomTick).
  */
-export const NEXT_STEP_FORWARD_PIN_ROAD_M = 200;
+export const NEXT_STEP_FORWARD_PIN_ROAD_M = 300;
 
 /**
  * Dedup bucket size for forward-pin step keys (m along polyline).
