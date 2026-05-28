@@ -1054,14 +1054,48 @@ function findForwardPinCandidate(
   return { stepKey, stepLat: pin.lat, stepLng: pin.lng, roadMeters: NEXT_STEP_FORWARD_PIN_ROAD_M };
 }
 
-// ─── Speed camera detection on route ─────────────────────────────────────────
+// ─── Camera detection on route ───────────────────────────────────────────────
 //
-// Queries OSM Overpass for speed cameras along the NEXT_STEP trigger band
-// (80–250 m ahead on the planning polyline).  Results are cached per ~200 m
-// driver position bucket so each camera is only fetched once per approach.
+// Two sources checked in parallel:
+//   1. TfL JamCam API — the SAME ~900 London traffic cameras shown in the
+//      client PiP panel.  This is what the user sees and expects a bet for.
+//   2. OSM Overpass — speed-enforcement cameras as a secondary source.
+//
+// Detection range: 80 m → NEXT_STEP_FORWARD_PIN_ROAD_M (300 m) ahead on the
+// planning polyline so the bet opens well before the driver reaches the camera.
+// A camera must project within 60 m of the polyline (same road, not parallel).
 
 const _camOnRouteCache = new Map<string, { result: LatLng | null; expiresAt: number }>();
-const CAM_CACHE_MS = 30_000; // 30 s — refresh as driver advances
+const CAM_CACHE_MS = 30_000;
+
+// Global TfL camera list — fetched once, cached for 5 minutes.
+let _tflCameras: Array<{ lat: number; lng: number }> | null = null;
+let _tflCamerasAt = 0;
+const TFL_CAMERAS_TTL = 5 * 60_000;
+
+async function fetchTflCamerasForTick(): Promise<Array<{ lat: number; lng: number }>> {
+  if (_tflCameras && Date.now() - _tflCamerasAt < TFL_CAMERAS_TTL) return _tflCameras;
+  try {
+    const res = await fetch("https://api.tfl.gov.uk/Place/Type/JamCam", {
+      signal: AbortSignal.timeout(6_000),
+    });
+    if (!res.ok) return _tflCameras ?? [];
+    const data = (await res.json()) as Array<{ lat: number; lon: number; additionalProperties?: Array<{ key: string; value: string }> }>;
+    _tflCameras = data
+      .filter((c) => {
+        if (!Number.isFinite(c.lat) || !Number.isFinite(c.lon)) return false;
+        // Skip unavailable cameras.
+        const avail = c.additionalProperties?.find((p) => p.key === "available")?.value;
+        return avail !== "false";
+      })
+      .map((c) => ({ lat: c.lat, lng: c.lon }));
+    _tflCamerasAt = Date.now();
+    console.log(`[tick:cam] fetched ${_tflCameras.length} TfL cameras`);
+    return _tflCameras;
+  } catch {
+    return _tflCameras ?? [];
+  }
+}
 
 async function findCameraOnRoute(
   polyline: LatLng[],
@@ -1073,52 +1107,87 @@ async function findCameraOnRoute(
   const cached = _camOnRouteCache.get(cacheKey);
   if (cached && Date.now() < cached.expiresAt) return cached.result;
 
-  // Find the midpoint of the [80m, 250m] band ahead on the polyline.
   const driverProj = projectOntoPolyline(polyline, { lat: driverLat, lng: driverLng });
   if (!driverProj) {
     _camOnRouteCache.set(cacheKey, { result: null, expiresAt: Date.now() + CAM_CACHE_MS });
     return null;
   }
   const driverAlong = cumulativeMetersAt(polyline, driverProj.segmentIndex, driverProj.t);
-  const sliceMid = slicePolylineByDistance(
-    polyline,
-    driverAlong + NEXT_STEP_MIN_ROAD_M,
-    driverAlong + NEXT_STEP_MAX_ROAD_M,
-  );
-  if (sliceMid.length === 0) {
-    _camOnRouteCache.set(cacheKey, { result: null, expiresAt: Date.now() + CAM_CACHE_MS });
-    return null;
-  }
-  const mid = sliceMid[Math.floor(sliceMid.length / 2)]!;
 
-  // Overpass query: speed cameras within 80 m of the midpoint.
-  const query = [
-    "[out:json][timeout:5];",
-    "(",
-    `  node(around:80,${mid.lat},${mid.lng})[highway=speed_camera];`,
-    `  node(around:80,${mid.lat},${mid.lng})[enforcement=speed_camera];`,
-    `  node(around:80,${mid.lat},${mid.lng})[device=camera][enforcement];`,
-    ");",
-    "out center 3;",
-  ].join("\n");
+  // The look-ahead band: 80 m (already passed the camera is useless) to 300 m.
+  const CAM_LOOK_MIN_M = 80;
+  const CAM_LOOK_MAX_M = NEXT_STEP_FORWARD_PIN_ROAD_M; // 300 m
+  const CAM_MAX_OFFSET_M = 60; // must be within 60 m of the polyline
+
+  // Helper: project a point onto the polyline and return road distance ahead.
+  function cameraRoadDistAhead(camLat: number, camLng: number): number | null {
+    const proj = projectOntoPolyline(polyline, { lat: camLat, lng: camLng });
+    if (!proj) return null;
+    // Straight-line distance from the projection to the actual camera position.
+    const offsetM = metersBetween({ lat: camLat, lng: camLng }, proj.projection);
+    if (offsetM > CAM_MAX_OFFSET_M) return null; // different road
+    const camAlong = cumulativeMetersAt(polyline, proj.segmentIndex, proj.t);
+    const distAhead = camAlong - driverAlong;
+    if (distAhead < CAM_LOOK_MIN_M || distAhead > CAM_LOOK_MAX_M) return null;
+    return distAhead;
+  }
 
   let result: LatLng | null = null;
+  let bestDist = Infinity;
+
+  // ── Source 1: TfL JamCam traffic monitoring cameras ─────────────────────
   try {
-    const res = await fetch("https://overpass-api.de/api/interpreter", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: `data=${encodeURIComponent(query)}`,
-      signal: AbortSignal.timeout(4_000),
-    });
-    if (res.ok) {
-      const data = (await res.json()) as { elements?: Array<{ lat?: number; lon?: number }> };
-      const el = data.elements?.[0];
-      if (el?.lat != null && el?.lon != null) {
-        result = { lat: el.lat, lng: el.lon };
+    const tflCams = await fetchTflCamerasForTick();
+    for (const c of tflCams) {
+      // Quick bounding-box pre-filter (≈ 0.003° ≈ 330 m) before expensive projection.
+      if (Math.abs(c.lat - driverLat) > 0.004 || Math.abs(c.lng - driverLng) > 0.006) continue;
+      const dist = cameraRoadDistAhead(c.lat, c.lng);
+      if (dist !== null && dist < bestDist) {
+        bestDist = dist;
+        result = { lat: c.lat, lng: c.lng };
       }
     }
   } catch {
-    // Overpass unavailable — result stays null
+    // TfL unavailable — fall through to Overpass
+  }
+
+  // ── Source 2: OSM Overpass speed-enforcement cameras ────────────────────
+  // Only query if TfL found nothing (avoid unnecessary Overpass hits).
+  if (!result) {
+    try {
+      const sliceAhead = slicePolylineByDistance(
+        polyline,
+        driverAlong + CAM_LOOK_MIN_M,
+        driverAlong + CAM_LOOK_MAX_M,
+      );
+      if (sliceAhead.length > 0) {
+        const mid = sliceAhead[Math.floor(sliceAhead.length / 2)]!;
+        const query = [
+          "[out:json][timeout:5];",
+          "(",
+          `  node(around:${CAM_MAX_OFFSET_M},${mid.lat},${mid.lng})[highway=speed_camera];`,
+          `  node(around:${CAM_MAX_OFFSET_M},${mid.lat},${mid.lng})[enforcement=speed_camera];`,
+          `  node(around:${CAM_MAX_OFFSET_M},${mid.lat},${mid.lng})[device=camera][enforcement];`,
+          ");",
+          "out center 3;",
+        ].join("\n");
+        const res = await fetch("https://overpass-api.de/api/interpreter", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: `data=${encodeURIComponent(query)}`,
+          signal: AbortSignal.timeout(4_000),
+        });
+        if (res.ok) {
+          const data = (await res.json()) as { elements?: Array<{ lat?: number; lon?: number }> };
+          const el = data.elements?.[0];
+          if (el?.lat != null && el?.lon != null) {
+            result = { lat: el.lat, lng: el.lon };
+          }
+        }
+      }
+    } catch {
+      // Overpass unavailable
+    }
   }
 
   _camOnRouteCache.set(cacheKey, { result, expiresAt: Date.now() + CAM_CACHE_MS });
