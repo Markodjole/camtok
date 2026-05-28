@@ -125,36 +125,59 @@ export const STRAIGHT_STREAK_INTERSECTIONS_TO_RESOLVE = 3;
 // step maneuver point (turn, roundabout, etc.) that lies on the same planned
 // road as the Google Maps route.
 //
-//   TRIGGER: first OSRM step whose maneuver point is within
-//            [NEXT_STEP_MIN_M, NEXT_STEP_MAX_M] of the driver AND lies within
-//            NEXT_STEP_ON_ROUTE_M of the planning polyline.
+//   TRIGGER: first OSRM step whose maneuver point is NEXT_STEP_MIN_ROAD_M –
+//            NEXT_STEP_MAX_ROAD_M ahead of the driver measured along the
+//            Google planning polyline (road distance, NOT straight-line),
+//            AND lies within NEXT_STEP_ON_ROUTE_M perpendicular distance of
+//            that polyline.
+//   TARGET:  NEXT_STEP_TARGET_ROAD_M is the ideal placement — the "first
+//            crossroad 150 m ahead on the planned road" the product intends.
 //   OPTIONS: < T / ≈ T (±20%) / > T  where T = Google-projected ETA to step.
 //   SETTLE:  when driver passes within NEXT_STEP_APPROACH_M of the maneuver
 //            point and starts moving away, or reveal_at safety fires.
 
 /**
- * Min distance to OSRM step maneuver for a trigger to fire (m).
- * Kept small so the market fires shortly before the driver reaches the pin.
+ * Minimum road distance (m along planning polyline) from driver to OSRM step
+ * maneuver point for a normal trigger to fire.  Steps closer than this are
+ * too near to give viewers time to bet.
  */
-export const NEXT_STEP_MIN_M = 80;
+export const NEXT_STEP_MIN_ROAD_M = 80;
 
 /**
- * Max distance to OSRM step maneuver for a trigger to fire (m).
- * Tight window (~150 m approach) so the bet is a "fast" countdown —
- * the driver is already close and will reach the pin within seconds.
+ * Ideal road distance (m along planning polyline) for a `next_step` pin.
+ * The system targets the first OSRM maneuver ≥ this many metres ahead on
+ * the planned road.  Documented here so the intent is explicit; the actual
+ * trigger window is [NEXT_STEP_MIN_ROAD_M, NEXT_STEP_MAX_ROAD_M].
  */
-export const NEXT_STEP_MAX_M = 200;
+export const NEXT_STEP_TARGET_ROAD_M = 150;
+
+/**
+ * Maximum road distance (m along planning polyline) for a normal trigger.
+ * Steps beyond this are held for the filler path, which uses
+ * NEXT_STEP_FILLER_MAX_ROAD_M.
+ */
+export const NEXT_STEP_MAX_ROAD_M = 250;
+
+/**
+ * Maximum road distance (m) for the gap-filler path.  Wide enough that
+ * there is almost always an unfired OSRM step within range to fill dead air.
+ */
+export const NEXT_STEP_FILLER_MAX_ROAD_M = 1_200;
 
 /**
  * Max perpendicular distance from the planning polyline for an OSRM step
  * maneuver point to be considered "on the same road" (m).
  *
- * Set to 100 m (previously 60 m) to tolerate geometry differences between
- * OSRM and Google Maps road networks.  In urban areas these two can diverge
- * by 30–80 m at turns or merges; 100 m keeps false positives low while
- * ensuring legitimate maneuver points aren't silently filtered.
+ * Set to 100 m to tolerate geometry differences between OSRM and Google Maps
+ * road networks.  In urban areas these can diverge 30–80 m at turns or merges.
  */
 export const NEXT_STEP_ON_ROUTE_M = 100;
+
+// Backward-compat aliases used in runRoomTick import list.
+/** @deprecated Use NEXT_STEP_MIN_ROAD_M */
+export const NEXT_STEP_MIN_M = NEXT_STEP_MIN_ROAD_M;
+/** @deprecated Use NEXT_STEP_MAX_ROAD_M */
+export const NEXT_STEP_MAX_M = NEXT_STEP_MAX_ROAD_M;
 
 /**
  * Radius (m) within which the driver is considered to have "arrived" at

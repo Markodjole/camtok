@@ -235,6 +235,44 @@ export function projectOntoPolyline(
 }
 
 /**
+ * Compute the signed road distance along `polyline` from `driverPoint` to
+ * `targetPoint`, using cumulative arc-length rather than straight-line distance.
+ *
+ * Both points are snapped (projected) onto the polyline.
+ *
+ *   roadMeters > 0  →  target is AHEAD of the driver on the route.
+ *   roadMeters < 0  →  target is BEHIND the driver (already passed).
+ *   roadMeters = 0  →  driver is at the target.
+ *
+ * Returns `null` when either point cannot be projected (polyline too short).
+ *
+ * Also exposes:
+ *   `projection`   — the snapped position of `targetPoint` on the polyline,
+ *                    used directly as the pin coordinate so it sits exactly on
+ *                    the planned road.
+ *   `onRouteMeters` — perpendicular distance of the original `targetPoint`
+ *                     from the polyline (used for the "on-route" filter).
+ */
+export function roadDistanceAlongPolyline(
+  polyline: LatLng[],
+  driverPoint: LatLng,
+  targetPoint: LatLng,
+): { roadMeters: number; projection: LatLng; onRouteMeters: number } | null {
+  const driverProj = projectOntoPolyline(polyline, driverPoint);
+  const targetProj = projectOntoPolyline(polyline, targetPoint);
+  if (!driverProj || !targetProj) return null;
+
+  const driverAlong = cumulativeMetersAt(polyline, driverProj.segmentIndex, driverProj.t);
+  const targetAlong = cumulativeMetersAt(polyline, targetProj.segmentIndex, targetProj.t);
+
+  return {
+    roadMeters: targetAlong - driverAlong,
+    projection: targetProj.projection,
+    onRouteMeters: targetProj.distanceMeters,
+  };
+}
+
+/**
  * Return the portion of `polyline` ahead of `driver` — i.e. starting from
  * where the driver currently is and continuing to the checkpoint. If the
  * driver is already past the end of the polyline (within `doneMeters`),

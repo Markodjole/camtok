@@ -24,8 +24,9 @@ import { isEngineMarketType } from "@/lib/live/betting/engineMarketOptions";
 import {
   BET_OPEN_WINDOW_MS,
   BET_OPEN_WINDOW_IDLE_MS,
-  NEXT_STEP_MAX_M,
-  NEXT_STEP_MIN_M,
+  NEXT_STEP_FILLER_MAX_ROAD_M,
+  NEXT_STEP_MAX_ROAD_M,
+  NEXT_STEP_MIN_ROAD_M,
   NEXT_STEP_ON_ROUTE_M,
   NEXT_TURN_PIN_MIN_M,
   NEXT_TURN_PIN_MAX_M,
@@ -47,7 +48,13 @@ import {
   type CityGridSpecCompact,
 } from "@/lib/live/grid/cityGrid500";
 import { getOrBuildGridSpecForRoom } from "@/lib/live/grid/gridSpecForRoom";
-import { bearingDegrees, metersBetween, projectOntoPolyline, projectPoint } from "@/lib/live/routing/geometry";
+import {
+  bearingDegrees,
+  metersBetween,
+  projectOntoPolyline,
+  projectPoint,
+  roadDistanceAlongPolyline,
+} from "@/lib/live/routing/geometry";
 import {
   fetchOsrmDrivingRouteWithSteps,
   isBookendManeuver,
@@ -677,8 +684,8 @@ async function tryFillerNextStep(
   const fillerEntry = getFillerEntries().find((e) => e.marketType === "next_step");
   if (!fillerEntry) return null;
 
-  const minM = fillerEntry.fillerMinM ?? NEXT_STEP_MIN_M;
-  const maxM = fillerEntry.fillerMaxM ?? NEXT_STEP_MAX_M;
+  const minM = fillerEntry.fillerMinM ?? NEXT_STEP_MIN_ROAD_M;
+  const maxM = fillerEntry.fillerMaxM ?? NEXT_STEP_FILLER_MAX_ROAD_M;
 
   let steps = routeCtx.osrmSteps;
   let polylineForCheck = routeCtx.planningPolyline;
@@ -744,7 +751,7 @@ async function tryFillerNextStep(
     }
 
     console.log(
-      `[tick:filler] next_step: ${candidate.stepKey} (${candidate.maneuverType} ${candidate.maneuverModifier ?? ""}) window [${minM},${maxM}]m`,
+      `[tick:filler] next_step: ${candidate.stepKey} (${candidate.maneuverType} ${candidate.maneuverModifier ?? ""}) road dist ${Math.round(candidate.roadMeters)}m window [${minM},${maxM}]m`,
       { roomId },
     );
 
@@ -794,22 +801,35 @@ type DetectResult = {
 // ─── Pure helper: filter OSRM steps to eligible next_step candidates ─────────
 
 /**
- * Scan an OSRM step list and return every step whose maneuver point:
- *   - is not a bookend (depart / arrive)
- *   - is between minM and maxM from the driver
- *   - lies within NEXT_STEP_ON_ROUTE_M of the planning polyline
- *     (skip this check when `planningPolyline` is null — fallback / filler mode)
+ * Scan an OSRM step list and return every step whose maneuver point is an
+ * eligible `next_step` bet target.
  *
- * The first entry is the nearest eligible step.  The caller decides how many
- * to use (normal detection takes only [0], filler iterates until one is unfired).
+ * When `planningPolyline` is provided (primary path):
+ *   • Distance is measured as **road distance** along the planning polyline
+ *     from the driver's current position (NOT straight-line).  This guarantees
+ *     the pin is always AHEAD of the vehicle — a negative road distance means
+ *     the step is behind the driver and is automatically excluded.
+ *   • The step's maneuver point is projected onto the polyline so the pin
+ *     coordinate sits exactly on the planned road (Google Maps geometry).
+ *   • Steps whose maneuver location is > NEXT_STEP_ON_ROUTE_M perpendicular
+ *     distance from the polyline are excluded (different road / parallel street).
+ *
+ * When `planningPolyline` is null (fallback / forward-probe path):
+ *   • Falls back to straight-line distance.  No on-route check is applied.
+ *   • The raw OSRM maneuver coordinate is used as the pin location.
+ *   • Pins behind the vehicle are NOT filtered in this mode (no polyline to
+ *     determine direction); callers should ensure the OSRM route faces forward.
+ *
+ * Results are sorted by road distance ascending so the caller can take [0]
+ * for the nearest eligible step.
  */
 function findNextStepCandidates(
   osrmSteps: OsrmStep[],
   planningPolyline: import("@/lib/live/routing/geometry").LatLng[] | null,
   lat: number,
   lng: number,
-  minM: number,
-  maxM: number,
+  minRoadM: number,
+  maxRoadM: number,
 ): Array<{
   stepKey: string;
   stepLat: number;
@@ -817,41 +837,57 @@ function findNextStepCandidates(
   maneuverType: string;
   maneuverModifier: string | undefined;
   stepName: string | undefined;
+  roadMeters: number;
 }> {
-  const results = [];
+  const driver = { lat, lng };
+  const results: Array<{
+    stepKey: string; stepLat: number; stepLng: number;
+    maneuverType: string; maneuverModifier: string | undefined;
+    stepName: string | undefined; roadMeters: number;
+  }> = [];
+
   for (const step of osrmSteps) {
     if (isBookendManeuver(step.maneuver.type)) continue;
-    const dist = metersBetween({ lat, lng }, step.maneuver.location);
-    if (dist < minM || dist > maxM) continue;
-    // On-route check: verify step aligns with the planning polyline.
-    // Skipped in fallback / filler mode when no polyline is available —
-    // OSRM steps fetched via forward probe are already on the driver's road.
+
+    const key = `step:${step.maneuver.location.lat.toFixed(4)}:${step.maneuver.location.lng.toFixed(4)}`;
+
     if (planningPolyline) {
-      const proj = projectOntoPolyline(planningPolyline, step.maneuver.location);
-      if (!proj || proj.distanceMeters > NEXT_STEP_ON_ROUTE_M) continue;
-      // Snap the pin to the Google Maps polyline so it sits exactly on the
-      // path the driver is following rather than at the OSRM node position
-      // which can be off by tens of metres.
+      // ── PRIMARY: road-distance along the Google Maps planning polyline ────
+      // roadDistanceAlongPolyline returns a signed value:
+      //   positive → step is AHEAD  (the only valid case)
+      //   negative → step is BEHIND (driver already passed it — skip)
+      const rd = roadDistanceAlongPolyline(planningPolyline, driver, step.maneuver.location);
+      if (!rd) continue;
+      if (rd.onRouteMeters > NEXT_STEP_ON_ROUTE_M) continue; // too far from route (parallel road)
+      if (rd.roadMeters < minRoadM || rd.roadMeters > maxRoadM) continue; // outside trigger window
+      // rd.roadMeters > 0 is guaranteed because minRoadM > 0 (e.g. 80 m).
       results.push({
-        stepKey: `step:${step.maneuver.location.lat.toFixed(4)}:${step.maneuver.location.lng.toFixed(4)}`,
-        stepLat: proj.projection.lat,
-        stepLng: proj.projection.lng,
+        stepKey: key,
+        stepLat: rd.projection.lat,  // snapped onto the Google Maps polyline
+        stepLng: rd.projection.lng,
         maneuverType: step.maneuver.type,
         maneuverModifier: step.maneuver.modifier,
         stepName: step.name,
+        roadMeters: rd.roadMeters,
       });
     } else {
+      // ── FALLBACK: straight-line distance (no reference polyline) ──────────
+      const dist = metersBetween(driver, step.maneuver.location);
+      if (dist < minRoadM || dist > maxRoadM) continue;
       results.push({
-        stepKey: `step:${step.maneuver.location.lat.toFixed(4)}:${step.maneuver.location.lng.toFixed(4)}`,
+        stepKey: key,
         stepLat: step.maneuver.location.lat,
         stepLng: step.maneuver.location.lng,
         maneuverType: step.maneuver.type,
         maneuverModifier: step.maneuver.modifier,
         stepName: step.name,
+        roadMeters: dist, // straight-line used as proxy in fallback mode
       });
     }
   }
-  return results;
+
+  // Sort by road distance ascending so callers can take results[0] for nearest.
+  return results.sort((a, b) => a.roadMeters - b.roadMeters);
 }
 
 // ─── Dense intersection extraction (for straight_streak) ─────────────────────
@@ -1139,14 +1175,14 @@ async function detectEligibleTriggers(
           osrmPolylineCheck,
           lat,
           lng,
-          NEXT_STEP_MIN_M,
-          NEXT_STEP_MAX_M,
+          NEXT_STEP_MIN_ROAD_M,
+          NEXT_STEP_MAX_ROAD_M,
         );
         for (const c of candidates) {
           const fired = await hasFiredNextStep(service, sessionId, c.stepKey);
           if (!fired) {
             console.log(
-              `[tick:detect] next_step: ${c.stepKey} (${c.maneuverType} ${c.maneuverModifier ?? ""}) dist in [${NEXT_STEP_MIN_M},${NEXT_STEP_MAX_M}]m`,
+              `[tick:detect] next_step: ${c.stepKey} (${c.maneuverType} ${c.maneuverModifier ?? ""}) road dist ${Math.round(c.roadMeters)}m in [${NEXT_STEP_MIN_ROAD_M},${NEXT_STEP_MAX_ROAD_M}]m`,
               { roomId },
             );
             eligible.push({

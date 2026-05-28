@@ -1,3 +1,8 @@
+import {
+  NEXT_STEP_MIN_ROAD_M,
+  NEXT_STEP_FILLER_MAX_ROAD_M,
+} from "@/lib/live/betting/betWindowConstants";
+
 /**
  * Bet scheduling configuration.
  *
@@ -85,8 +90,8 @@ export const BET_SCHEDULE: BetScheduleEntry[] = [
     marketType: "next_step",
     priority: 3,
     isFiller: true,
-    fillerMinM: 80,
-    fillerMaxM: 1_200,
+    fillerMinM: NEXT_STEP_MIN_ROAD_M,
+    fillerMaxM: NEXT_STEP_FILLER_MAX_ROAD_M,
     description:
       "Time to next OSRM maneuver — primary gap-filler.  Fires whenever an OSRM " +
       "step maneuver point lies on the Google planning polyline. " +
