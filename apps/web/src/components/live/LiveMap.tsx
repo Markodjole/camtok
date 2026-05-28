@@ -653,23 +653,24 @@ function LiveMapInner({
       m.on("dragstart", () => {
         onUserInteractRef.current?.();
       });
-      const t = L.tileLayer(
-        "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
-        {
-          subdomains: "abcd",
+      const maptilerKey = process.env.NEXT_PUBLIC_MAPTILER_KEY;
+      const tileUrl = maptilerKey
+        ? `https://api.maptiler.com/maps/streets-v2/{z}/{x}/{y}.png?key=${maptilerKey}`
+        : "https://tiles.stadiamaps.com/tiles/alidade_smooth/{z}/{x}/{y}{r}.png";
+      const attribution = maptilerKey
+        ? '&copy; <a href="https://www.maptiler.com/copyright/">MapTiler</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        : '&copy; <a href="https://stadiamaps.com/">Stadia Maps</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+      const t = L.tileLayer(tileUrl, {
           maxZoom: 20,
           opacity: 1,
           keepBuffer: 1,
           updateWhenIdle: false,
           updateWhenZooming: false,
-          attribution:
-            '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+          attribution,
         },
       );
       t.addTo(m);
-      // Boost tile contrast/saturation via GPU compositor — zero JS/layout cost
-      const tilePaneEl = m.getPanes().tilePane as HTMLElement | undefined;
-      if (tilePaneEl) tilePaneEl.style.filter = "saturate(1.3)";
+      // MapTiler / Stadia tiles are already colour-balanced — no filter needed.
       zoneLayerRef.current = L.layerGroup().addTo(m);
       checkpointLayerRef.current = L.layerGroup().addTo(m);
       destLayerRef.current = L.layerGroup().addTo(m);
