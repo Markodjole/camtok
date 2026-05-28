@@ -111,8 +111,10 @@ export function getMarketSweepLog(marketId: string): SweepLogEntry[] {
 
 // ─── Lock constants ───────────────────────────────────────────────────────────
 
-/** Lock TTL — a tick that crashes without releasing heals after this. */
-export const TICK_LOCK_TTL_MS = 5_000;
+// 15 s gives enough headroom for the worst-case tick (OSRM + Google + TfL +
+// Overpass in one pass).  The old 5 s TTL was shorter than that hot path,
+// allowing a second worker to grab the lock mid-tick and double-open markets.
+export const TICK_LOCK_TTL_MS = 15_000;
 
 /** Queue entries older than this are considered stale and discarded. */
 const QUEUE_EXPIRY_MS = 30_000;
@@ -310,11 +312,14 @@ export async function runRoomTick(
   }
 
   // ─── 3. Detect fresh triggers ────────────────────────────────────────────
+  // Load all fired-key data in one batch query (replaces 5 per-type queries).
+  const firedKeys = await loadFiredKeysSnapshot(service, sessionId);
   const { eligible: freshTriggers, routeCtx } = await detectEligibleTriggers(
     service,
     roomId,
     sessionId,
     capturedZone,
+    firedKeys,
   );
 
   if (phaseNow === "market_open") {
@@ -336,7 +341,7 @@ export async function runRoomTick(
     // filler market (next_step with relaxed distance window) so dead-air
     // between bets is kept to a minimum.
     if (opened.action === "no_eligible_bet") {
-      const fillerOpened = await tryFillerNextStep(service, roomId, sessionId, routeCtx);
+      const fillerOpened = await tryFillerNextStep(service, roomId, sessionId, routeCtx, firedKeys);
       if (fillerOpened) {
         return { action: fillerOpened.action, ...(fillerOpened.detail ?? {}), settled: settleNotes };
       }
@@ -516,20 +521,16 @@ async function openFromQueueOrTriggers(
     };
   }
 
-  // Snapshot the non-expired queued triggers BEFORE clearing so they can be
-  // restored if every opener fails.
+  // Non-expired queue items only.
   const validQueue = [...queue].filter((t) => now - t.queuedAt < QUEUE_EXPIRY_MS);
-  const savedQueue: QueuedTrigger[] = [...validQueue];
-
-  await service.from("live_rooms").update({ queued_triggers: [] }).eq("id", roomId);
 
   // ── Merge queue + fresh into one priority-ordered list ─────────────────────
   //
-  // Trying queue before fresh (old approach) caused lower-priority queued items
-  // (e.g. a pre-queued forward-pin next_step) to open ahead of higher-priority
-  // fresh items (e.g. a zone_exit_time that just fired).  Merging and sorting
-  // globally guarantees zone_exit (1) always beats next_turn (2), OSRM step (3),
-  // streak (4), city_grid (5), and forward-pin filler (10) regardless of source.
+  // IMPORTANT: we no longer wipe queued_triggers upfront.  The old approach
+  // (wipe → open → restore-on-fail) lost the queue if the function crashed
+  // after the wipe but before the restore.  Now we leave the DB queue intact
+  // throughout, then write the final pruned version ONCE at the end (success or
+  // all-fail).  A crash mid-opener leaves the queue unchanged — safe to retry.
   type UnifiedItem =
     | { source: "queue"; trigger: QueuedTrigger; priority: number }
     | { source: "fresh"; trigger: FreshTrigger; priority: number };
@@ -554,6 +555,15 @@ async function openFromQueueOrTriggers(
     }
 
     if ("marketId" in res && res.marketId) {
+      // Success: write the queue minus the trigger we just opened + expired items.
+      const openedKey = item.source === "queue" ? triggerKey(item.trigger) : null;
+      const remainingQueue = validQueue.filter(
+        (t) => openedKey == null || triggerKey(t) !== openedKey,
+      );
+      await service
+        .from("live_rooms")
+        .update({ queued_triggers: remainingQueue })
+        .eq("id", roomId);
       const label = item.source === "queue" ? "_from_queue" : "";
       return {
         action: `opened_${item.trigger.type}${label}`,
@@ -571,37 +581,27 @@ async function openFromQueueOrTriggers(
     });
   }
 
-  // Every opener failed — restore queued triggers that failed transiently so
-  // they are retried on the next tick.
-  //
-  // Triggers that returned a "SKIP:" error are permanently invalid (e.g. zone
-  // edge-entry with T too small, or a pin the driver has already passed).
-  // Restoring those would cause the same rejection on every subsequent tick,
-  // wasting API calls and flooding logs.  Drop them permanently instead.
+  // Every opener failed — write the queue with permanently-failed SKIP: entries
+  // removed.  Transient failures keep their queue entry so the next tick retries.
+  const permanentlyFailedKeys = new Set(
+    openerErrors
+      .filter((e) => e.error.startsWith("SKIP:"))
+      .map((e) => e.trigger),
+  );
+  const finalQueue = validQueue.filter(
+    (t) => !permanentlyFailedKeys.has(triggerKey(t)),
+  );
+  if (permanentlyFailedKeys.size > 0) {
+    console.log("[tick] permanently dropping SKIP: triggers", [...permanentlyFailedKeys]);
+  }
+  if (finalQueue.length !== queue.length || permanentlyFailedKeys.size > 0) {
+    await service
+      .from("live_rooms")
+      .update({ queued_triggers: finalQueue })
+      .eq("id", roomId);
+  }
   if (openerErrors.length > 0) {
-    const permanentlyFailedKeys = new Set(
-      openerErrors
-        .filter((e) => e.error.startsWith("SKIP:"))
-        .map((e) => e.trigger),
-    );
-    const restorableQueue = savedQueue.filter(
-      (t) => !permanentlyFailedKeys.has(triggerKey(t)),
-    );
-    if (permanentlyFailedKeys.size > 0) {
-      console.log(
-        "[tick] permanently dropping SKIP: triggers",
-        [...permanentlyFailedKeys],
-      );
-    }
-    if (restorableQueue.length > 0) {
-      console.warn("[tick] all openers failed — restoring transient-failed queue", JSON.stringify(openerErrors));
-      await service
-        .from("live_rooms")
-        .update({ queued_triggers: restorableQueue })
-        .eq("id", roomId);
-    } else {
-      console.warn("[tick] all openers failed (nothing restorable)", JSON.stringify(openerErrors));
-    }
+    console.warn("[tick] all openers failed — queue preserved for retry", JSON.stringify(openerErrors));
   }
 
   return {
@@ -739,6 +739,7 @@ async function tryFillerNextStep(
   roomId: string,
   sessionId: string,
   routeCtx: RouteCtx | null,
+  fired: FiredKeysSnapshot,
 ): Promise<{ action: string; detail?: Record<string, unknown> } | null> {
   if (!NEXT_STEP_BETS_ENABLED) return null;
   if (!routeCtx) return null;
@@ -761,8 +762,7 @@ async function tryFillerNextStep(
     );
 
     if (fwd) {
-      const fired = await hasFiredNextStep(service, sessionId, fwd.stepKey);
-      if (!fired) {
+      if (!fired.nextStep.has(fwd.stepKey)) {
         console.log(
           `[tick:filler] next_step: forward-pin retry ${fwd.stepKey} at ${Math.round(fwd.roadMeters)}m ahead — opening`,
           { roomId },
@@ -830,8 +830,7 @@ async function tryFillerNextStep(
   const candidates = findNextStepCandidates(steps, null, routeCtx.lat, routeCtx.lng, minM, maxM);
 
   for (const candidate of candidates) {
-    const fired = await hasFiredNextStep(service, sessionId, candidate.stepKey);
-    if (fired) continue;
+    if (fired.nextStep.has(candidate.stepKey)) continue;
 
     console.log(
       `[tick:filler] next_step (OSRM fallback): ${candidate.stepKey} (${candidate.maneuverType}) road dist ${Math.round(candidate.roadMeters)}m`,
@@ -1277,6 +1276,7 @@ async function detectEligibleTriggers(
   roomId: string,
   sessionId: string,
   capturedZone: string | null,
+  fired: FiredKeysSnapshot,
 ): Promise<DetectResult> {
   const eligible: FreshTrigger[] = [];
 
@@ -1316,12 +1316,12 @@ async function detectEligibleTriggers(
         // center gate blocked most routes because road paths rarely pass
         // within 100 m of a 500 m cell centre.  The opener still verifies
         // the driver is within bounds at open time.
-        {
-          const fired = await hasFiredCityGrid(service, sessionId, cellKey);
-          if (!fired) eligible.push({ type: "next_zone", cellKey });
+        if (!fired.cityGrid.has(cellKey)) {
+          eligible.push({ type: "next_zone", cellKey });
         }
 
-        const firedPhases = await loadFiredPhasesFromDB(service, sessionId, cellKey);
+        // zone_exit_time phases — read from pre-loaded snapshot (no extra DB hit).
+        const firedPhases = fired.zonePhases.get(cellKey) ?? new Set<ZoneExitPhase>();
 
         if (!firedPhases.has("entry")) {
           eligible.push({ type: "zone_exit_time", phase: "entry", cellKey, capturedZone });
@@ -1371,8 +1371,7 @@ async function detectEligibleTriggers(
           }
           if (pinIsAhead) {
             const pinKey = `pin:${pin.id}`;
-            const fired = await hasFiredNextTurn(service, sessionId, pinKey);
-            if (!fired) {
+            if (!fired.nextTurn.has(pinKey)) {
               eligible.push({
                 type: "next_turn",
                 pinKey,
@@ -1402,8 +1401,7 @@ async function detectEligibleTriggers(
           crossroads: analysis.crossroads.map(c => ({ nodeId: c.nodeId, bearingChangeDeg: c.bearingChangeDeg, isStraight: c.isStraight })),
         });
         if (analysis.streakKey) {
-          const fired = await hasFiredStraightStreak(service, sessionId, analysis.streakKey);
-          if (!fired) {
+          if (!fired.straightStreak.has(analysis.streakKey)) {
             eligible.push({
               type: "straight_streak",
               streakKey: analysis.streakKey,
@@ -1500,8 +1498,7 @@ async function detectEligibleTriggers(
               NEXT_STEP_MAX_ROAD_M,
             );
         for (const c of candidates) {
-          const fired = await hasFiredNextStep(service, sessionId, c.stepKey);
-          if (!fired) {
+          if (!fired.nextStep.has(c.stepKey)) {
             console.log(
               `[tick:detect] next_step (no-polyline fallback): ${c.stepKey} (${c.maneuverType}) road dist ${Math.round(c.roadMeters)}m`,
               { roomId },
@@ -1542,8 +1539,7 @@ async function detectEligibleTriggers(
     {
       const fwd = findForwardPinCandidate(planningPolyline, lat, lng);
       if (fwd) {
-        const fwdFired = await hasFiredNextStep(service, sessionId, fwd.stepKey);
-        if (!fwdFired) {
+        if (!fired.nextStep.has(fwd.stepKey)) {
           eligible.push({
             type: "next_step",
             stepKey: fwd.stepKey,
@@ -1578,9 +1574,8 @@ async function detectEligibleTriggers(
       const cam = await findCameraOnRoute(planningPolyline, lat, lng);
       if (cam) {
         const camKey = `cam:${cam.lat.toFixed(4)}:${cam.lng.toFixed(4)}`;
-        const camFired = await hasFiredNextStep(service, sessionId, camKey);
         const alreadyEligible = eligible.some((e) => e.type === "next_step" && e.stepKey === camKey);
-        if (!camFired && !alreadyEligible) {
+        if (!fired.nextStep.has(camKey) && !alreadyEligible) {
           eligible.push({
             type: "next_step",
             stepKey: camKey,
@@ -1612,124 +1607,76 @@ async function detectEligibleTriggers(
 }
 
 // ─── DB helpers ───────────────────────────────────────────────────────────────
+//
+// FiredKeysSnapshot: load ALL relevant fired-market data for a session in ONE
+// DB round-trip instead of 5 separate queries (city_grid, next_turn,
+// straight_streak, next_step, zone_exit_time).  detectEligibleTriggers creates
+// one snapshot at the start and checks all keys against it synchronously.
 
-async function hasFiredCityGrid(
+type FiredKeysSnapshot = {
+  /** cellKeys that already have a city_grid market this session */
+  cityGrid: Set<string>;
+  /** pinKeys that already have a next_turn market this session */
+  nextTurn: Set<string>;
+  /** streakKeys that already have a straight_streak market this session */
+  straightStreak: Set<string>;
+  /** stepKeys that already have a next_step market this session */
+  nextStep: Set<string>;
+  /** cellKey → set of fired ZoneExitPhases for zone_exit_time markets */
+  zonePhases: Map<string, Set<ZoneExitPhase>>;
+};
+
+async function loadFiredKeysSnapshot(
   service: Awaited<ReturnType<typeof createServiceClient>>,
   sessionId: string,
-  cellKey: string,
-): Promise<boolean> {
-  const { data } = await service
-    .from("live_betting_markets")
-    .select("subtitle")
-    .eq("live_session_id", sessionId)
-    .eq("market_type", "city_grid")
-    .order("opens_at", { ascending: false })
-    .limit(30);
-  return (data ?? []).some((row) => {
-    try {
-      const meta = JSON.parse((row as { subtitle: string | null }).subtitle ?? "{}") as { cellKey?: string };
-      return meta.cellKey === cellKey;
-    } catch {
-      return false;
-    }
-  });
-}
+): Promise<FiredKeysSnapshot> {
+  const snap: FiredKeysSnapshot = {
+    cityGrid: new Set(),
+    nextTurn: new Set(),
+    straightStreak: new Set(),
+    nextStep: new Set(),
+    zonePhases: new Map(),
+  };
 
-async function hasFiredNextTurn(
-  service: Awaited<ReturnType<typeof createServiceClient>>,
-  sessionId: string,
-  pinKey: string,
-): Promise<boolean> {
+  // Single query covering all bet types — replaces 5 separate round-trips.
+  // limit(100) is generous: typical sessions have <20 markets per type.
   const { data } = await service
     .from("live_betting_markets")
-    .select("subtitle")
+    .select("market_type, subtitle")
     .eq("live_session_id", sessionId)
-    .eq("market_type", "next_turn")
+    .in("market_type", ["city_grid", "next_turn", "straight_streak", "next_step", "zone_exit_time"])
     .order("opens_at", { ascending: false })
-    .limit(20);
-  return (data ?? []).some((row) => {
-    try {
-      const meta = JSON.parse((row as { subtitle: string | null }).subtitle ?? "{}") as { pinKey?: string };
-      return meta.pinKey === pinKey;
-    } catch {
-      return false;
-    }
-  });
-}
+    .limit(100);
 
-async function hasFiredStraightStreak(
-  service: Awaited<ReturnType<typeof createServiceClient>>,
-  sessionId: string,
-  streakKey: string,
-): Promise<boolean> {
-  const { data } = await service
-    .from("live_betting_markets")
-    .select("subtitle")
-    .eq("live_session_id", sessionId)
-    .eq("market_type", "straight_streak")
-    .order("opens_at", { ascending: false })
-    .limit(20);
-  return (data ?? []).some((row) => {
-    try {
-      const meta = JSON.parse(
-        (row as { subtitle: string | null }).subtitle ?? "{}",
-      ) as { streakKey?: string };
-      return meta.streakKey === streakKey;
-    } catch {
-      return false;
-    }
-  });
-}
-
-async function hasFiredNextStep(
-  service: Awaited<ReturnType<typeof createServiceClient>>,
-  sessionId: string,
-  stepKey: string,
-): Promise<boolean> {
-  const { data } = await service
-    .from("live_betting_markets")
-    .select("subtitle")
-    .eq("live_session_id", sessionId)
-    .eq("market_type", "next_step")
-    .order("opens_at", { ascending: false })
-    .limit(20);
-  return (data ?? []).some((row) => {
-    try {
-      const meta = JSON.parse(
-        (row as { subtitle: string | null }).subtitle ?? "{}",
-      ) as { stepKey?: string };
-      return meta.stepKey === stepKey;
-    } catch {
-      return false;
-    }
-  });
-}
-
-async function loadFiredPhasesFromDB(
-  service: Awaited<ReturnType<typeof createServiceClient>>,
-  liveSessionId: string,
-  cellKey: string,
-): Promise<Set<ZoneExitPhase>> {
-  const { data } = await service
-    .from("live_betting_markets")
-    .select("subtitle")
-    .eq("live_session_id", liveSessionId)
-    .eq("market_type", "zone_exit_time");
-  const fired = new Set<ZoneExitPhase>();
   for (const row of data ?? []) {
+    const r = row as { market_type: string; subtitle: string | null };
     try {
-      const meta = JSON.parse((row as { subtitle: string | null }).subtitle ?? "{}") as {
-        cellKey?: string;
-        triggerPhase?: string;
-      };
-      if (meta.cellKey === cellKey && meta.triggerPhase) {
-        fired.add(meta.triggerPhase as ZoneExitPhase);
+      const meta = JSON.parse(r.subtitle ?? "{}") as Record<string, string | undefined>;
+      switch (r.market_type) {
+        case "city_grid":
+          if (meta.cellKey) snap.cityGrid.add(meta.cellKey);
+          break;
+        case "next_turn":
+          if (meta.pinKey) snap.nextTurn.add(meta.pinKey);
+          break;
+        case "straight_streak":
+          if (meta.streakKey) snap.straightStreak.add(meta.streakKey);
+          break;
+        case "next_step":
+          if (meta.stepKey) snap.nextStep.add(meta.stepKey);
+          break;
+        case "zone_exit_time":
+          if (meta.cellKey && meta.triggerPhase) {
+            if (!snap.zonePhases.has(meta.cellKey)) snap.zonePhases.set(meta.cellKey, new Set());
+            snap.zonePhases.get(meta.cellKey)!.add(meta.triggerPhase as ZoneExitPhase);
+          }
+          break;
       }
     } catch {
-      // ignore
+      // malformed subtitle — ignore
     }
   }
-  return fired;
+  return snap;
 }
 
 // ─── Settlement sweep ─────────────────────────────────────────────────────────

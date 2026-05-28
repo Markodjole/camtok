@@ -63,12 +63,6 @@ export function LiveEventToasts({
   useEffect(() => {
     const run = async () => {
       try {
-        if (urgentSettlementMarketId) {
-          await fetch(`/api/live/rooms/${roomId}/tick`, {
-            method: "POST",
-            cache: "no-store",
-          }).catch(() => undefined);
-        }
         const res = await fetch(`/api/live/rooms/${roomId}/activity`, {
           cache: "no-store",
         });

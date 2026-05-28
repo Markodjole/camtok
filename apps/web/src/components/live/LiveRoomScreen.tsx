@@ -1529,7 +1529,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     if (!parsed) return;
     const now = Date.now();
     const elapsedSinceOpen = Math.max(0, (now - parsed.opensAtMs) / 1000);
-    const remaining = Math.max(0, parsed.estimatedSec - elapsedSinceOpen);
+    // Math.max(1, …) not 0 — a restored value of 0 immediately fires the
+    // nextStepResolving (spinner) before the user sees any countdown.
+    const remaining = Math.max(1, parsed.estimatedSec - elapsedSinceOpen);
     setNextStepPending({
       marketId: currentMarket.id,
       betPlacedAtMs: now,
