@@ -1040,13 +1040,23 @@ function findForwardPinCandidate(
   );
   if (ahead.length === 0) return null;
 
-  // Place the pin at whatever is 300 m ahead on the route.
+  // Place the pin at whatever is 300 m ahead on the route (interpolated point).
   const pin = ahead[ahead.length - 1]!;
 
-  // Dedup key based on WHERE THE PIN LANDS (≈110 m grid via toFixed(3)).
-  // As the driver moves forward the pin coordinates change and a new key
-  // becomes available — no "predestined places" fixed to the polyline.
-  const stepKey = `fwd:${pin.lat.toFixed(3)}:${pin.lng.toFixed(3)}`;
+  // Dedup key: driver-position bucket (≈110 m grid) + a 45-second time bucket.
+  //
+  // Why time-bucket?
+  //   • A pure geographic key means each ≈110 m section of a road fires at most
+  //     ONCE per session — on repeated rides the user sees pins at the exact same
+  //     road spots every time ("predestined places").
+  //   • The time bucket (~1 bet cycle) lets positions re-fire after each bet
+  //     resolves, so forward pins flow continuously and feel dynamic.
+  //   • A stationary driver re-fires the same position every 45 s (max once per
+  //     bet cycle) — still sensible behaviour.
+  const timeBucket = Math.floor(Date.now() / 45_000);
+  const dBucketLat = (Math.round(driverLat / 0.001) * 0.001).toFixed(3);
+  const dBucketLng = (Math.round(driverLng / 0.001) * 0.001).toFixed(3);
+  const stepKey = `fwd:${timeBucket}:${dBucketLat}:${dBucketLng}`;
 
   return { stepKey, stepLat: pin.lat, stepLng: pin.lng, roadMeters: NEXT_STEP_FORWARD_PIN_ROAD_M };
 }
