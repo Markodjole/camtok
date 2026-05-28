@@ -212,6 +212,34 @@ export const NEXT_STEP_APPROACH_M = 80;
  */
 export const NEXT_STEP_DEPARTURE_M = 5;
 
+// ─── Minimum viable window guards ────────────────────────────────────────────
+//
+// These thresholds prevent "impossible" bets where the resolution event is so
+// imminent that viewers have no meaningful time to bet.
+//
+//   zone_exit_time: If the estimated zone-exit time T < MIN_VIABLE_ZONE_BET_SEC,
+//     the driver entered at the cell edge and will exit before most viewers can
+//     even read the market.  The opener returns a SKIP: error so the trigger is
+//     permanently dropped (not re-queued).
+//
+//   next_step: If the pin is within MIN_VIABLE_STEP_BET_DIST_M straight-line
+//     metres of the driver at open time, the driver will pass it almost
+//     immediately.  Dropped as a permanent SKIP: error.
+
+/**
+ * Minimum estimated seconds to zone exit for a zone_exit_time market to open.
+ * At 50 km/h (≈ 14 m/s), 12 s ≈ 168 m of runway — enough for a viewer to
+ * read, decide, and tap before the window closes.
+ */
+export const MIN_VIABLE_ZONE_BET_SEC = 12;
+
+/**
+ * Minimum straight-line distance (m) from the driver to the next_step pin at
+ * the moment the market opens.  If closer, the pin is essentially already
+ * reached and the bet would resolve within a second or two.
+ */
+export const MIN_VIABLE_STEP_BET_DIST_M = 25;
+
 // ─── Client-bet-at timing tolerance ──────────────────────────────────────────
 //
 // When the client sends `clientBetAt` (the epoch ms when the user tapped),

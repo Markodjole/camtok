@@ -13,6 +13,7 @@ import { computeEqualOdds } from "@/lib/live/betting/marketOdds";
 import { bustPlanningRouteCache } from "@/lib/live/routing/computeDriverRouteInstruction";
 import {
   BET_OPEN_WINDOW_MS,
+  MIN_VIABLE_ZONE_BET_SEC,
   ZONE_EXIT_CENTER_TRIGGER_M,
   ZONE_EXIT_OUTER_TRIGGER_MIN_M,
 } from "@/lib/live/betting/betWindowConstants";
@@ -156,6 +157,17 @@ export async function openEngineMarketForRoom(
       source: "ray" as const,
     };
   const T = estimate.sec;
+
+  // Guard: if the zone exit is imminent, opening this bet is pointless — the
+  // driver will exit before most viewers can read and place a bet.
+  // Prefix "SKIP:" signals a permanent rejection (trigger must not be re-queued).
+  if (T < MIN_VIABLE_ZONE_BET_SEC) {
+    console.log(
+      `[zone_exit_time] SKIP: T=${T}s < min ${MIN_VIABLE_ZONE_BET_SEC}s for ${candidatePhase}/${cellKey} — zone too small or driver at edge`,
+      { roomId },
+    );
+    return { error: `SKIP:zone_exit_time: T=${T}s too small (min ${MIN_VIABLE_ZONE_BET_SEC}s)` };
+  }
 
   // Options use a real computed threshold T so viewers see a meaningful number.
   const options: LiveMarketOption[] = [

@@ -469,6 +469,17 @@ function buildUpdatedQueue(
         queuedAt: now,
       });
     } else {
+      // zone_exit_time: only allow ONE phase per cell in the queue at a time.
+      // If a phase for this cell is already queued, skip later phases — they
+      // pile up when the driver transits quickly and the earlier phase hasn't
+      // been attempted yet.  The later phases will be re-detected and re-queued
+      // naturally once the earlier phase resolves and the slot clears.
+      const sameCellAlreadyQueued = alive.some(
+        (t) => t.type === "zone_exit_time" && (t as { cellKey?: string }).cellKey === ft.cellKey,
+      );
+      if (sameCellAlreadyQueued) {
+        continue;
+      }
       alive.push({
         type: "zone_exit_time",
         phase: ft.phase! as ZoneExitPhase,
@@ -560,16 +571,37 @@ async function openFromQueueOrTriggers(
     });
   }
 
-  // Every opener failed — put the saved queued triggers back so they are
-  // retried on the next tick rather than being silently dropped.
-  if (openerErrors.length > 0 && savedQueue.length > 0) {
-    console.warn("[tick] all openers failed — restoring queue", JSON.stringify(openerErrors));
-    await service
-      .from("live_rooms")
-      .update({ queued_triggers: savedQueue })
-      .eq("id", roomId);
-  } else if (openerErrors.length > 0) {
-    console.warn("[tick] all openers failed (no queue to restore)", JSON.stringify(openerErrors));
+  // Every opener failed — restore queued triggers that failed transiently so
+  // they are retried on the next tick.
+  //
+  // Triggers that returned a "SKIP:" error are permanently invalid (e.g. zone
+  // edge-entry with T too small, or a pin the driver has already passed).
+  // Restoring those would cause the same rejection on every subsequent tick,
+  // wasting API calls and flooding logs.  Drop them permanently instead.
+  if (openerErrors.length > 0) {
+    const permanentlyFailedKeys = new Set(
+      openerErrors
+        .filter((e) => e.error.startsWith("SKIP:"))
+        .map((e) => e.trigger),
+    );
+    const restorableQueue = savedQueue.filter(
+      (t) => !permanentlyFailedKeys.has(triggerKey(t)),
+    );
+    if (permanentlyFailedKeys.size > 0) {
+      console.log(
+        "[tick] permanently dropping SKIP: triggers",
+        [...permanentlyFailedKeys],
+      );
+    }
+    if (restorableQueue.length > 0) {
+      console.warn("[tick] all openers failed — restoring transient-failed queue", JSON.stringify(openerErrors));
+      await service
+        .from("live_rooms")
+        .update({ queued_triggers: restorableQueue })
+        .eq("id", roomId);
+    } else {
+      console.warn("[tick] all openers failed (nothing restorable)", JSON.stringify(openerErrors));
+    }
   }
 
   return {

@@ -11,7 +11,7 @@ import {
 } from "@/lib/live/routing/drivingRouteStyle";
 import { computeEqualOdds } from "@/lib/live/betting/marketOdds";
 import { bustPlanningRouteCache } from "@/lib/live/routing/computeDriverRouteInstruction";
-import { BET_OPEN_WINDOW_IDLE_MS } from "@/lib/live/betting/betWindowConstants";
+import { BET_OPEN_WINDOW_IDLE_MS, MIN_VIABLE_STEP_BET_DIST_M } from "@/lib/live/betting/betWindowConstants";
 
 /**
  * `next_step`: bet on whether the driver reaches the next OSRM step maneuver
@@ -182,6 +182,19 @@ export async function openNextStepMarketForRoom(
 
   const stepTarget: LatLng = { lat: stepLat, lng: stepLng };
   const driver: LatLng = { lat: driverLat, lng: driverLng };
+
+  // Guard: if the pin is already within MIN_VIABLE_STEP_BET_DIST_M, the driver
+  // is essentially at or past it — the bet would resolve within a second or two.
+  // Prefix "SKIP:" signals permanent rejection (trigger must not be re-queued).
+  const distToPin = metersBetween(driver, stepTarget);
+  if (distToPin < MIN_VIABLE_STEP_BET_DIST_M) {
+    console.log(
+      `[next_step] SKIP: pin ${Math.round(distToPin)}m away (min ${MIN_VIABLE_STEP_BET_DIST_M}m) — already passed or too close`,
+      { roomId, stepKey },
+    );
+    return { error: `SKIP:next_step: pin ${Math.round(distToPin)}m away (min ${MIN_VIABLE_STEP_BET_DIST_M}m)` };
+  }
+
   const FALLBACK_MIN_SPEED_MPS = 7;
 
   const estimate = await estimateSecToStep({
