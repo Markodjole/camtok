@@ -789,13 +789,19 @@ async function tryFillerNextStep(
     } else {
       console.log(`[tick:filler] next_step: forward-pin projection failed — falling through to OSRM`, { roomId });
     }
-    // Fall through to OSRM in all non-success cases.
+    // When a planning polyline exists but the forward-pin couldn't open (already
+    // fired for this bucket, or too close to a turn), do NOT fall through to the
+    // OSRM junction fallback — OSRM places pins at fixed road-intersection coords
+    // which feel like "predestined places" to the user.  Skip and wait for the
+    // next bucket (driver advances ~100 m) or the next tick where conditions differ.
+    return null;
   }
 
   // ── SECONDARY: OSRM-step fallback ─────────────────────────────────────────
   //
-  // Used when: (a) no planning polyline, (b) forward-pin projection failed,
-  // (c) forward-pin already fired, or (d) forward-pin opener returned error.
+  // Only reached when there is NO planning polyline at all (Google Maps route
+  // hasn't loaded yet).  Never used when a polyline is available — OSRM pins
+  // land at fixed junction coords which repeat every ride ("predestined places").
   const minM = NEXT_STEP_MIN_ROAD_M;
   const maxM = NEXT_STEP_FILLER_MAX_ROAD_M;
 
@@ -1034,11 +1040,11 @@ function findForwardPinCandidate(
   );
   if (ahead.length === 0) return null;
 
-  // Only place a forward-pin bet when the Google Maps route is straight for the
-  // full NEXT_STEP_FORWARD_PIN_ROAD_M ahead.  On a curved or turning stretch the
-  // pin would land around a blind corner — unclear and confusing as a bet target.
-  if (!isPolylineStraight(ahead, FORWARD_PIN_STRAIGHT_DEG_THRESHOLD)) return null;
-
+  // Place the pin at whatever the route looks like 300 m ahead — straight or
+  // gently curving.  The user wants a pin whenever 300 m of route is visible,
+  // not only on arrow-straight sections.  The straightness guard was causing
+  // the OSRM junction fallback to fire instead, which produced pins at fixed
+  // road-intersection coordinates ("predestined places").
   const pin = ahead[ahead.length - 1]!;
 
   // Bucket dedup key — one new market per NEXT_STEP_FORWARD_PIN_BUCKET_M of travel.
@@ -1434,19 +1440,20 @@ async function detectEligibleTriggers(
     }
   }
 
-  // ── next_step forward-pin filler (low priority, always-available) ────────────
+  // ── next_step forward-pin filler (priority 1.5 — beats OSRM junction pins) ───
   //
-  // When Google Routes planning polyline is available, always add a forward-pin
-  // candidate 200 m ahead as a VERY LOW priority (10) fresh trigger.  Because
-  // we merge queue + fresh by priority in openFromQueueOrTriggers, zone_exit (1),
-  // next_turn (2), OSRM next_step (3), straight_streak (4), city_grid (5) all
-  // take precedence.  The forward-pin only opens when none of those fire — which
-  // is exactly the dead-air scenario the user wants filled.
+  // Always add the forward-pin when 300 m of route is available ahead.  The fwd:
+  // key has priority 1.5 which is LOWER NUMBER (= higher priority) than the OSRM
+  // next_step (priority 3).  Both can coexist in eligible at the same time —
+  // openFromQueueOrTriggers will pick the forward-pin first because of the lower
+  // priority number, and only fall back to the OSRM junction step if fwd: fails.
   //
-  // Skipped if an OSRM-based next_step was already added above (no duplicate).
+  // Previously gated by hasNextStepAlready which BLOCKED the fwd: pin whenever an
+  // OSRM step was added first.  That caused OSRM junction points (fixed geographic
+  // coordinates) to fire instead of the dynamic 300-m-ahead pin, producing the
+  // "predestined places" the user complained about.
   if (NEXT_STEP_BETS_ENABLED && planningPolyline && planningPolyline.length >= 2) {
-    const hasNextStepAlready = eligible.some((e) => e.type === "next_step");
-    if (!hasNextStepAlready) {
+    {
       const fwd = findForwardPinCandidate(planningPolyline, lat, lng);
       if (fwd) {
         const fwdFired = await hasFiredNextStep(service, sessionId, fwd.stepKey);
@@ -1461,7 +1468,7 @@ async function detectEligibleTriggers(
             stepName: undefined,
           });
           console.log(
-            `[tick:detect] next_step forward-pin ${fwd.stepKey} at ${Math.round(fwd.roadMeters)}m — added as priority-10 filler`,
+            `[tick:detect] next_step forward-pin ${fwd.stepKey} at ${Math.round(fwd.roadMeters)}m ahead`,
             { roomId },
           );
         } else {
