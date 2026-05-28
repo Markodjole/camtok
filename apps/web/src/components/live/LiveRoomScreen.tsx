@@ -545,10 +545,23 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       currentZoneCellKey !== zoneExitPending.startCellKey,
   );
 
-  // Show spinner only when the estimated time has elapsed.
-  // Do NOT dismiss on zone-exit alone — the countdown widget stays until
-  // handleSettlement fires (user requirement: nothing stops it except resolution).
-  const zoneExitResolving = Boolean(zoneExitPending && zoneExitCountdownElapsed);
+  // Show spinner when ANY of these signals indicate the bet outcome is imminent:
+  //   1. Local countdown timer has elapsed (estimated T has passed).
+  //   2. The zone market itself is now locked (room phase changed for THIS market).
+  //   3. Driver has left the start cell (zone exit event detected client-side).
+  // Condition 2 is scoped to the specific zone market to avoid showing a
+  // spinner when a different market type (e.g. next_step) locks.
+  // Do NOT clear the widget on any of these — only handleSettlement or the
+  // 45 s safety valve may clear it.
+  const zoneMarketLocked = Boolean(
+    zoneExitPending &&
+      room.phase === "market_locked" &&
+      currentMarket?.id === zoneExitPending.marketId,
+  );
+  const zoneExitResolving = Boolean(
+    zoneExitPending &&
+      (zoneExitCountdownElapsed || zoneMarketLocked || zoneExitLeftZone),
+  );
 
   // ── next_step (time-to-pin) countdown ──────────────────────────────────────
   const nextStepDeadlineMs = nextStepPending
@@ -564,13 +577,17 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       currentZoneCellKey !== cityGridBetPending.startCellKey,
   );
 
-  const urgentSettlementMarketId = zoneExitResolving
-    ? zoneExitPending!.marketId
-    : nextStepResolving
-      ? nextStepPending!.marketId
-      : cityGridBetCrossed
-        ? cityGridBetPending!.marketId
-        : null;
+  // Urgent polling: start fast 450 ms activity polls as soon as the driver
+  // exits the zone (even before the countdown elapses) so the settlement
+  // result is delivered immediately rather than waiting up to 3 s.
+  const urgentSettlementMarketId =
+    zoneExitResolving || zoneExitLeftZone
+      ? zoneExitPending!.marketId
+      : nextStepResolving
+        ? nextStepPending!.marketId
+        : cityGridBetCrossed
+          ? cityGridBetPending!.marketId
+          : null;
 
   // Countdown stays visible until the server confirms settlement via handleSettlement.
   // zoneExitResolving only switches the widget to a spinner — it never clears it.
@@ -781,7 +798,10 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         pulseCenterMoney("win", data.payoutAmount, targetLabel);
         if (netProfit > 0) pulseBalanceChange(netProfit);
       } else if (data.payoutAmount > 0) {
-        // Refund: stake returned, net = 0 — skip animation, server sync corrects.
+        // Refund: stake returned — show a neutral "stake" flash so the
+        // countdown doesn't disappear completely silently.  Balance will be
+        // corrected by the syncWalletFromServer call below.
+        pulseCenterMoney("stake", data.stakeAmount, "↩ refunded");
       } else {
         // Loss: stake was removed server-side at bet time; deduct from UI now
         // so the badge doesn't wait for the next syncWalletFromServer.
@@ -1059,10 +1079,12 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       viewerLiveWarn("place_bet_failed", { status: res.status, message, marketId: market.id, optionId });
 
       if (message === "Market not open" || message === "Market has locked") {
-        // Race condition — market closed between client check and server.
-        // Rollback (re-show the sheet) but don't display an error; the
-        // sheet's own "Betting closed" label covers this state.
+        // Race condition — market closed between client tap and server check.
+        // Roll back the optimistic countdown and show a brief error so the
+        // user understands the countdown disappeared because the bet was NOT
+        // placed (not a silent resolution).
         rollbackOptimistic(true);
+        setMapSheetError("Betting just closed — bet not placed");
         return { ok: false as const, error: message };
       }
 
