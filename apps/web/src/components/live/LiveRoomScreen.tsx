@@ -1415,6 +1415,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   }, [viewerTurnTarget?.lat, viewerTurnTarget?.lng]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const viewerOsrmPreviewPins = useMemo(() => {
+    // Suppress the turn-layer blue dot while a next_step (time-to-pin) market is
+    // active or a pending bet is resolving — showing both creates two blue dots.
+    if (currentMarket?.marketType === "next_step" || nextStepPending) return null;
     if (currentMarket?.marketType === "city_grid") return driverPins;
     if (!stickyViewerPin) return driverPins;
     const dm =
@@ -1436,6 +1439,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   }, [
     currentMarket?.id,
     currentMarket?.marketType,
+    nextStepPending,
     viewerTurnTarget?.lat,
     viewerTurnTarget?.lng,
     stickyViewerPin,

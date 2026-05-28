@@ -424,9 +424,10 @@ function formatManeuverLabel(
   modifier: string | undefined,
   name: string,
 ): string {
+  if (type === "camera") return "the speed camera";
   const dir = modifier ? ` ${modifier}` : "";
   const road = name ? ` onto ${name}` : "";
-  return `${type}${dir}${road}`.trim() || "the maneuver";
+  return `${type}${dir}${road}`.trim() || "the pin";
 }
 
 async function loadDrivingRouteStyle(

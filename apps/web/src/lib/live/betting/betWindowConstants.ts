@@ -161,8 +161,10 @@ export const NEXT_STEP_MAX_ROAD_M = 250;
 /**
  * Maximum road distance (m) for the gap-filler OSRM-step path.
  * Only used as a secondary fallback when the forward-pin filler is unavailable.
+ * Capped at 400 m so the estimated T stays ≤ ~30 s — large values are
+ * confusing as a countdown (e.g. "< 85 seconds" for a 1200 m step).
  */
-export const NEXT_STEP_FILLER_MAX_ROAD_M = 1_200;
+export const NEXT_STEP_FILLER_MAX_ROAD_M = 400;
 
 /**
  * Distance (m along planning polyline) to project the forward-pin when the
@@ -177,10 +179,11 @@ export const NEXT_STEP_FORWARD_PIN_ROAD_M = 200;
 /**
  * Dedup bucket size for forward-pin step keys (m along polyline).
  * A new forward-pin market can open once per this distance of travel.
- * At 200 m buckets and a 12 s bet window the driver needs ≥ 12 s between
- * pins — roughly matching normal bet cadence.
+ * At 100 m buckets the driver unlocks a fresh fwd: pin roughly every 7 s at
+ * 50 km/h — matching the 8–12 s bet window and making time-to-pin the most
+ * common bet type while still preventing back-to-back identical pins.
  */
-export const NEXT_STEP_FORWARD_PIN_BUCKET_M = 200;
+export const NEXT_STEP_FORWARD_PIN_BUCKET_M = 100;
 
 /**
  * Max perpendicular distance from the planning polyline for an OSRM step

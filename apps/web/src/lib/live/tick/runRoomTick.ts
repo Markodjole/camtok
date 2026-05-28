@@ -616,7 +616,9 @@ function triggerPriority(t: QueuedTrigger): number {
   const base = betSchedulePriority(mType);
   // Forward-pin fillers (stepKey "fwd:") fire right after zone_exit_time (1)
   // but before next_turn (2), OSRM steps (3), streak (4), city_grid (5).
-  // This makes "time to pin" the most common bet while zone bets still win.
+  // Camera pins (stepKey "cam:") are more natural than a generic forward-pin
+  // so they fire at 1.3 — just before fwd: (1.5), after zone (1).
+  if (t.type === "next_step" && t.stepKey.startsWith("cam:")) return 1.3;
   if (t.type === "next_step" && t.stepKey.startsWith("fwd:")) return 1.5;
   if (t.type === "zone_exit_time") {
     const phases: ZoneExitPhase[] = ["entry", "center_70m", "exit_outer"];
@@ -628,6 +630,8 @@ function triggerPriority(t: QueuedTrigger): number {
 function freshPriority(t: FreshTrigger): number {
   const mType = t.type === "next_zone" ? "city_grid" : t.type;
   const base = betSchedulePriority(mType);
+  // Camera pins fire after zone (1) but before fwd: forward-pins (1.5).
+  if (t.type === "next_step" && (t.stepKey ?? "").startsWith("cam:")) return 1.3;
   // Forward-pin fillers fire right after zone_exit_time (1), before everything else.
   if (t.type === "next_step" && (t.stepKey ?? "").startsWith("fwd:")) return 1.5;
   if (t.type === "zone_exit_time") {
@@ -1013,6 +1017,77 @@ function findForwardPinCandidate(
   return { stepKey, stepLat: pin.lat, stepLng: pin.lng, roadMeters: NEXT_STEP_FORWARD_PIN_ROAD_M };
 }
 
+// ─── Speed camera detection on route ─────────────────────────────────────────
+//
+// Queries OSM Overpass for speed cameras along the NEXT_STEP trigger band
+// (80–250 m ahead on the planning polyline).  Results are cached per ~200 m
+// driver position bucket so each camera is only fetched once per approach.
+
+const _camOnRouteCache = new Map<string, { result: LatLng | null; expiresAt: number }>();
+const CAM_CACHE_MS = 30_000; // 30 s — refresh as driver advances
+
+async function findCameraOnRoute(
+  polyline: LatLng[],
+  driverLat: number,
+  driverLng: number,
+): Promise<LatLng | null> {
+  // Coarse cache key: 0.002° grid (≈ 200 m)
+  const cacheKey = `${(Math.round(driverLat / 0.002) * 0.002).toFixed(3)}:${(Math.round(driverLng / 0.002) * 0.002).toFixed(3)}`;
+  const cached = _camOnRouteCache.get(cacheKey);
+  if (cached && Date.now() < cached.expiresAt) return cached.result;
+
+  // Find the midpoint of the [80m, 250m] band ahead on the polyline.
+  const driverProj = projectOntoPolyline(polyline, { lat: driverLat, lng: driverLng });
+  if (!driverProj) {
+    _camOnRouteCache.set(cacheKey, { result: null, expiresAt: Date.now() + CAM_CACHE_MS });
+    return null;
+  }
+  const driverAlong = cumulativeMetersAt(polyline, driverProj.segmentIndex, driverProj.t);
+  const sliceMid = slicePolylineByDistance(
+    polyline,
+    driverAlong + NEXT_STEP_MIN_ROAD_M,
+    driverAlong + NEXT_STEP_MAX_ROAD_M,
+  );
+  if (sliceMid.length === 0) {
+    _camOnRouteCache.set(cacheKey, { result: null, expiresAt: Date.now() + CAM_CACHE_MS });
+    return null;
+  }
+  const mid = sliceMid[Math.floor(sliceMid.length / 2)]!;
+
+  // Overpass query: speed cameras within 80 m of the midpoint.
+  const query = [
+    "[out:json][timeout:5];",
+    "(",
+    `  node(around:80,${mid.lat},${mid.lng})[highway=speed_camera];`,
+    `  node(around:80,${mid.lat},${mid.lng})[enforcement=speed_camera];`,
+    `  node(around:80,${mid.lat},${mid.lng})[device=camera][enforcement];`,
+    ");",
+    "out center 3;",
+  ].join("\n");
+
+  let result: LatLng | null = null;
+  try {
+    const res = await fetch("https://overpass-api.de/api/interpreter", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: `data=${encodeURIComponent(query)}`,
+      signal: AbortSignal.timeout(4_000),
+    });
+    if (res.ok) {
+      const data = (await res.json()) as { elements?: Array<{ lat?: number; lon?: number }> };
+      const el = data.elements?.[0];
+      if (el?.lat != null && el?.lon != null) {
+        result = { lat: el.lat, lng: el.lon };
+      }
+    }
+  } catch {
+    // Overpass unavailable — result stays null
+  }
+
+  _camOnRouteCache.set(cacheKey, { result, expiresAt: Date.now() + CAM_CACHE_MS });
+  return result;
+}
+
 // ─── Dense intersection extraction (for straight_streak) ─────────────────────
 
 /**
@@ -1365,6 +1440,37 @@ async function detectEligibleTriggers(
           );
         }
       }
+    }
+  }
+
+  // ── next_step camera pin: speed camera on route (priority 1.3) ──────────────
+  //
+  // When a speed camera is 80–250 m ahead on the planning polyline, use it as a
+  // next_step target.  Camera bets fire more often than zone bets take over, and
+  // feel natural ("how long until you hit the camera?").  They outprioritise the
+  // generic forward-pin filler (1.5) but yield to zone bets (1).
+  if (NEXT_STEP_BETS_ENABLED && planningPolyline && planningPolyline.length >= 2) {
+    try {
+      const cam = await findCameraOnRoute(planningPolyline, lat, lng);
+      if (cam) {
+        const camKey = `cam:${cam.lat.toFixed(4)}:${cam.lng.toFixed(4)}`;
+        const camFired = await hasFiredNextStep(service, sessionId, camKey);
+        const alreadyEligible = eligible.some((e) => e.type === "next_step" && e.stepKey === camKey);
+        if (!camFired && !alreadyEligible) {
+          eligible.push({
+            type: "next_step",
+            stepKey: camKey,
+            stepLat: cam.lat,
+            stepLng: cam.lng,
+            maneuverType: "camera",
+            maneuverModifier: undefined,
+            stepName: "speed camera",
+          });
+          console.log(`[tick:detect] next_step camera ${camKey} at (${cam.lat.toFixed(4)},${cam.lng.toFixed(4)})`, { roomId });
+        }
+      }
+    } catch (err) {
+      console.warn("[tick:detect] camera query error", err, { roomId });
     }
   }
 
