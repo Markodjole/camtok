@@ -1058,9 +1058,11 @@ function findForwardPinCandidate(
 //      client PiP panel.  This is what the user sees and expects a bet for.
 //   2. OSM Overpass — speed-enforcement cameras as a secondary source.
 //
-// Detection range: 80 m → NEXT_STEP_FORWARD_PIN_ROAD_M (300 m) ahead on the
-// planning polyline so the bet opens well before the driver reaches the camera.
-// A camera must project within 60 m of the polyline (same road, not parallel).
+// Detection range: 30 m → 500 m ahead on the planning polyline.
+// Lower minimum (30 m) ensures the bet still fires when the room was busy during
+// the normal approach window.  Larger maximum (500 m) gives more queue lifetime.
+// Offset tolerance is 100 m — TfL JamCam cameras sit at junctions and can be
+// well off the road centreline.
 
 const _camOnRouteCache = new Map<string, { result: LatLng | null; expiresAt: number }>();
 const CAM_CACHE_MS = 30_000;
@@ -1111,10 +1113,14 @@ async function findCameraOnRoute(
   }
   const driverAlong = cumulativeMetersAt(polyline, driverProj.segmentIndex, driverProj.t);
 
-  // The look-ahead band: 80 m (already passed the camera is useless) to 300 m.
-  const CAM_LOOK_MIN_M = 80;
-  const CAM_LOOK_MAX_M = NEXT_STEP_FORWARD_PIN_ROAD_M; // 300 m
-  const CAM_MAX_OFFSET_M = 60; // must be within 60 m of the polyline
+  // Look-ahead band: 30 m minimum so cameras still fire when the room was busy
+  // during the full 80-300 m window; 500 m maximum so cameras are detected well
+  // in advance and can survive a zone bet's queue lifetime.
+  // TfL JamCam cameras sit at junctions and can be 70-90 m off the road
+  // centreline, so the offset limit is relaxed to 100 m.
+  const CAM_LOOK_MIN_M = 30;
+  const CAM_LOOK_MAX_M = 500;
+  const CAM_MAX_OFFSET_M = 100;
 
   // Helper: project a point onto the polyline and return road distance ahead.
   function cameraRoadDistAhead(camLat: number, camLng: number): number | null {
@@ -1136,8 +1142,8 @@ async function findCameraOnRoute(
   try {
     const tflCams = await fetchTflCamerasForTick();
     for (const c of tflCams) {
-      // Quick bounding-box pre-filter (≈ 0.003° ≈ 330 m) before expensive projection.
-      if (Math.abs(c.lat - driverLat) > 0.004 || Math.abs(c.lng - driverLng) > 0.006) continue;
+      // Quick bounding-box pre-filter (≈ 500 m) before expensive projection.
+      if (Math.abs(c.lat - driverLat) > 0.006 || Math.abs(c.lng - driverLng) > 0.009) continue;
       const dist = cameraRoadDistAhead(c.lat, c.lng);
       if (dist !== null && dist < bestDist) {
         bestDist = dist;
@@ -1551,12 +1557,12 @@ async function detectEligibleTriggers(
     }
   }
 
-  // ── next_step camera pin: speed camera on route (priority 1.3) ──────────────
+  // ── next_step camera pin: traffic/speed camera on route (priority 1.3) ──────
   //
-  // When a speed camera is 80–250 m ahead on the planning polyline, use it as a
-  // next_step target.  Camera bets fire more often than zone bets take over, and
-  // feel natural ("how long until you hit the camera?").  They outprioritise the
-  // generic forward-pin filler (1.5) but yield to zone bets (1).
+  // When a camera is 30–500 m ahead on the planning polyline, use it as a
+  // next_step target.  Camera bets fire whenever a TfL JamCam or OSM speed
+  // camera is on the driver's route.  They outprioritise the generic forward-pin
+  // filler (1.5) but yield to zone bets (1).
   if (NEXT_STEP_BETS_ENABLED && planningPolyline && planningPolyline.length >= 2) {
     try {
       const cam = await findCameraOnRoute(planningPolyline, lat, lng);
@@ -1572,7 +1578,7 @@ async function detectEligibleTriggers(
             stepLng: cam.lng,
             maneuverType: "camera",
             maneuverModifier: undefined,
-            stepName: "speed camera",
+            stepName: undefined,
           });
           console.log(`[tick:detect] next_step camera ${camKey} at (${cam.lat.toFixed(4)},${cam.lng.toFixed(4)})`, { roomId });
         }

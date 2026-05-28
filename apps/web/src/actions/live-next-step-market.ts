@@ -426,7 +426,7 @@ function formatManeuverLabel(
   modifier: string | undefined,
   name: string,
 ): string {
-  if (type === "camera") return "the speed camera";
+  if (type === "camera") return "the traffic camera";
   const dir = modifier ? ` ${modifier}` : "";
   const road = name ? ` onto ${name}` : "";
   return `${type}${dir}${road}`.trim() || "the pin";
