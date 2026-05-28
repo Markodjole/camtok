@@ -289,6 +289,8 @@ function motionSegmentDtSec(
   return fallbackSec;
 }
 
+import { fetchNearbyLandmark } from "@/lib/live/routing/wikipediaLandmark";
+
 function LiveMapInner({
   routePoints,
   className = "",
@@ -1144,30 +1146,70 @@ function LiveMapInner({
     })();
   }, [turnTarget, driverPins, approachLine, mapReady, audienceRole]);
 
-  // Render the Marble Arch gate marker for active `next_step` (time-to-pin) bets.
-  // Uses a real SVG image asset (public/gate-marble.svg) via L.icon so Leaflet
-  // loads it like any other map marker — no inline HTML injection.
+  // ── Nearby landmark photo marker for active `next_step` bets ─────────────
+  //
+  // 1. Query Wikipedia's generator+geosearch API for articles within 1 km.
+  // 2. Pick the first result that has a thumbnail photo.
+  // 3. Render a circular photo-bubble marker (Google Maps POI style) on the map.
+  // 4. Fall back to the Marble Arch SVG if Wikipedia returns nothing.
+  //
+  // Results are cached by a ~100 m grid key so rapid pin updates (every 200 m)
+  // don't hammer the API.
   useEffect(() => {
     const group = stepPinLayerRef.current;
     if (!group) return;
+    let cancelled = false;
     (async () => {
       const L = (await import("leaflet")).default;
       group.clearLayers();
       if (!stepPin) return;
 
-      const icon = L.icon({
-        iconUrl: "/gate-marble.svg",
-        iconSize: [80, 52],
-        iconAnchor: [40, 26], // centre of the image on the map point
-        className: "camtok-gate-marker",
-      });
+      // ── Fetch nearest Wikipedia landmark ────────────────────────────────
+      const landmark = await fetchNearbyLandmark(stepPin.lat, stepPin.lng);
+      if (cancelled) return;
 
+      let icon: import("leaflet").Icon | import("leaflet").DivIcon;
+
+      if (landmark) {
+        // Circular photo-bubble + name label + pointer — Google Maps POI style.
+        // The name pill sits above the photo; the pointer anchors to the coordinate.
+        const escapedName = landmark.name
+          .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+        const html = `
+          <div style="display:flex;flex-direction:column;align-items:center;filter:drop-shadow(0 3px 8px rgba(0,0,0,0.6))">
+            <div style="max-width:120px;padding:2px 8px;border-radius:9999px;background:rgba(0,0,0,0.72);color:#fff;font-size:10px;font-weight:600;letter-spacing:0.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:4px;border:1px solid rgba(255,255,255,0.18)">
+              ${escapedName}
+            </div>
+            <div style="width:60px;height:60px;border-radius:50%;border:3px solid #fff;overflow:hidden;background:#1a1a1a">
+              <img src="${landmark.photo}" style="width:100%;height:100%;object-fit:cover;transition:opacity 0.3s" draggable="false" crossorigin="anonymous"/>
+            </div>
+            <div style="width:0;height:0;border-left:10px solid transparent;border-right:10px solid transparent;border-top:14px solid #fff;margin-top:-2px"></div>
+          </div>`;
+        icon = L.divIcon({
+          html,
+          className: "camtok-landmark-pin",
+          // iconSize height = label(~20) + gap(4) + photo(60) + pointer(14) - overlap(2) = ~96
+          iconSize: [120, 96],
+          iconAnchor: [60, 96], // tip of pointer sits on the map coordinate
+        });
+      } else {
+        // Fallback: Marble Arch SVG centred on the map point.
+        icon = L.icon({
+          iconUrl: "/gate-marble.svg",
+          iconSize: [80, 52],
+          iconAnchor: [40, 26],
+          className: "camtok-gate-marker",
+        });
+      }
+
+      group.clearLayers(); // clear again in case another async settled first
       L.marker([stepPin.lat, stepPin.lng], {
         icon,
         interactive: false,
         zIndexOffset: 900,
       }).addTo(group);
     })();
+    return () => { cancelled = true; };
   }, [stepPin, mapReady]);
 
   useEffect(() => {

@@ -13,6 +13,7 @@ import {
   parseGridOptionId,
 } from "@/lib/live/grid/cityGrid500";
 import { drivingRouteStyleBadges } from "@/lib/live/routing/drivingRouteStyle";
+import { fetchNearbyLandmark, type NearbyLandmark } from "@/lib/live/routing/wikipediaLandmark";
 import { NEXT_TURN_BETS_ENABLED } from "@/lib/live/featureFlags";
 import dynamic from "next/dynamic";
 import type { LiveFeedRow, RoutePoint } from "@/actions/live-feed";
@@ -2151,6 +2152,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             betPlacedAtMs={nextStepCountdown.betPlacedAtMs}
             remainingAtBetSec={nextStepCountdown.remainingAtBetSec}
             resolving={nextStepResolving}
+            pinLat={stepPin?.lat ?? null}
+            pinLng={stepPin?.lng ?? null}
           />
         ) : null}
       </div>
@@ -2581,16 +2584,33 @@ const NextStepCountdownWidget = memo(function NextStepCountdownWidget({
   betPlacedAtMs,
   remainingAtBetSec,
   resolving = false,
+  pinLat = null,
+  pinLng = null,
 }: {
   betPlacedAtMs: number;
   remainingAtBetSec: number;
   resolving?: boolean;
+  pinLat?: number | null;
+  pinLng?: number | null;
 }) {
   const [now, setNow] = useState(() => Date.now());
+  const [landmark, setLandmark] = useState<NearbyLandmark | null>(null);
+
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, []);
+
+  // Fetch nearest landmark (name + photo) when pin coords are available.
+  useEffect(() => {
+    if (pinLat == null || pinLng == null) { setLandmark(null); return; }
+    let cancelled = false;
+    fetchNearbyLandmark(pinLat, pinLng).then((result) => {
+      if (!cancelled) setLandmark(result);
+    });
+    return () => { cancelled = true; };
+  }, [pinLat, pinLng]);
+
   const remainingSec = Math.max(
     0,
     Math.round(remainingAtBetSec) - Math.floor((now - betPlacedAtMs) / 1000),
@@ -2603,17 +2623,52 @@ const NextStepCountdownWidget = memo(function NextStepCountdownWidget({
       ? "bg-red-600/40 border-red-400/60 text-red-100"
       : "bg-stone-900/60 border-stone-400/30 text-stone-100";
 
+  const title = landmark?.name ?? (resolving ? "Awaiting result…" : "Nearby landmark");
+
   return (
-    <div className="pointer-events-none flex flex-col items-center gap-0.5" title={resolving ? "Awaiting gate result…" : "Time to gate"}>
-      {/* Marble Arch image — same asset as the map marker */}
-      <img
-        src="/gate-marble.svg"
-        alt="gate"
-        width={52}
-        height={34}
-        className="opacity-95 drop-shadow-md"
-        draggable={false}
-      />
+    <div
+      className="pointer-events-none flex flex-col items-center gap-0.5"
+      title={title}
+    >
+      {/* Photo bubble + name label + pointer — mirrors the map marker exactly */}
+      <div className="flex flex-col items-center" style={{ filter: "drop-shadow(0 3px 7px rgba(0,0,0,0.55))" }}>
+        {/* Name pill */}
+        {landmark && (
+          <div className="mb-1 max-w-[110px] overflow-hidden text-ellipsis whitespace-nowrap rounded-full border border-white/20 bg-black/75 px-2 py-px text-center text-[9px] font-semibold leading-tight tracking-wide text-white">
+            {landmark.name}
+          </div>
+        )}
+        {/* Circular photo */}
+        <div className="h-14 w-14 overflow-hidden rounded-full border-[3px] border-white bg-stone-800">
+          {landmark ? (
+            <img
+              src={landmark.photo}
+              alt={landmark.name}
+              className="h-full w-full object-cover transition-opacity duration-300"
+              crossOrigin="anonymous"
+              draggable={false}
+            />
+          ) : (
+            <img
+              src="/gate-marble.svg"
+              alt="gate"
+              className="h-full w-full object-cover opacity-70"
+              draggable={false}
+            />
+          )}
+        </div>
+        {/* Pointer tip */}
+        <div
+          style={{
+            width: 0,
+            height: 0,
+            borderLeft: "9px solid transparent",
+            borderRight: "9px solid transparent",
+            borderTop: "13px solid white",
+            marginTop: -2,
+          }}
+        />
+      </div>
       {/* Countdown pill */}
       <div
         className={`flex h-10 w-10 items-center justify-center rounded-md border text-sm font-bold tabular-nums transition-colors ${bg}`}
