@@ -73,15 +73,24 @@ export async function openNextStepMarketForRoom(
   // ── Load room + session ───────────────────────────────────────────────────
   const { data: room } = await service
     .from("live_rooms")
-    .select("id, live_session_id, phase")
+    .select("id, live_session_id, phase, current_step_market_id")
     .eq("id", roomId)
     .maybeSingle();
   if (!room) return { error: "room_not_found" };
-  if ((room as { phase: string }).phase !== "waiting_for_next_market") {
-    return { error: "room_not_in_waiting_phase" };
+  // next_step runs in its own independent slot — it can open even while a zone
+  // or turn bet occupies the main slot.  Reject only when the step slot itself
+  // is already taken (another pin/camera bet is in-flight).
+  const r = room as { phase: string; live_session_id: string | null; current_step_market_id: string | null };
+  if (r.current_step_market_id != null) {
+    return { error: "step_slot_occupied" };
+  }
+  // The main slot must be either waiting or open (market_open = zone/turn running).
+  // Reject only hard-stuck states (locked main slot) to avoid double-opening.
+  if (r.phase === "market_locked") {
+    return { error: "room_main_slot_locked" };
   }
 
-  const sessionId = (room as { live_session_id: string | null }).live_session_id;
+  const sessionId = r.live_session_id;
   if (!sessionId) return { error: "no_live_session" };
 
   const { data: sessionRow } = await service
@@ -284,11 +293,12 @@ export async function openNextStepMarketForRoom(
     return { error: marketError?.message ?? "market_insert_failed" };
   }
 
+  // Write to the independent step slot — do NOT change the main phase so any
+  // concurrent zone / turn bet keeps running undisturbed.
   await service
     .from("live_rooms")
     .update({
-      phase: "market_open",
-      current_market_id: (market as { id: string }).id,
+      current_step_market_id: (market as { id: string }).id,
       last_event_at: now.toISOString(),
     })
     .eq("id", roomId);

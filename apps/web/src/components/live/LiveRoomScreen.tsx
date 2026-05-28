@@ -343,6 +343,11 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     stepLng?: number;
   } | null>(null);
   const nextStepDismissedRef = useRef<Set<string>>(new Set());
+  /** Tracks the last market a step bet was placed on (mirrors lastBetMarketId for step slot). */
+  const [lastBetStepMarketId, setLastBetStepMarketId] = useState<string | null>(null);
+  const [stepBetJustPlaced, setStepBetJustPlaced] = useState(false);
+  const stepBetJustPlacedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [stepPlacingOptionId, setStepPlacingOptionId] = useState<string | null>(null);
   /** Active next_zone (city_grid) bet — tracks start cell to detect border crossing. */
   const [cityGridBetPending, setCityGridBetPending] = useState<{
     marketId: string;
@@ -467,6 +472,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   }, [eligibleTypes.length]);
 
   const currentMarket = room.currentMarket;
+  // Step market runs independently in its own slot — can be non-null even
+  // while currentMarket (zone/turn) is also running.
+  const currentStepMarket = room.currentStepMarket ?? null;
 
   // ── Market-scoped bet-sheet error ─────────────────────────────────────────
   // `mapSheetError` is the error message visible in the current bet sheet.
@@ -919,10 +927,12 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     return () => clearInterval(id);
   }, [room.liveSessionId]);
 
-  async function placeBet(optionId: string) {
-    if (!room.currentMarket) return;
-    if (placingOptionId) return;
-    const market = room.currentMarket;
+  async function placeBet(optionId: string, marketOverride?: NonNullable<typeof currentMarket>) {
+    const market = marketOverride ?? room.currentMarket;
+    if (!market) return;
+    const isStepBet = market.marketType === "next_step";
+    if (!isStepBet && placingOptionId) return;
+    if (isStepBet && stepPlacingOptionId) return;
     const stake = lastStakeAmount;
 
     // Resolve the label from local data — no network needed.
@@ -947,8 +957,12 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     // ── Optimistic UI — fire immediately, before the network call ──────────
     pulseCenterMoney("stake", stake, pickedLabel);
     setSelectedMapOptionId(null);
-    setLastBetMarketId(market.id);
-    setLastBetOptionLabel(pickedLabel);
+    if (isStepBet) {
+      setLastBetStepMarketId(market.id);
+    } else {
+      setLastBetMarketId(market.id);
+      setLastBetOptionLabel(pickedLabel);
+    }
     if (market.marketType === "zone_exit_time") {
       const parsed = parseZoneExitMarketMeta(market);
       const startCellKey = parsed?.startCellKey ?? currentZoneCellKey;
@@ -995,7 +1009,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     });
     setError(null);
     setMapSheetError(null);
-    setPlacingOptionId(optionId);
+    if (isStepBet) setStepPlacingOptionId(optionId);
+    else setPlacingOptionId(optionId);
 
     // Capture the tap time before the network call so the server can use it
     // as the effective bet time — bets placed before locks_at are accepted
@@ -1029,15 +1044,23 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       }
       setSettlingDeadlineMs(null);
       setSettlingMarketType(null);
-      if (betJustPlacedTimerRef.current) {
-        clearTimeout(betJustPlacedTimerRef.current);
-        betJustPlacedTimerRef.current = null;
-      }
-      setBetJustPlaced(false);
-      if (showSheet) {
-        // Re-show the sheet so the user can retry.
-        setLastBetMarketId(null);
-        setLastBetOptionLabel(null);
+      if (isStepBet) {
+        if (stepBetJustPlacedTimerRef.current) {
+          clearTimeout(stepBetJustPlacedTimerRef.current);
+          stepBetJustPlacedTimerRef.current = null;
+        }
+        setStepBetJustPlaced(false);
+        if (showSheet) setLastBetStepMarketId(null);
+      } else {
+        if (betJustPlacedTimerRef.current) {
+          clearTimeout(betJustPlacedTimerRef.current);
+          betJustPlacedTimerRef.current = null;
+        }
+        setBetJustPlaced(false);
+        if (showSheet) {
+          setLastBetMarketId(null);
+          setLastBetOptionLabel(null);
+        }
       }
     };
 
@@ -1056,12 +1079,21 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         setBetAcceptedLabel(pickedLabel ?? `$${stake}`);
         if (betAcceptedTimerRef.current) clearTimeout(betAcceptedTimerRef.current);
         betAcceptedTimerRef.current = setTimeout(() => setBetAcceptedLabel(null), 2500);
-        // Capture locksAt for the settling chip — stored independently so it
-        // survives even if currentMarket goes null briefly between settlement
-        // and the next market opening.
-        if (market.locksAt) {
-          setSettlingDeadlineMs(new Date(market.locksAt).getTime() + 2_000);
-          setSettlingMarketType(market.marketType ?? null);
+        if (isStepBet) {
+          setLastBetStepMarketId(market.id);
+          if (stepBetJustPlacedTimerRef.current) clearTimeout(stepBetJustPlacedTimerRef.current);
+          stepBetJustPlacedTimerRef.current = setTimeout(() => {
+            setStepBetJustPlaced(true);
+            stepBetJustPlacedTimerRef.current = null;
+          }, 1000);
+        } else {
+          // Capture locksAt for the settling chip — stored independently so it
+          // survives even if currentMarket goes null briefly between settlement
+          // and the next market opening.
+          if (market.locksAt) {
+            setSettlingDeadlineMs(new Date(market.locksAt).getTime() + 2_000);
+            setSettlingMarketType(market.marketType ?? null);
+          }
         }
         viewerLiveLog("place_bet_ok", { marketId: market.id, optionId, pickedLabel, stakeAmount: stake });
         return { ok: true as const };
@@ -1098,7 +1130,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       setMapSheetError(message);
       return { ok: false as const, error: message };
     } finally {
-      setPlacingOptionId(null);
+      if (isStepBet) setStepPlacingOptionId(null);
+      else setPlacingOptionId(null);
     }
   }
 
@@ -1276,22 +1309,20 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   /** Hide blue pin once we're essentially at the maneuver (matches server pass semantics). */
   const viewerTurnTargetForMap =
     currentMarket?.marketType !== "city_grid" &&
-    currentMarket?.marketType !== "next_step" &&
     viewerTurnTarget &&
     currentMarket &&
     !passedMarketTurn
       ? viewerTurnTarget
       : null;
 
-  // Prefer the live market's stored maneuver point so ALL viewers see the orange
+  // Prefer the live step market's stored maneuver point so ALL viewers see the
   // pin the moment the next_step market opens — no bet required.
   // Falls back to nextStepPending so the pin stays visible after the market
   // closes until the server confirms resolution for users who placed a bet.
   const stepPin =
-    currentMarket?.marketType === "next_step" &&
-    currentMarket.turnPointLat != null &&
-    currentMarket.turnPointLng != null
-      ? { lat: currentMarket.turnPointLat, lng: currentMarket.turnPointLng }
+    currentStepMarket?.turnPointLat != null &&
+    currentStepMarket?.turnPointLng != null
+      ? { lat: currentStepMarket.turnPointLat, lng: currentStepMarket.turnPointLng }
       : nextStepPending?.stepLat != null && nextStepPending?.stepLng != null
         ? { lat: nextStepPending.stepLat, lng: nextStepPending.stepLng }
         : null;
@@ -1302,8 +1333,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   //   2. Market closed but user has a pending bet → count from betPlacedAt (resolving state).
   //   3. Nothing → null (widget hidden).
   const nextStepCountdown: { betPlacedAtMs: number; remainingAtBetSec: number } | null = (() => {
-    if (currentMarket?.marketType === "next_step") {
-      const parsed = parseNextStepMarketMeta(currentMarket);
+    if (currentStepMarket?.marketType === "next_step") {
+      const parsed = parseNextStepMarketMeta(currentStepMarket);
       if (parsed) return { betPlacedAtMs: parsed.opensAtMs, remainingAtBetSec: parsed.estimatedSec };
     }
     if (nextStepPending) {
@@ -1432,7 +1463,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const viewerOsrmPreviewPins = useMemo(() => {
     // Suppress the turn-layer blue dot while a next_step (time-to-pin) market is
     // active or a pending bet is resolving — showing both creates two blue dots.
-    if (currentMarket?.marketType === "next_step" || nextStepPending) return null;
+    if (currentStepMarket || nextStepPending) return null;
     if (currentMarket?.marketType === "city_grid") return driverPins;
     if (!stickyViewerPin) return driverPins;
     const dm =
@@ -1488,6 +1519,18 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     });
   }, [currentMarket?.id, lastBetMarketId]);
 
+  // Clear step-bet tracking when the step market changes.
+  useEffect(() => {
+    if (lastBetStepMarketId && currentStepMarket?.id !== lastBetStepMarketId) {
+      setLastBetStepMarketId(null);
+    }
+    if (stepBetJustPlacedTimerRef.current) {
+      clearTimeout(stepBetJustPlacedTimerRef.current);
+      stepBetJustPlacedTimerRef.current = null;
+    }
+    setStepBetJustPlaced(false);
+  }, [currentStepMarket?.id, lastBetStepMarketId]);
+
   // Keep right-column countdown in sync after a zone-exit bet (incl. page refresh / feed tick).
   // Note: once dismissed (countdown finished), we do NOT restore the widget.
   useEffect(() => {
@@ -1520,12 +1563,13 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   ]);
 
   // Sync next_step countdown on page refresh / feed tick.
+  // next_step markets now live in currentStepMarket (independent slot).
   useEffect(() => {
-    if (!currentMarket || currentMarket.marketType !== "next_step") return;
-    if (lastBetMarketId !== currentMarket.id) return;
-    if (nextStepDismissedRef.current.has(currentMarket.id)) return;
-    if (nextStepPending?.marketId === currentMarket.id) return;
-    const parsed = parseNextStepMarketMeta(currentMarket);
+    if (!currentStepMarket || currentStepMarket.marketType !== "next_step") return;
+    if (lastBetMarketId !== currentStepMarket.id) return;
+    if (nextStepDismissedRef.current.has(currentStepMarket.id)) return;
+    if (nextStepPending?.marketId === currentStepMarket.id) return;
+    const parsed = parseNextStepMarketMeta(currentStepMarket);
     if (!parsed) return;
     const now = Date.now();
     const elapsedSinceOpen = Math.max(0, (now - parsed.opensAtMs) / 1000);
@@ -1533,20 +1577,20 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     // nextStepResolving (spinner) before the user sees any countdown.
     const remaining = Math.max(1, parsed.estimatedSec - elapsedSinceOpen);
     setNextStepPending({
-      marketId: currentMarket.id,
+      marketId: currentStepMarket.id,
       betPlacedAtMs: now,
       remainingAtBetSec: remaining,
-      stepLat: currentMarket.turnPointLat ?? undefined,
-      stepLng: currentMarket.turnPointLng ?? undefined,
+      stepLat: currentStepMarket.turnPointLat ?? undefined,
+      stepLng: currentStepMarket.turnPointLng ?? undefined,
     });
   }, [
-    currentMarket,
-    currentMarket?.id,
-    currentMarket?.marketType,
-    currentMarket?.opensAt,
-    currentMarket?.meta,
-    currentMarket?.turnPointLat,
-    currentMarket?.turnPointLng,
+    currentStepMarket,
+    currentStepMarket?.id,
+    currentStepMarket?.marketType,
+    currentStepMarket?.opensAt,
+    currentStepMarket?.meta,
+    currentStepMarket?.turnPointLat,
+    currentStepMarket?.turnPointLng,
     lastBetMarketId,
     nextStepPending?.marketId,
   ]);
@@ -1649,6 +1693,20 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     !viewerHasBetOnCurrentMarket &&
     !betJustPlaced &&
     !betWindowClosed;
+
+  const viewerHasBetOnStepMarket = Boolean(
+    currentStepMarket && lastBetStepMarketId === currentStepMarket.id,
+  );
+  const stepMarketLockedMs = currentStepMarket?.locksAt
+    ? new Date(currentStepMarket.locksAt).getTime()
+    : null;
+  const stepMarketLocked = useDeadlinePassed(stepMarketLockedMs);
+  const showStepBetSheet =
+    showLiveBets &&
+    currentStepMarket != null &&
+    !viewerHasBetOnStepMarket &&
+    !stepBetJustPlaced &&
+    !stepMarketLocked;
   void isLocked;
   void betPanelDismissed;
 
@@ -2386,6 +2444,43 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               : null
           }
           oneTapOptionBet={currentMarket.marketType !== "city_grid"}
+        />
+      ) : null}
+
+      {/* ── Step market bet sheet (independent pin/camera slot) ─── */}
+      {showStepBetSheet ? (
+        <MapSelectionBottomSheet
+          betHeadline={currentStepMarket!.title ?? "To pin"}
+          selectionDetail={null}
+          marketOptions={currentStepMarket!.options ?? []}
+          selectedOptionId={null}
+          onSelectOption={(id) => {
+            if (stepMarketLocked || stepPlacingOptionId || viewerHasBetOnStepMarket) return;
+            if (stepBetJustPlacedTimerRef.current) clearTimeout(stepBetJustPlacedTimerRef.current);
+            stepBetJustPlacedTimerRef.current = setTimeout(() => {
+              setStepBetJustPlaced(true);
+              stepBetJustPlacedTimerRef.current = null;
+            }, 1000);
+            void placeBet(id, currentStepMarket!).then(() => {
+              setMapSheetError(null);
+            });
+          }}
+          bettingClosed={!!stepMarketLocked}
+          isPlacing={!!stepPlacingOptionId}
+          error={null}
+          opensAt={currentStepMarket!.opensAt}
+          locksAt={currentStepMarket!.locksAt}
+          countdown={<MarketTimer locksAt={currentStepMarket!.locksAt} />}
+          onClose={() => { setStepBetJustPlaced(true); }}
+          onPlaceBet={async () => {
+            const opts = currentStepMarket!.options ?? [];
+            if (!opts[0] || stepMarketLocked) return;
+            void placeBet(opts[0].id, currentStepMarket!);
+          }}
+          gridMode={false}
+          turnMode={false}
+          zoneMarket={null}
+          oneTapOptionBet
         />
       ) : null}
 

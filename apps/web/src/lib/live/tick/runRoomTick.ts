@@ -224,7 +224,7 @@ export async function runRoomTick(
   // region_label lives on character_live_sessions, not live_rooms.
   const { data: room, error: roomErr } = await service
     .from("live_rooms")
-    .select("id, phase, current_market_id, live_session_id")
+    .select("id, phase, current_market_id, current_step_market_id, live_session_id")
     .eq("id", roomId)
     .maybeSingle();
   if (roomErr) console.error("[tick] room select error", roomErr);
@@ -241,6 +241,7 @@ export async function runRoomTick(
 
   const phase = (room as { phase: string }).phase;
   const marketId = (room as { current_market_id: string | null }).current_market_id;
+  const stepMarketId = (room as { current_step_market_id: string | null }).current_step_market_id;
 
   // ─── 1. Lock (and optionally settle) expired market ─────────────────────
   //
@@ -290,13 +291,36 @@ export async function runRoomTick(
     }
   }
 
+  // ─── 1b. Lock expired step-slot market (independent of main slot) ────────
+  if (stepMarketId) {
+    const { data: stepMarket } = await service
+      .from("live_betting_markets")
+      .select("id, status, locks_at, market_type")
+      .eq("id", stepMarketId)
+      .maybeSingle();
+    if (stepMarket) {
+      const sStatus = (stepMarket as { status: string }).status;
+      const sLocksAtMs = new Date((stepMarket as { locks_at: string }).locks_at).getTime();
+      if (sStatus === "open" && Date.now() >= sLocksAtMs) {
+        console.log(
+          `[tick] locking step market ${stepMarketId} (next_step) — settlement deferred to sweep`,
+          { roomId },
+        );
+        // lockMarket now skips the room-phase update for next_step — safe to call here.
+        await lockMarket(stepMarketId);
+      }
+    }
+  }
+
   // ─── 2. Re-read phase + queue ────────────────────────────────────────────
   const { data: room2 } = await service
     .from("live_rooms")
-    .select("phase")
+    .select("phase, current_step_market_id")
     .eq("id", roomId)
     .maybeSingle();
   const phaseNow = (room2 as { phase: string } | null)?.phase ?? phase;
+  // Re-read step market id in case sweep just cleared it.
+  const stepMarketIdNow = (room2 as { current_step_market_id: string | null } | null)?.current_step_market_id ?? stepMarketId;
 
   let currentQueue: QueuedTrigger[] = [];
   try {
@@ -323,6 +347,7 @@ export async function runRoomTick(
   );
 
   if (phaseNow === "market_open") {
+    // Main slot is occupied — queue non-step triggers for later.
     const updatedQueue = buildUpdatedQueue(currentQueue, freshTriggers);
     if (updatedQueue.length !== currentQueue.length) {
       await service
@@ -330,6 +355,33 @@ export async function runRoomTick(
         .update({ queued_triggers: updatedQueue })
         .eq("id", roomId);
     }
+
+    // Step slot is independent — try to open a pin/camera bet right now even
+    // while the zone/turn bet is running, as long as the step slot is free.
+    const stepSlotFree = !stepMarketIdNow;
+    if (stepSlotFree && NEXT_STEP_BETS_ENABLED) {
+      const stepTrigger = freshTriggers.find((t) => t.type === "next_step");
+      if (stepTrigger) {
+        const res = await openNextStepMarketForRoom(roomId, {
+          windowMs: BET_OPEN_WINDOW_IDLE_MS,
+          stepKey: stepTrigger.stepKey,
+          stepLat: stepTrigger.stepLat,
+          stepLng: stepTrigger.stepLng,
+          maneuverType: stepTrigger.maneuverType,
+          maneuverModifier: stepTrigger.maneuverModifier,
+          stepName: stepTrigger.maneuverType === "camera" ? undefined : stepTrigger.stepName,
+        });
+        if ("marketId" in res && res.marketId) {
+          return { action: "opened_next_step_concurrent", marketId: res.marketId, queued: updatedQueue.length, settled: settleNotes };
+        }
+      }
+      // No fresh step trigger — try filler forward-pin
+      const fillerOpened = await tryFillerNextStep(service, roomId, sessionId, routeCtx, firedKeys);
+      if (fillerOpened) {
+        return { action: fillerOpened.action, ...(fillerOpened.detail ?? {}), queued: updatedQueue.length, settled: settleNotes };
+      }
+    }
+
     return { action: "market_open_queued", queued: updatedQueue.length, settled: settleNotes };
   }
 
@@ -344,6 +396,26 @@ export async function runRoomTick(
       const fillerOpened = await tryFillerNextStep(service, roomId, sessionId, routeCtx, firedKeys);
       if (fillerOpened) {
         return { action: fillerOpened.action, ...(fillerOpened.detail ?? {}), settled: settleNotes };
+      }
+    }
+
+    // Even after opening a main-slot bet, try opening a concurrent step bet
+    // if the step slot is still free.
+    if (!stepMarketIdNow && NEXT_STEP_BETS_ENABLED) {
+      const stepTrigger = freshTriggers.find((t) => t.type === "next_step");
+      if (stepTrigger && opened.action !== "opened_next_step" && opened.action !== "opened_next_step_filler_fwd") {
+        const res = await openNextStepMarketForRoom(roomId, {
+          windowMs: BET_OPEN_WINDOW_IDLE_MS,
+          stepKey: stepTrigger.stepKey,
+          stepLat: stepTrigger.stepLat,
+          stepLng: stepTrigger.stepLng,
+          maneuverType: stepTrigger.maneuverType,
+          maneuverModifier: stepTrigger.maneuverModifier,
+          stepName: stepTrigger.maneuverType === "camera" ? undefined : stepTrigger.stepName,
+        });
+        if ("marketId" in res && res.marketId) {
+          console.log(`[tick] opened concurrent step bet ${res.marketId} alongside main slot`, { roomId });
+        }
       }
     }
 

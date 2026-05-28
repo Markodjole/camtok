@@ -18,6 +18,32 @@ export type RoutePoint = {
   recordedAt?: string;
 };
 
+export type LiveMarketSlot = {
+  id: string;
+  title: string;
+  marketType: string;
+  /** When the current market row became open — used for min betting window. */
+  opensAt: string;
+  locksAt: string;
+  revealAt: string;
+  options: Array<{ id: string; label: string; shortLabel?: string; displayOrder: number }>;
+  participantCount: number;
+  turnPointLat: number | null;
+  turnPointLng: number | null;
+  /** Present when `marketType === "city_grid"` — compact grid spec (no per-cell list on the wire). */
+  cityGridSpec: CityGridSpecCompact | null;
+  /**
+   * Decimal odds computed at market-open time (equal probability with 5 % margin).
+   * Shape: { format: "decimal", margin: 0.05, lines: { optionId: 2.86 } }
+   */
+  odds: MarketOdds | null;
+  /**
+   * Parsed market subtitle JSON — carries per-market metadata.
+   * For zone_exit_time: { estimatedSec: number, cellKey, triggerPhase, ... }
+   */
+  meta: Record<string, unknown> | null;
+};
+
 export type LiveFeedRow = {
   roomId: string;
   liveSessionId: string;
@@ -33,31 +59,9 @@ export type LiveFeedRow = {
   phase: string;
   viewerCount: number;
   participantCount: number;
-  currentMarket: {
-    id: string;
-    title: string;
-    marketType: string;
-    /** When the current market row became open — used for min betting window. */
-    opensAt: string;
-    locksAt: string;
-    revealAt: string;
-    options: Array<{ id: string; label: string; shortLabel?: string; displayOrder: number }>;
-    participantCount: number;
-    turnPointLat: number | null;
-    turnPointLng: number | null;
-    /** Present when `marketType === "city_grid"` — compact grid spec (no per-cell list on the wire). */
-    cityGridSpec: CityGridSpecCompact | null;
-    /**
-     * Decimal odds computed at market-open time (equal probability with 5 % margin).
-     * Shape: { format: "decimal", margin: 0.05, lines: { optionId: 2.86 } }
-     */
-    odds: MarketOdds | null;
-    /**
-     * Parsed market subtitle JSON — carries per-market metadata.
-     * For zone_exit_time: { estimatedSec: number, cellKey, triggerPhase, ... }
-     */
-    meta: Record<string, unknown> | null;
-  } | null;
+  currentMarket: LiveMarketSlot | null;
+  /** Independent step-slot market (next_step: pin / camera bets). Runs concurrently with currentMarket. */
+  currentStepMarket: LiveMarketSlot | null;
   sessionStartedAt: string;
   lastHeartbeatAt: string | null;
   routePoints: RoutePoint[];
@@ -71,28 +75,51 @@ export type LiveFeedRow = {
   drivingRouteStyle: DrivingRouteStyle;
 };
 
-type CurrentMarketOptions = NonNullable<
-  LiveFeedRow["currentMarket"]
->["options"];
+type MarketOptions = NonNullable<LiveFeedRow["currentMarket"]>["options"];
 
-/** `option_set` from `live_betting_markets` (JSON array or string in some clients). */
-function parseCurrentMarketOptions(r: Record<string, unknown>): CurrentMarketOptions {
-  const raw = r.current_market_options;
+/** Parse a JSON option_set field from the view (may be string or array). */
+function parseMarketOptions(raw: unknown): MarketOptions {
   let v: unknown = raw;
   if (typeof raw === "string") {
-    try {
-      v = JSON.parse(raw) as unknown;
-    } catch {
-      return [];
-    }
+    try { v = JSON.parse(raw) as unknown; } catch { return []; }
   }
   if (!Array.isArray(v)) return [];
-  return v as CurrentMarketOptions;
+  return v as MarketOptions;
+}
+
+/** Build a LiveMarketSlot from view columns, given a column prefix (e.g. "current_market_" or "current_step_market_"). */
+function buildMarketSlot(r: Record<string, unknown>, prefix: string): LiveMarketSlot | null {
+  const id = r[`${prefix}id`] as string | null;
+  if (!id) return null;
+  const mType = (r[`${prefix}type`] as string) ?? "";
+  const options = parseMarketOptions(r[`${prefix}options`]);
+  return {
+    id,
+    title: (r[`${prefix}title`] as string) ?? "",
+    marketType: mType,
+    opensAt: (r[`${prefix}opens_at`] as string) ?? "",
+    locksAt: (r[`${prefix}locks_at`] as string) ?? "",
+    revealAt: (r[`${prefix}reveal_at`] as string) ?? "",
+    options: mType === "city_grid" ? [] : options,
+    participantCount: (r[`${prefix}participants`] as number) ?? 0,
+    turnPointLat: (r[`${prefix}turn_point_lat`] as number | null) ?? null,
+    turnPointLng: (r[`${prefix}turn_point_lng`] as number | null) ?? null,
+    cityGridSpec:
+      mType === "city_grid" || mType === "zone_exit_time"
+        ? ((r[`${prefix}city_grid_spec`] as CityGridSpecCompact | null) ?? null)
+        : null,
+    odds: (r[`${prefix}odds`] as MarketOdds | null) ?? null,
+    meta: (() => {
+      try {
+        const s = r[`${prefix}subtitle`] as string | null;
+        return s ? (JSON.parse(s) as Record<string, unknown>) : null;
+      } catch { return null; }
+    })(),
+  };
 }
 
 /** Map one `active_live_rooms` row — shared by feed list and single-room detail. */
 function liveFeedRowFromActiveRoomRow(r: Record<string, unknown>): LiveFeedRow {
-  const marketOptions = parseCurrentMarketOptions(r);
   return {
     roomId: r.room_id as string,
     liveSessionId: r.live_session_id as string,
@@ -108,45 +135,8 @@ function liveFeedRowFromActiveRoomRow(r: Record<string, unknown>): LiveFeedRow {
     phase: r.phase as string,
     viewerCount: (r.viewer_count as number) ?? 0,
     participantCount: (r.participant_count as number) ?? 0,
-    currentMarket: r.current_market_id
-      ? {
-          id: r.current_market_id as string,
-          title: (r.current_market_title as string) ?? "",
-          marketType: (r.current_market_type as string) ?? "",
-          opensAt: (r.current_market_opens_at as string) ?? "",
-          locksAt: (r.current_market_locks_at as string) ?? "",
-          revealAt: (r.current_market_reveal_at as string) ?? "",
-          /**
-           * `city_grid` shows the cell picker on the map and validates option
-           * ids server-side against `cityGridSpec` — no need to ship hundreds
-           * of cells over the wire. Other market types ship their bounded
-           * `option_set` so the bottom sheet can render buttons.
-           */
-          options:
-            (r.current_market_type as string) === "city_grid"
-              ? []
-              : marketOptions,
-          participantCount: (r.current_market_participants as number) ?? 0,
-          turnPointLat: (r.current_market_turn_point_lat as number | null) ?? null,
-          turnPointLng: (r.current_market_turn_point_lng as number | null) ?? null,
-          // zone_exit_time also stores the grid spec so the map can show
-          // zone boundaries during that market type.
-          cityGridSpec:
-            (r.current_market_type as string) === "city_grid" ||
-            (r.current_market_type as string) === "zone_exit_time"
-              ? ((r.current_market_city_grid_spec as CityGridSpecCompact | null) ?? null)
-              : null,
-          odds: (r.current_market_odds as MarketOdds | null) ?? null,
-          meta: (() => {
-            try {
-              const raw = r.current_market_subtitle as string | null;
-              return raw ? (JSON.parse(raw) as Record<string, unknown>) : null;
-            } catch {
-              return null;
-            }
-          })(),
-        }
-      : null,
+    currentMarket: buildMarketSlot(r, "current_market_"),
+    currentStepMarket: buildMarketSlot(r, "current_step_market_"),
     sessionStartedAt: r.session_started_at as string,
     lastHeartbeatAt: (r.last_heartbeat_at as string | null) ?? null,
     routePoints: [],

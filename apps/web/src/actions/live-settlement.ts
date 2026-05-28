@@ -225,10 +225,16 @@ export async function lockMarket(marketId: string) {
     evidence,
   });
 
-  await service
-    .from("live_rooms")
-    .update({ phase: "market_locked", last_event_at: new Date().toISOString() })
-    .eq("id", (market as { room_id: string }).room_id);
+  // next_step markets run in their own independent slot (current_step_market_id)
+  // and must NOT block the main slot by flipping the global room phase.
+  // All other market types still set market_locked so the main slot freezes.
+  const mType = (market as { market_type: string }).market_type;
+  if (mType !== "next_step") {
+    await service
+      .from("live_rooms")
+      .update({ phase: "market_locked", last_event_at: new Date().toISOString() })
+      .eq("id", (market as { room_id: string }).room_id);
+  }
 
   await service
     .from("live_bets")
@@ -381,16 +387,18 @@ async function refundMarket(marketId: string, reason: string) {
      */
     const { data: roomNow } = await service
       .from("live_rooms")
-      .select("current_market_id")
+      .select("current_market_id, current_step_market_id")
       .eq("id", rid)
       .maybeSingle();
-    const currentId =
-      (roomNow as { current_market_id: string | null } | null)
-        ?.current_market_id ?? null;
-    if (currentId === marketId) {
+    const rn = roomNow as { current_market_id: string | null; current_step_market_id: string | null } | null;
+    if (rn?.current_market_id === marketId) {
       await service.from("live_rooms").update({
         phase: "waiting_for_next_market",
         current_market_id: null,
+      }).eq("id", rid);
+    } else if (rn?.current_step_market_id === marketId) {
+      await service.from("live_rooms").update({
+        current_step_market_id: null,
       }).eq("id", rid);
     }
   }
@@ -477,18 +485,26 @@ async function settleMarketWithWinner(
      */
     const { data: roomNow } = await service
       .from("live_rooms")
-      .select("current_market_id")
+      .select("current_market_id, current_step_market_id")
       .eq("id", rid)
       .maybeSingle();
-    const currentId =
-      (roomNow as { current_market_id: string | null } | null)
-        ?.current_market_id ?? null;
-    if (currentId === marketId) {
+    const rn = roomNow as { current_market_id: string | null; current_step_market_id: string | null } | null;
+    if (rn?.current_market_id === marketId) {
       await service
         .from("live_rooms")
         .update({
           phase: "waiting_for_next_market",
           current_market_id: null,
+          last_event_at: new Date().toISOString(),
+        })
+        .eq("id", rid);
+    } else if (rn?.current_step_market_id === marketId) {
+      // Step slot: clear the pointer but do NOT touch the main phase so
+      // any concurrent zone/turn bet keeps running undisturbed.
+      await service
+        .from("live_rooms")
+        .update({
+          current_step_market_id: null,
           last_event_at: new Date().toISOString(),
         })
         .eq("id", rid);
