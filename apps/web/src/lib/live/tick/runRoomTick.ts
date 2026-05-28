@@ -582,9 +582,10 @@ function triggerPriority(t: QueuedTrigger): number {
   // next_zone is the city_grid market type in disguise.
   const mType = t.type === "next_zone" ? "city_grid" : t.type;
   const base = betSchedulePriority(mType);
-  // Forward-pin fillers (stepKey starts with "fwd:") always yield to every
-  // other trigger type — they are the true last resort in the sorted list.
-  if (t.type === "next_step" && t.stepKey.startsWith("fwd:")) return 10;
+  // Forward-pin fillers (stepKey "fwd:") fire right after zone_exit_time (1)
+  // but before next_turn (2), OSRM steps (3), streak (4), city_grid (5).
+  // This makes "time to pin" the most common bet while zone bets still win.
+  if (t.type === "next_step" && t.stepKey.startsWith("fwd:")) return 1.5;
   if (t.type === "zone_exit_time") {
     const phases: ZoneExitPhase[] = ["entry", "center_70m", "exit_outer"];
     return base + phases.indexOf(t.phase as ZoneExitPhase) * 0.1;
@@ -595,8 +596,8 @@ function triggerPriority(t: QueuedTrigger): number {
 function freshPriority(t: FreshTrigger): number {
   const mType = t.type === "next_zone" ? "city_grid" : t.type;
   const base = betSchedulePriority(mType);
-  // Forward-pin fillers always yield to every other trigger type.
-  if (t.type === "next_step" && (t.stepKey ?? "").startsWith("fwd:")) return 10;
+  // Forward-pin fillers fire right after zone_exit_time (1), before everything else.
+  if (t.type === "next_step" && (t.stepKey ?? "").startsWith("fwd:")) return 1.5;
   if (t.type === "zone_exit_time") {
     const phases: ZoneExitPhase[] = ["entry", "center_70m", "exit_outer"];
     return base + phases.indexOf(t.phase as ZoneExitPhase) * 0.1;

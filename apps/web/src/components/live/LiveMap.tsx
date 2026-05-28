@@ -411,6 +411,8 @@ function LiveMapInner({
    * querySelectorAll on every RAF frame.
    */
   const destFlatNodesRef = useRef<HTMLElement[]>([]);
+  /** Landmark pin flat nodes — counter-rotated the same way as destination labels. */
+  const landmarkFlatNodesRef = useRef<HTMLElement[]>([]);
   /** Last rendered heading for the course arrow — skip setIcon when unchanged. */
   const arrowLastHeadingRef = useRef<number | null>(null);
   /**
@@ -434,10 +436,13 @@ function LiveMapInner({
     if (shell) {
       shell.style.transform = `rotate(${deg}deg)`;
     }
-    // Counter-rotate destination pin labels so they stay screen-upright.
-    // Uses a pre-built ref array instead of querySelectorAll every frame.
+    // Counter-rotate destination pin labels and landmark pins so they stay
+    // screen-upright regardless of map rotation.
     const flatDeg = -deg;
     for (const node of destFlatNodesRef.current) {
+      node.style.transform = `rotate(${flatDeg}deg)`;
+    }
+    for (const node of landmarkFlatNodesRef.current) {
       node.style.transform = `rotate(${flatDeg}deg)`;
     }
   };
@@ -1162,6 +1167,7 @@ function LiveMapInner({
     (async () => {
       const L = (await import("leaflet")).default;
       group.clearLayers();
+      landmarkFlatNodesRef.current = [];
       if (!stepPin) return;
 
       // ── Fetch nearest Wikipedia landmark ────────────────────────────────
@@ -1171,43 +1177,77 @@ function LiveMapInner({
       let icon: import("leaflet").Icon | import("leaflet").DivIcon;
 
       if (landmark) {
-        // Circular photo-bubble + name label + pointer — Google Maps POI style.
-        // The name pill sits above the photo; the pointer anchors to the coordinate.
+        // Circular bubble + name label + pointer — Google Maps POI style.
+        // Wrapped in camtok-landmark-screen-flat so applyMapShellRotation
+        // can counter-rotate this element and keep text/photo always upright.
         const escapedName = landmark.name
           .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+        // Bubble: photo if available, otherwise a colored initial circle.
+        const initial = (landmark.name[0] ?? "?").toUpperCase();
+        // Pick a deterministic accent color from the name.
+        const hue = [...landmark.name].reduce((acc, c) => acc + c.charCodeAt(0), 0) % 360;
+        const bubbleContent = landmark.photo
+          ? `<img src="${landmark.photo}" style="width:100%;height:100%;object-fit:cover" draggable="false" crossorigin="anonymous"/>`
+          : `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:hsl(${hue},60%,40%);font-size:26px;font-weight:700;color:#fff">${initial}</div>`;
+
         const html = `
-          <div style="display:flex;flex-direction:column;align-items:center;filter:drop-shadow(0 3px 8px rgba(0,0,0,0.6))">
-            <div style="max-width:120px;padding:2px 8px;border-radius:9999px;background:rgba(0,0,0,0.72);color:#fff;font-size:10px;font-weight:600;letter-spacing:0.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:4px;border:1px solid rgba(255,255,255,0.18)">
+          <div class="camtok-landmark-screen-flat" style="display:flex;flex-direction:column;align-items:center;transform:rotate(0deg);transform-origin:50% 100%;will-change:transform;filter:drop-shadow(0 3px 8px rgba(0,0,0,0.6))">
+            <div style="max-width:130px;padding:2px 8px;border-radius:9999px;background:rgba(0,0,0,0.75);color:#fff;font-size:10px;font-weight:600;letter-spacing:0.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:4px;border:1px solid rgba(255,255,255,0.2);text-align:center">
               ${escapedName}
             </div>
             <div style="width:60px;height:60px;border-radius:50%;border:3px solid #fff;overflow:hidden;background:#1a1a1a">
-              <img src="${landmark.photo}" style="width:100%;height:100%;object-fit:cover;transition:opacity 0.3s" draggable="false" crossorigin="anonymous"/>
+              ${bubbleContent}
             </div>
             <div style="width:0;height:0;border-left:10px solid transparent;border-right:10px solid transparent;border-top:14px solid #fff;margin-top:-2px"></div>
+          </div>`;
+
+        icon = L.divIcon({
+          html,
+          className: "camtok-landmark-pin",
+          iconSize: [130, 100],
+          iconAnchor: [65, 100],
+        });
+      } else {
+        // No landmark found — amber circle pin as minimal fallback.
+        const html = `
+          <div class="camtok-landmark-screen-flat" style="display:flex;flex-direction:column;align-items:center;transform:rotate(0deg);transform-origin:50% 100%;will-change:transform">
+            <div style="width:20px;height:20px;border-radius:50%;background:#f59e0b;border:3px solid #fff;box-shadow:0 0 10px rgba(0,0,0,0.6)"></div>
+            <div style="width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-top:10px solid #fff;margin-top:-2px"></div>
           </div>`;
         icon = L.divIcon({
           html,
           className: "camtok-landmark-pin",
-          // iconSize height = label(~20) + gap(4) + photo(60) + pointer(14) - overlap(2) = ~96
-          iconSize: [120, 96],
-          iconAnchor: [60, 96], // tip of pointer sits on the map coordinate
-        });
-      } else {
-        // Fallback: Marble Arch SVG centred on the map point.
-        icon = L.icon({
-          iconUrl: "/gate-marble.svg",
-          iconSize: [80, 52],
-          iconAnchor: [40, 26],
-          className: "camtok-gate-marker",
+          iconSize: [20, 32],
+          iconAnchor: [10, 32],
         });
       }
 
       group.clearLayers(); // clear again in case another async settled first
-      L.marker([stepPin.lat, stepPin.lng], {
+      const marker = L.marker([stepPin.lat, stepPin.lng], {
         icon,
         interactive: false,
         zIndexOffset: 900,
       }).addTo(group);
+      void marker; // marker is kept alive via group
+
+      // Register landmark flat-nodes for counter-rotation.
+      queueMicrotask(() => {
+        const root = containerRef.current;
+        if (!root) return;
+        const nodes = Array.from(
+          root.querySelectorAll<HTMLElement>(".camtok-landmark-screen-flat"),
+        );
+        landmarkFlatNodesRef.current = nodes;
+        const deg =
+          rotateWithHeadingRef.current && followModeRef.current
+            ? -rotationDegRef.current
+            : 0;
+        for (const node of nodes) {
+          node.style.transform = `rotate(${deg}deg)`;
+          node.style.transformOrigin = "50% 100%";
+        }
+      });
     })();
     return () => { cancelled = true; };
   }, [stepPin, mapReady]);

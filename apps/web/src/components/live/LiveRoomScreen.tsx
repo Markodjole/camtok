@@ -2656,7 +2656,7 @@ const NextStepCountdownWidget = memo(function NextStepCountdownWidget({
         )}
         {/* Circular photo */}
         <div className="h-14 w-14 overflow-hidden rounded-full border-[3px] border-white bg-stone-800">
-          {landmark ? (
+          {landmark?.photo ? (
             <img
               src={landmark.photo}
               alt={landmark.name}
@@ -2664,13 +2664,21 @@ const NextStepCountdownWidget = memo(function NextStepCountdownWidget({
               crossOrigin="anonymous"
               draggable={false}
             />
+          ) : landmark ? (
+            /* OSM-only result — colored initial circle */
+            <div
+              className="flex h-full w-full items-center justify-center text-2xl font-bold text-white"
+              style={{
+                background: `hsl(${[...landmark.name].reduce((a, c) => a + c.charCodeAt(0), 0) % 360},55%,38%)`,
+              }}
+            >
+              {(landmark.name[0] ?? "?").toUpperCase()}
+            </div>
           ) : (
-            <img
-              src="/gate-marble.svg"
-              alt="gate"
-              className="h-full w-full object-cover opacity-70"
-              draggable={false}
-            />
+            /* No landmark at all — amber dot */
+            <div className="flex h-full w-full items-center justify-center bg-amber-500">
+              <span className="text-lg text-white">📍</span>
+            </div>
           )}
         </div>
         {/* Pointer tip */}
