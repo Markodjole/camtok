@@ -1144,8 +1144,9 @@ function LiveMapInner({
     })();
   }, [turnTarget, driverPins, approachLine, mapReady, audienceRole]);
 
-  // Render the independent gate marker for active `next_step` (time-to-pin) bets.
-  // Top-down aerial gate: two orange pillars + striped boom-bar spanning the road.
+  // Render the Marble Arch gate marker for active `next_step` (time-to-pin) bets.
+  // Uses a real SVG image asset (public/gate-marble.svg) via L.icon so Leaflet
+  // loads it like any other map marker — no inline HTML injection.
   useEffect(() => {
     const group = stepPinLayerRef.current;
     if (!group) return;
@@ -1154,41 +1155,11 @@ function LiveMapInner({
       group.clearLayers();
       if (!stepPin) return;
 
-      // SVG gate viewed from above — two thick posts with a diagonal-striped bar.
-      // Width 64 px × height 26 px; anchor at horizontal centre / vertical centre
-      // so the gate straddles the road point.
-      const gateHtml = `
-        <svg width="64" height="26" viewBox="0 0 64 26" xmlns="http://www.w3.org/2000/svg">
-          <defs>
-            <filter id="ggate" x="-30%" y="-30%" width="160%" height="160%">
-              <feGaussianBlur in="SourceGraphic" stdDeviation="1.6" result="b"/>
-              <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
-            </filter>
-            <clipPath id="bclip">
-              <rect x="13" y="9" width="38" height="8" rx="1"/>
-            </clipPath>
-          </defs>
-          <!-- Left pillar -->
-          <rect x="1" y="3" width="11" height="20" rx="2.5" fill="#f97316" stroke="white" stroke-width="2" filter="url(#ggate)"/>
-          <!-- Right pillar -->
-          <rect x="52" y="3" width="11" height="20" rx="2.5" fill="#f97316" stroke="white" stroke-width="2" filter="url(#ggate)"/>
-          <!-- Boom bar body -->
-          <rect x="13" y="9" width="38" height="8" rx="1.5" fill="#f97316" stroke="white" stroke-width="1.5"/>
-          <!-- Diagonal warning stripes on the bar -->
-          <g clip-path="url(#bclip)" opacity="0.55">
-            <line x1="18" y1="9"  x2="13" y2="17" stroke="white" stroke-width="2"/>
-            <line x1="26" y1="9"  x2="21" y2="17" stroke="white" stroke-width="2"/>
-            <line x1="34" y1="9"  x2="29" y2="17" stroke="white" stroke-width="2"/>
-            <line x1="42" y1="9"  x2="37" y2="17" stroke="white" stroke-width="2"/>
-            <line x1="50" y1="9"  x2="45" y2="17" stroke="white" stroke-width="2"/>
-          </g>
-        </svg>`;
-
-      const icon = L.divIcon({
-        html: gateHtml,
-        className: "camtok-gate-pin",
-        iconSize: [64, 26],
-        iconAnchor: [32, 13],
+      const icon = L.icon({
+        iconUrl: "/gate-marble.svg",
+        iconSize: [80, 52],
+        iconAnchor: [40, 26], // centre of the image on the map point
+        className: "camtok-gate-marker",
       });
 
       L.marker([stepPin.lat, stepPin.lng], {

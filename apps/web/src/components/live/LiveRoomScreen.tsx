@@ -2601,33 +2601,18 @@ const NextStepCountdownWidget = memo(function NextStepCountdownWidget({
     ? "bg-amber-600/30 border-amber-400/50 text-amber-100"
     : urgent
       ? "bg-red-600/40 border-red-400/60 text-red-100"
-      : "bg-orange-900/55 border-orange-400/40 text-orange-100";
-
-  const pillarColor = resolving ? "#d97706" : urgent ? "#dc2626" : "#f97316";
-  const strokeColor = resolving ? "#fde68a" : urgent ? "#fca5a5" : "#fed7aa";
-
-  // Aerial gate SVG — two pillars + striped boom-bar, matches the map marker.
-  const gateSvg = `<svg width="38" height="14" viewBox="0 0 38 14" xmlns="http://www.w3.org/2000/svg">
-    <defs>
-      <clipPath id="bc2"><rect x="8" y="4" width="22" height="6" rx="1"/></clipPath>
-    </defs>
-    <rect x="0.5" y="1" width="7" height="12" rx="1.5" fill="${pillarColor}" stroke="${strokeColor}" stroke-width="1.2"/>
-    <rect x="30.5" y="1" width="7" height="12" rx="1.5" fill="${pillarColor}" stroke="${strokeColor}" stroke-width="1.2"/>
-    <rect x="8" y="4" width="22" height="6" rx="1" fill="${pillarColor}" stroke="${strokeColor}" stroke-width="1"/>
-    <g clip-path="url(#bc2)" opacity="0.5">
-      <line x1="12" y1="4" x2="8"  y2="10" stroke="${strokeColor}" stroke-width="1.5"/>
-      <line x1="17" y1="4" x2="13" y2="10" stroke="${strokeColor}" stroke-width="1.5"/>
-      <line x1="22" y1="4" x2="18" y2="10" stroke="${strokeColor}" stroke-width="1.5"/>
-      <line x1="27" y1="4" x2="23" y2="10" stroke="${strokeColor}" stroke-width="1.5"/>
-    </g>
-  </svg>`;
+      : "bg-stone-900/60 border-stone-400/30 text-stone-100";
 
   return (
     <div className="pointer-events-none flex flex-col items-center gap-0.5" title={resolving ? "Awaiting gate result…" : "Time to gate"}>
-      {/* Gate icon above the countdown */}
-      <div
-        className="opacity-90"
-        dangerouslySetInnerHTML={{ __html: gateSvg }}
+      {/* Marble Arch image — same asset as the map marker */}
+      <img
+        src="/gate-marble.svg"
+        alt="gate"
+        width={52}
+        height={34}
+        className="opacity-95 drop-shadow-md"
+        draggable={false}
       />
       {/* Countdown pill */}
       <div
