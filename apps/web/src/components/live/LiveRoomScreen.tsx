@@ -571,6 +571,23 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const nextStepCountdownElapsed = useDeadlinePassed(nextStepDeadlineMs);
   const nextStepResolving = Boolean(nextStepPending && nextStepCountdownElapsed);
 
+  // Client-side pin proximity: fire urgent polling as soon as the driver is
+  // within 80 m of the step pin, even before the countdown expires.
+  // This mirrors the server's approach radius and ensures the 450 ms poll
+  // loop starts at the same moment the server is likely to settle.
+  const driverLastPos =
+    routePoints.length > 0 ? routePoints[routePoints.length - 1]! : null;
+  const stepPinNearby = Boolean(
+    nextStepPending &&
+      nextStepPending.stepLat != null &&
+      nextStepPending.stepLng != null &&
+      driverLastPos != null &&
+      metersBetween(driverLastPos, {
+        lat: nextStepPending.stepLat!,
+        lng: nextStepPending.stepLng!,
+      }) < 80,
+  );
+
   /** True once the vehicle has left the start cell for a next_zone bet. */
   const cityGridBetCrossed = Boolean(
     cityGridBetPending &&
@@ -579,12 +596,12 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   );
 
   // Urgent polling: start fast 450 ms activity polls as soon as the driver
-  // exits the zone (even before the countdown elapses) so the settlement
-  // result is delivered immediately rather than waiting up to 3 s.
+  // exits the zone / approaches the pin (even before the countdown elapses)
+  // so the settlement result is delivered immediately rather than waiting up to 3 s.
   const urgentSettlementMarketId =
     zoneExitResolving || zoneExitLeftZone
       ? zoneExitPending!.marketId
-      : nextStepResolving
+      : nextStepResolving || stepPinNearby
         ? nextStepPending!.marketId
         : cityGridBetCrossed
           ? cityGridBetPending!.marketId

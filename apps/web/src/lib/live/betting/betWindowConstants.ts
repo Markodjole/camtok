@@ -212,10 +212,11 @@ export const NEXT_STEP_APPROACH_M = 150;
 
 /**
  * Minimum departure distance (m) past the closest GPS point before the bet
- * settles.  20 m ensures the driver has meaningfully passed the pin and the
- * sample is not GPS noise within the approach circle.
+ * settles.  10 m is enough to confirm the driver has crossed the pin and is
+ * moving away — smaller values fire sooner which is desirable for instant
+ * resolution feedback.
  */
-export const NEXT_STEP_DEPARTURE_M = 20;
+export const NEXT_STEP_DEPARTURE_M = 10;
 
 // ─── Minimum viable window guards ────────────────────────────────────────────
 //

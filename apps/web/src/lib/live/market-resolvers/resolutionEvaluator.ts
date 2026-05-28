@@ -184,15 +184,24 @@ async function checkIntersectionsPassed(
   if (!row.live_session_id || !row.subtitle) return false;
 
   let intersections: CrossroadBearing[];
+  let expectedStreak: number | null = null;
   try {
-    const meta = JSON.parse(row.subtitle) as { intersections?: unknown };
+    const meta = JSON.parse(row.subtitle) as { intersections?: unknown; expectedStreak?: unknown };
     if (!Array.isArray(meta.intersections) || meta.intersections.length === 0) return false;
     intersections = meta.intersections as CrossroadBearing[];
+    if (typeof meta.expectedStreak === "number" && meta.expectedStreak > 0) {
+      expectedStreak = meta.expectedStreak;
+    }
   } catch {
     return false;
   }
 
-  const resolveAfter = Math.min(event.count, intersections.length);
+  // Use the per-market expected streak as the resolution threshold so the
+  // market fires as soon as the driver has gone straight through exactly N
+  // intersections (the reference number shown in the bet options).
+  // Falls back to the policy-level event.count if the subtitle has no value.
+  const effectiveCount = expectedStreak ?? event.count;
+  const resolveAfter = Math.min(effectiveCount, intersections.length);
 
   const { data: snaps } = await service
     .from("live_route_snapshots")
