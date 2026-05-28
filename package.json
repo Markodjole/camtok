@@ -1,6 +1,7 @@
 {
   "name": "bettok",
   "private": true,
+  
   "scripts": {
     "dev": "turbo dev",
     "build": "turbo build",
