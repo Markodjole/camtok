@@ -203,18 +203,19 @@ export const NEXT_STEP_MAX_M = NEXT_STEP_MAX_ROAD_M;
 
 /**
  * Radius (m) within which the driver is considered to have "arrived" at
- * the step/pin point.  Larger than a real turn radius because the forward-pin
- * is a synthetic point that may not align exactly with the GPS track.
+ * the step/pin point.  Must be large enough that GPS samples (every 3-6 s)
+ * at city speeds (50 km/h = 14 m/s → 42-84 m between samples) always have
+ * at least one sample inside the circle.  150 m gives safe coverage even at
+ * 90 km/h with 6-second GPS gaps (90 km/h = 25 m/s → 150 m in 6 s).
  */
-export const NEXT_STEP_APPROACH_M = 80;
+export const NEXT_STEP_APPROACH_M = 150;
 
 /**
  * Minimum departure distance (m) past the closest GPS point before the bet
- * settles.  Kept small so the resolution fires on the very next GPS snapshot
- * after the driver enters the approach circle — removes the 10-15 s lag users
- * observed at city speeds.
+ * settles.  20 m ensures the driver has meaningfully passed the pin and the
+ * sample is not GPS noise within the approach circle.
  */
-export const NEXT_STEP_DEPARTURE_M = 5;
+export const NEXT_STEP_DEPARTURE_M = 20;
 
 // ─── Minimum viable window guards ────────────────────────────────────────────
 //

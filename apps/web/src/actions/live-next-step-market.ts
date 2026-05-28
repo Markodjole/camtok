@@ -250,8 +250,10 @@ export async function openNextStepMarketForRoom(
   const now = new Date();
   const windowMs = opts?.windowMs ?? BET_OPEN_WINDOW_IDLE_MS;
   const locksAt = new Date(now.getTime() + windowMs);
-  // Safety cap: 3× the ETA or at least 90 s so slow drivers aren't stuck.
-  const revealMs = Math.max(90_000, T * 3 * 1_000);
+  // Safety cap: T + 20 s grace period, minimum 45 s.
+  // If the proximity condition hasn't fired 20 s after the ETA the bet
+  // force-settles via reveal_timeout so the spinner never runs forever.
+  const revealMs = Math.max(45_000, T * 1_000 + 20_000);
   const revealAt = new Date(now.getTime() + revealMs);
 
   // ── Insert market ─────────────────────────────────────────────────────────
