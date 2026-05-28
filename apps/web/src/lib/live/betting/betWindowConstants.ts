@@ -199,15 +199,18 @@ export const NEXT_STEP_MAX_M = NEXT_STEP_MAX_ROAD_M;
 
 /**
  * Radius (m) within which the driver is considered to have "arrived" at
- * the step maneuver point, used by the resolution sweep and the resolver.
+ * the step/pin point.  Larger than a real turn radius because the forward-pin
+ * is a synthetic point that may not align exactly with the GPS track.
  */
-export const NEXT_STEP_APPROACH_M = 40;
+export const NEXT_STEP_APPROACH_M = 80;
 
 /**
- * Minimum departure distance (m) past the closest point to confirm the
- * driver has left the maneuver area (prevents premature settle from GPS noise).
+ * Minimum departure distance (m) past the closest GPS point before the bet
+ * settles.  Kept small so the resolution fires on the very next GPS snapshot
+ * after the driver enters the approach circle — removes the 10-15 s lag users
+ * observed at city speeds.
  */
-export const NEXT_STEP_DEPARTURE_M = 15;
+export const NEXT_STEP_DEPARTURE_M = 5;
 
 // ─── Client-bet-at timing tolerance ──────────────────────────────────────────
 //

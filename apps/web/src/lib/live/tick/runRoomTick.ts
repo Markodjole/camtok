@@ -506,41 +506,56 @@ async function openFromQueueOrTriggers(
   }
 
   // Snapshot the non-expired queued triggers BEFORE clearing so they can be
-  // restored if every opener fails. Fresh triggers are always re-detected on
-  // the next tick by detectEligibleTriggers, so they don't need restoring.
-  const prioritySorted = [...queue]
-    .filter((t) => now - t.queuedAt < QUEUE_EXPIRY_MS)
-    .sort((a, b) => triggerPriority(a) - triggerPriority(b));
-  const savedQueue: QueuedTrigger[] = [...prioritySorted];
+  // restored if every opener fails.
+  const validQueue = [...queue].filter((t) => now - t.queuedAt < QUEUE_EXPIRY_MS);
+  const savedQueue: QueuedTrigger[] = [...validQueue];
 
   await service.from("live_rooms").update({ queued_triggers: [] }).eq("id", roomId);
 
+  // ── Merge queue + fresh into one priority-ordered list ─────────────────────
+  //
+  // Trying queue before fresh (old approach) caused lower-priority queued items
+  // (e.g. a pre-queued forward-pin next_step) to open ahead of higher-priority
+  // fresh items (e.g. a zone_exit_time that just fired).  Merging and sorting
+  // globally guarantees zone_exit (1) always beats next_turn (2), OSRM step (3),
+  // streak (4), city_grid (5), and forward-pin filler (10) regardless of source.
+  type UnifiedItem =
+    | { source: "queue"; trigger: QueuedTrigger; priority: number }
+    | { source: "fresh"; trigger: FreshTrigger; priority: number };
+
+  const unified: UnifiedItem[] = [
+    ...validQueue.map((t) => ({ source: "queue" as const, trigger: t, priority: triggerPriority(t) })),
+    ...fresh.map((t) => ({ source: "fresh" as const, trigger: t, priority: freshPriority(t) })),
+  ].sort((a, b) => a.priority - b.priority);
+
   const openerErrors: Array<{ trigger: string; error: string }> = [];
 
-  for (let i = 0; i < prioritySorted.length; i++) {
-    const trigger = prioritySorted[i]!;
-    // remaining = triggers still waiting after this one opens
-    const remaining = prioritySorted.length - 1 - i + fresh.length;
-    const res = await openQueuedTrigger(trigger, roomId, remaining);
-    if ("marketId" in res && res.marketId) {
-      return { action: `opened_${trigger.type}_from_queue`, detail: { marketId: res.marketId, trigger } };
-    }
-    openerErrors.push({
-      trigger: triggerKey(trigger),
-      error: (res as { error?: string }).error ?? "unknown",
-    });
-  }
+  for (let i = 0; i < unified.length; i++) {
+    const item = unified[i]!;
+    // remaining = how many lower-priority items are still waiting
+    const remaining = unified.length - 1 - i;
 
-  const freshSorted = [...fresh].sort((a, b) => freshPriority(a) - freshPriority(b));
-  for (let i = 0; i < freshSorted.length; i++) {
-    const ft = freshSorted[i]!;
-    const remaining = freshSorted.length - 1 - i;
-    const res = await openFreshTrigger(ft, roomId, remaining);
-    if ("marketId" in res && res.marketId) {
-      return { action: `opened_${ft.type}`, detail: { marketId: res.marketId } };
+    let res: { marketId?: string } | { error?: string };
+    if (item.source === "queue") {
+      res = await openQueuedTrigger(item.trigger, roomId, remaining);
+    } else {
+      res = await openFreshTrigger(item.trigger, roomId, remaining);
     }
+
+    if ("marketId" in res && res.marketId) {
+      const label = item.source === "queue" ? "_from_queue" : "";
+      return {
+        action: `opened_${item.trigger.type}${label}`,
+        detail: { marketId: res.marketId, trigger: item.trigger },
+      };
+    }
+
+    const tKey =
+      item.source === "queue"
+        ? triggerKey(item.trigger)
+        : freshTriggerKey(item.trigger);
     openerErrors.push({
-      trigger: freshTriggerKey(ft),
+      trigger: tKey,
       error: (res as { error?: string }).error ?? "unknown",
     });
   }
@@ -567,6 +582,9 @@ function triggerPriority(t: QueuedTrigger): number {
   // next_zone is the city_grid market type in disguise.
   const mType = t.type === "next_zone" ? "city_grid" : t.type;
   const base = betSchedulePriority(mType);
+  // Forward-pin fillers (stepKey starts with "fwd:") always yield to every
+  // other trigger type — they are the true last resort in the sorted list.
+  if (t.type === "next_step" && t.stepKey.startsWith("fwd:")) return 10;
   if (t.type === "zone_exit_time") {
     const phases: ZoneExitPhase[] = ["entry", "center_70m", "exit_outer"];
     return base + phases.indexOf(t.phase as ZoneExitPhase) * 0.1;
@@ -577,6 +595,8 @@ function triggerPriority(t: QueuedTrigger): number {
 function freshPriority(t: FreshTrigger): number {
   const mType = t.type === "next_zone" ? "city_grid" : t.type;
   const base = betSchedulePriority(mType);
+  // Forward-pin fillers always yield to every other trigger type.
+  if (t.type === "next_step" && (t.stepKey ?? "").startsWith("fwd:")) return 10;
   if (t.type === "zone_exit_time") {
     const phases: ZoneExitPhase[] = ["entry", "center_70m", "exit_outer"];
     return base + phases.indexOf(t.phase as ZoneExitPhase) * 0.1;
@@ -686,16 +706,16 @@ async function tryFillerNextStep(
   if (!NEXT_STEP_BETS_ENABLED) return null;
   if (!routeCtx) return null;
 
-  // ── PRIMARY: forward-pin (200 m straight ahead on Google Maps polyline) ────
+  // ── PRIMARY: forward-pin retry (200 m ahead on Google Maps polyline) ────────
   //
-  // Place a pin exactly NEXT_STEP_FORWARD_PIN_ROAD_M metres ahead on the
-  // planned route.  This:
-  //   • Never shows a pin behind the vehicle (road distance is always > 0 by
-  //     construction)
-  //   • Requires no OSRM call — only the Google Routes planning polyline
-  //   • Works on straight roads where there are no OSRM maneuver points
-  //   • Is deduped by NEXT_STEP_FORWARD_PIN_BUCKET_M so it opens at most once
-  //     per bucket of travel
+  // The forward-pin is normally opened via the fresh-trigger path in
+  // detectEligibleTriggers (priority 10).  This block is a retry: it only
+  // runs when openFromQueueOrTriggers returned no_eligible_bet (all triggers,
+  // including the forward-pin fresh trigger, failed for transient reasons).
+  //
+  // If the retry succeeds here, great.  If not (or if fwd is null / already
+  // fired), we fall through to the OSRM fallback below — never returning null
+  // early with a planningPolyline present.
   if (routeCtx.planningPolyline && routeCtx.planningPolyline.length >= 2) {
     const fwd = findForwardPinCandidate(
       routeCtx.planningPolyline,
@@ -707,7 +727,7 @@ async function tryFillerNextStep(
       const fired = await hasFiredNextStep(service, sessionId, fwd.stepKey);
       if (!fired) {
         console.log(
-          `[tick:filler] next_step: forward-pin ${fwd.stepKey} at ${Math.round(fwd.roadMeters)}m ahead — opening`,
+          `[tick:filler] next_step: forward-pin retry ${fwd.stepKey} at ${Math.round(fwd.roadMeters)}m ahead — opening`,
           { roomId },
         );
 
@@ -725,20 +745,20 @@ async function tryFillerNextStep(
           return { action: "opened_next_step_filler_fwd", detail: { marketId: res.marketId } };
         }
 
-        console.warn(`[tick:filler] next_step: forward-pin opener failed for ${fwd.stepKey}`, res, { roomId });
+        console.warn(`[tick:filler] next_step: forward-pin retry failed for ${fwd.stepKey}`, res, { roomId });
       } else {
-        console.log(`[tick:filler] next_step: forward-pin ${fwd.stepKey} already fired — skipping`, { roomId });
+        console.log(`[tick:filler] next_step: forward-pin ${fwd.stepKey} already fired — falling through to OSRM`, { roomId });
       }
+    } else {
+      console.log(`[tick:filler] next_step: forward-pin projection failed — falling through to OSRM`, { roomId });
     }
-    // Forward-pin attempted (success or dedup) — do not fall through to OSRM.
-    return null;
+    // Fall through to OSRM in all non-success cases.
   }
 
-  // ── SECONDARY: OSRM-step fallback (no planning polyline available) ─────────
+  // ── SECONDARY: OSRM-step fallback ─────────────────────────────────────────
   //
-  // When Google Routes hasn't returned a polyline yet we fall back to OSRM
-  // steps in the wider [NEXT_STEP_MIN_ROAD_M, NEXT_STEP_FILLER_MAX_ROAD_M]
-  // window.
+  // Used when: (a) no planning polyline, (b) forward-pin projection failed,
+  // (c) forward-pin already fired, or (d) forward-pin opener returned error.
   const minM = NEXT_STEP_MIN_ROAD_M;
   const maxM = NEXT_STEP_FILLER_MAX_ROAD_M;
 
@@ -1275,6 +1295,46 @@ async function detectEligibleTriggers(
     }
   }
 
+  // ── next_step forward-pin filler (low priority, always-available) ────────────
+  //
+  // When Google Routes planning polyline is available, always add a forward-pin
+  // candidate 200 m ahead as a VERY LOW priority (10) fresh trigger.  Because
+  // we merge queue + fresh by priority in openFromQueueOrTriggers, zone_exit (1),
+  // next_turn (2), OSRM next_step (3), straight_streak (4), city_grid (5) all
+  // take precedence.  The forward-pin only opens when none of those fire — which
+  // is exactly the dead-air scenario the user wants filled.
+  //
+  // Skipped if an OSRM-based next_step was already added above (no duplicate).
+  if (NEXT_STEP_BETS_ENABLED && planningPolyline && planningPolyline.length >= 2) {
+    const hasNextStepAlready = eligible.some((e) => e.type === "next_step");
+    if (!hasNextStepAlready) {
+      const fwd = findForwardPinCandidate(planningPolyline, lat, lng);
+      if (fwd) {
+        const fwdFired = await hasFiredNextStep(service, sessionId, fwd.stepKey);
+        if (!fwdFired) {
+          eligible.push({
+            type: "next_step",
+            stepKey: fwd.stepKey,
+            stepLat: fwd.stepLat,
+            stepLng: fwd.stepLng,
+            maneuverType: "continue",
+            maneuverModifier: "straight",
+            stepName: undefined,
+          });
+          console.log(
+            `[tick:detect] next_step forward-pin ${fwd.stepKey} at ${Math.round(fwd.roadMeters)}m — added as priority-10 filler`,
+            { roomId },
+          );
+        } else {
+          console.log(
+            `[tick:detect] next_step forward-pin ${fwd.stepKey} already fired — skipping`,
+            { roomId },
+          );
+        }
+      }
+    }
+  }
+
   // Always provide lat/lng/heading so the filler can attempt a direct OSRM
   // fetch even when the full route planning (computeDriverRouteInstruction) failed.
   const routeCtx: RouteCtx = {
@@ -1427,8 +1487,16 @@ async function sweepPendingSettlements(
     .in("status", ["locked", "open"])
     .limit(20);
 
-  // Lock-and-settle any open engine markets whose estimated countdown has elapsed.
-  // Uses lockAndSettleMarket so the room pointer stays set throughout payout.
+  // Early-settle open engine markets when their resolution condition fires.
+  //
+  // zone_exit_time → shouldSettleEngineMarket (timer + zone-exit logic).
+  //
+  // next_step / next_turn / straight_streak → evaluateResolutionConditions.
+  //   These markets use the policy-driven evaluator even while open so the bet
+  //   resolves immediately when the driver passes the pin — without having to
+  //   wait for the 12 s bet-lock window to expire first.  This eliminates the
+  //   10-15 s resolution lag that occurred when the vehicle was fast enough to
+  //   pass the pin before locks_at.
   const nowMs = Date.now();
   for (const row of candidates ?? []) {
     if ((row as { status: string }).status !== "open") continue;
@@ -1437,13 +1505,40 @@ async function sweepPendingSettlements(
     const mid = (row as { id: string }).id;
     const sessionId = (row as { live_session_id: string | null }).live_session_id;
     try {
-      const shouldSettle = await shouldSettleEngineMarket(service, {
-        marketId: mid,
-        marketType: mType,
-        liveSessionId: sessionId,
-        roomId,
-      });
+      let shouldSettle = false;
+
+      if (mType === "zone_exit_time") {
+        // zone_exit_time has dedicated engine logic (timer + zone exit).
+        shouldSettle = await shouldSettleEngineMarket(service, {
+          marketId: mid,
+          marketType: mType,
+          liveSessionId: sessionId,
+          roomId,
+        });
+      } else {
+        // next_step / next_turn / straight_streak: run the same policy evaluator
+        // used for locked markets so proximity/heading events fire immediately.
+        const sweepRow: MarketSweepRow = {
+          id: mid,
+          market_type: mType,
+          live_session_id: sessionId,
+          opens_at: (row as { opens_at: string }).opens_at,
+          reveal_at: (row as { reveal_at: string }).reveal_at,
+          subtitle: (row as { subtitle: string | null }).subtitle,
+          turn_point_lat: (row as { turn_point_lat: number | null }).turn_point_lat,
+          turn_point_lng: (row as { turn_point_lng: number | null }).turn_point_lng,
+          city_grid_spec: null,
+        };
+        const { shouldSettle: s } = await evaluateResolutionConditions(service, sweepRow, nowMs);
+        shouldSettle = s;
+      }
+
       if (!shouldSettle) continue;
+
+      console.log(
+        `[tick:sweep] open-market early-settle: ${mid} (${mType})`,
+        { roomId },
+      );
       // Atomic: lock → resolve winner → pay out. Room pointer cleared by payout.
       await lockAndSettleMarket(mid);
     } catch (err) {

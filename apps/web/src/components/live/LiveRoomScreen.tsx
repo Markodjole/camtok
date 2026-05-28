@@ -995,9 +995,25 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
     const rollbackOptimistic = (showSheet: boolean) => {
       clearTimeout(timeoutId);
-      setZoneExitPending(null);
-      setNextStepPending(null);
-      setCityGridBetPending(null);
+      // Only clear the pending countdown for the market type that failed.
+      // Never clear a countdown that belongs to a DIFFERENT market — e.g. a
+      // failed next_step bet must not wipe the zone-exit countdown that the
+      // user placed successfully on an earlier market.
+      if (market.marketType === "zone_exit_time") {
+        setZoneExitPending((prev) =>
+          prev?.marketId === market.id ? null : prev,
+        );
+      }
+      if (market.marketType === "next_step") {
+        setNextStepPending((prev) =>
+          prev?.marketId === market.id ? null : prev,
+        );
+      }
+      if (market.marketType === "city_grid") {
+        setCityGridBetPending((prev) =>
+          prev?.marketId === market.id ? null : prev,
+        );
+      }
       setSettlingDeadlineMs(null);
       setSettlingMarketType(null);
       if (betJustPlacedTimerRef.current) {
