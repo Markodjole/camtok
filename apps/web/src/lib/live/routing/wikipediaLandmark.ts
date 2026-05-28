@@ -34,7 +34,7 @@ function cacheKey(lat: number, lng: number) {
 async function fetchWikipediaLandmark(
   lat: number,
   lng: number,
-  radiusM = 5_000,
+  radiusM = 500,
 ): Promise<NearbyLandmark | null> {
   const url = new URL("https://en.wikipedia.org/w/api.php");
   url.searchParams.set("action", "query");
@@ -122,7 +122,7 @@ async function fetchOsmPoi(
 export async function fetchNearbyLandmark(
   lat: number,
   lng: number,
-  radiusM = 5_000,
+  radiusM = 500,
 ): Promise<NearbyLandmark | null> {
   const key = cacheKey(lat, lng);
   if (_cache.has(key)) return _cache.get(key) ?? null;
@@ -157,7 +157,7 @@ export async function fetchNearbyLandmark(
 export async function fetchNearbyLandmarkPhoto(
   lat: number,
   lng: number,
-  radiusM = 5_000,
+  radiusM = 500,
 ): Promise<string | null> {
   const result = await fetchNearbyLandmark(lat, lng, radiusM);
   return result?.photo ?? null;
