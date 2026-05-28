@@ -289,8 +289,6 @@ function motionSegmentDtSec(
   return fallbackSec;
 }
 
-import { fetchNearbyLandmark } from "@/lib/live/routing/wikipediaLandmark";
-
 function LiveMapInner({
   routePoints,
   className = "",
@@ -1170,68 +1168,30 @@ function LiveMapInner({
       landmarkFlatNodesRef.current = [];
       if (!stepPin) return;
 
-      // ── Fetch nearest Wikipedia landmark ────────────────────────────────
-      const landmark = await fetchNearbyLandmark(stepPin.lat, stepPin.lng);
       if (cancelled) return;
 
-      let icon: import("leaflet").Icon | import("leaflet").DivIcon;
-
-      if (landmark) {
-        // Circular bubble + name label + pointer — Google Maps POI style.
-        // Wrapped in camtok-landmark-screen-flat so applyMapShellRotation
-        // can counter-rotate this element and keep text/photo always upright.
-        const escapedName = landmark.name
-          .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-
-        // Bubble: photo if available, otherwise a colored initial circle.
-        const initial = (landmark.name[0] ?? "?").toUpperCase();
-        // Pick a deterministic accent color from the name.
-        const hue = [...landmark.name].reduce((acc, c) => acc + c.charCodeAt(0), 0) % 360;
-        const bubbleContent = landmark.photo
-          ? `<img src="${landmark.photo}" style="width:100%;height:100%;object-fit:cover" draggable="false" crossorigin="anonymous"/>`
-          : `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:hsl(${hue},60%,40%);font-size:26px;font-weight:700;color:#fff">${initial}</div>`;
-
-        const html = `
-          <div class="camtok-landmark-screen-flat" style="display:flex;flex-direction:column;align-items:center;transform:rotate(0deg);transform-origin:50% 100%;will-change:transform;filter:drop-shadow(0 3px 8px rgba(0,0,0,0.6))">
-            <div style="max-width:130px;padding:2px 8px;border-radius:9999px;background:rgba(0,0,0,0.75);color:#fff;font-size:10px;font-weight:600;letter-spacing:0.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:4px;border:1px solid rgba(255,255,255,0.2);text-align:center">
-              ${escapedName}
-            </div>
-            <div style="width:60px;height:60px;border-radius:50%;border:3px solid #fff;overflow:hidden;background:#1a1a1a">
-              ${bubbleContent}
-            </div>
-            <div style="width:0;height:0;border-left:10px solid transparent;border-right:10px solid transparent;border-top:14px solid #fff;margin-top:-2px"></div>
-          </div>`;
-
-        icon = L.divIcon({
-          html,
-          className: "camtok-landmark-pin",
-          iconSize: [130, 100],
-          iconAnchor: [65, 100],
-        });
-      } else {
-        // No landmark found — amber circle pin as minimal fallback.
-        const html = `
-          <div class="camtok-landmark-screen-flat" style="display:flex;flex-direction:column;align-items:center;transform:rotate(0deg);transform-origin:50% 100%;will-change:transform">
-            <div style="width:20px;height:20px;border-radius:50%;background:#f59e0b;border:3px solid #fff;box-shadow:0 0 10px rgba(0,0,0,0.6)"></div>
-            <div style="width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-top:10px solid #fff;margin-top:-2px"></div>
-          </div>`;
-        icon = L.divIcon({
-          html,
-          className: "camtok-landmark-pin",
-          iconSize: [20, 32],
-          iconAnchor: [10, 32],
-        });
-      }
+      // Simple small blue pin — same shape as the destination pin but blue.
+      const html = `
+        <div class="camtok-landmark-screen-flat" style="display:flex;flex-direction:column;align-items:center;transform:rotate(0deg);transform-origin:50% 100%;will-change:transform">
+          <div style="width:14px;height:14px;border-radius:50%;background:#3b82f6;border:2.5px solid #fff;box-shadow:0 0 8px rgba(59,130,246,0.7)"></div>
+          <div style="width:2px;height:8px;background:#3b82f6"></div>
+          <div style="width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;border-top:6px solid #3b82f6;margin-top:-1px"></div>
+        </div>`;
+      const icon = L.divIcon({
+        html,
+        className: "camtok-landmark-pin",
+        iconSize: [14, 30],
+        iconAnchor: [7, 30],
+      });
 
       group.clearLayers(); // clear again in case another async settled first
-      const marker = L.marker([stepPin.lat, stepPin.lng], {
+      L.marker([stepPin.lat, stepPin.lng], {
         icon,
         interactive: false,
         zIndexOffset: 900,
       }).addTo(group);
-      void marker; // marker is kept alive via group
 
-      // Register landmark flat-nodes for counter-rotation.
+      // Register for counter-rotation so the pin stays upright when map rotates.
       queueMicrotask(() => {
         const root = containerRef.current;
         if (!root) return;
