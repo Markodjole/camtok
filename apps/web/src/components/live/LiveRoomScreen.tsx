@@ -545,22 +545,15 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       currentZoneCellKey !== zoneExitPending.startCellKey,
   );
 
-  // Show spinner when ANY of these signals indicate the bet outcome is imminent:
+  // Show spinner when the bet outcome is imminent:
   //   1. Local countdown timer has elapsed (estimated T has passed).
-  //   2. The zone market itself is now locked (room phase changed for THIS market).
-  //   3. Driver has left the start cell (zone exit event detected client-side).
-  // Condition 2 is scoped to the specific zone market to avoid showing a
-  // spinner when a different market type (e.g. next_step) locks.
+  //   2. Driver has left the start cell (zone exit detected client-side).
+  // Do NOT show spinner just because the BET WINDOW locked (market_locked
+  // phase at t=8 s) — the driver is still inside the zone counting down.
   // Do NOT clear the widget on any of these — only handleSettlement or the
   // 45 s safety valve may clear it.
-  const zoneMarketLocked = Boolean(
-    zoneExitPending &&
-      room.phase === "market_locked" &&
-      currentMarket?.id === zoneExitPending.marketId,
-  );
   const zoneExitResolving = Boolean(
-    zoneExitPending &&
-      (zoneExitCountdownElapsed || zoneMarketLocked || zoneExitLeftZone),
+    zoneExitPending && (zoneExitCountdownElapsed || zoneExitLeftZone),
   );
 
   // ── next_step (time-to-pin) countdown ──────────────────────────────────────
