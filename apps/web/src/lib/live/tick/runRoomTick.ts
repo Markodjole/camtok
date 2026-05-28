@@ -1040,16 +1040,13 @@ function findForwardPinCandidate(
   );
   if (ahead.length === 0) return null;
 
-  // Place the pin at whatever the route looks like 300 m ahead — straight or
-  // gently curving.  The user wants a pin whenever 300 m of route is visible,
-  // not only on arrow-straight sections.  The straightness guard was causing
-  // the OSRM junction fallback to fire instead, which produced pins at fixed
-  // road-intersection coordinates ("predestined places").
+  // Place the pin at whatever is 300 m ahead on the route.
   const pin = ahead[ahead.length - 1]!;
 
-  // Bucket dedup key — one new market per NEXT_STEP_FORWARD_PIN_BUCKET_M of travel.
-  const bucket = Math.round(driverAlong / NEXT_STEP_FORWARD_PIN_BUCKET_M) * NEXT_STEP_FORWARD_PIN_BUCKET_M;
-  const stepKey = `fwd:${bucket}`;
+  // Dedup key based on WHERE THE PIN LANDS (≈110 m grid via toFixed(3)).
+  // As the driver moves forward the pin coordinates change and a new key
+  // becomes available — no "predestined places" fixed to the polyline.
+  const stepKey = `fwd:${pin.lat.toFixed(3)}:${pin.lng.toFixed(3)}`;
 
   return { stepKey, stepLat: pin.lat, stepLng: pin.lng, roadMeters: NEXT_STEP_FORWARD_PIN_ROAD_M };
 }
@@ -1471,22 +1468,26 @@ async function detectEligibleTriggers(
           }
         }
 
-        // Normal trigger window — only the nearest unfired step.
-        // Use osrmPolylineCheck (null when forward probe was used) so the
-        // on-route check is skipped when no reference polyline is available.
-        const candidates = findNextStepCandidates(
-          osrmResult.steps,
-          osrmPolylineCheck,
-          lat,
-          lng,
-          NEXT_STEP_MIN_ROAD_M,
-          NEXT_STEP_MAX_ROAD_M,
-        );
+        // OSRM junction step bets — only used when there is NO Google Maps
+        // planning polyline.  When a polyline is available, the dynamic
+        // forward-pin (fwd:lat:lng, 300 m ahead) is always preferred because
+        // OSRM step keys are fixed geographic junction coordinates that repeat
+        // every ride ("predestined places").
+        const candidates = osrmPolylineCheck
+          ? [] // planning polyline available → skip OSRM junction pins
+          : findNextStepCandidates(
+              osrmResult.steps,
+              null,
+              lat,
+              lng,
+              NEXT_STEP_MIN_ROAD_M,
+              NEXT_STEP_MAX_ROAD_M,
+            );
         for (const c of candidates) {
           const fired = await hasFiredNextStep(service, sessionId, c.stepKey);
           if (!fired) {
             console.log(
-              `[tick:detect] next_step: ${c.stepKey} (${c.maneuverType} ${c.maneuverModifier ?? ""}) road dist ${Math.round(c.roadMeters)}m in [${NEXT_STEP_MIN_ROAD_M},${NEXT_STEP_MAX_ROAD_M}]m`,
+              `[tick:detect] next_step (no-polyline fallback): ${c.stepKey} (${c.maneuverType}) road dist ${Math.round(c.roadMeters)}m`,
               { roomId },
             );
             eligible.push({
