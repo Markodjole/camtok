@@ -2120,10 +2120,21 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       */}
 
       {/* YouTube dashcam panel — top 33% of screen */}
-      <div className="absolute inset-x-0 top-0 z-0" style={{ height: "33dvh" }}>
+      <div className="absolute inset-x-0 top-0 z-0 overflow-hidden bg-black" style={{ height: "33dvh" }}>
+        {/* Scale up the iframe so the 16:9 video fills the container without letterbox bars */}
         <iframe
           src="https://www.youtube.com/embed/8G1MiDfIDig?start=7&autoplay=1&mute=1&controls=0&loop=1&playlist=8G1MiDfIDig&modestbranding=1&rel=0"
-          className="h-full w-full"
+          style={{
+            position: "absolute",
+            top: "50%",
+            left: "50%",
+            transform: "translate(-50%, -50%)",
+            width: "177.78vh",   /* 16/9 × 100vh — always wider than viewport */
+            minWidth: "100%",
+            height: "56.25vw",   /* 9/16 × 100vw — always taller than 33dvh */
+            minHeight: "100%",
+            border: "none",
+          }}
           allow="autoplay; encrypted-media"
           allowFullScreen
           title="Dashcam feed"

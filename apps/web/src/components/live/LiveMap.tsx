@@ -196,6 +196,19 @@ function headingDivIcon(
   return L.divIcon({ html, className: "camtok-h", iconSize: [52, 52], iconAnchor: [26, 26] });
 }
 
+const TWO_WHEELED_MAP_MODES = new Set(["bike", "scooter", "motorcycle", "cycle"]);
+
+export function isTwoWheeled(mode?: string): boolean {
+  if (!mode) return false;
+  const m = mode.toLowerCase();
+  return Array.from(TWO_WHEELED_MAP_MODES).some((k) => m.includes(k));
+}
+
+/** MapTiler style slug to use per vehicle class. */
+export function mapTileStyle(mode?: string): "outdoor-v2" | "bright-v2" {
+  return isTwoWheeled(mode) ? "outdoor-v2" : "bright-v2";
+}
+
 export function mapProfile(
   mode?: string,
   role: "streamer" | "viewer" = "viewer",
@@ -212,8 +225,10 @@ export function mapProfile(
   if (m.includes("car") || m.includes("drive")) {
     return { zoom: 16 + bonus, lineWeight: 4, showSpeed: true, speedUnit: "kmh" };
   }
-  if (m.includes("bike") || m.includes("cycle")) {
-    return { zoom: 17 + bonus, lineWeight: 4, showSpeed: true, speedUnit: "kmh" };
+  if (isTwoWheeled(mode)) {
+    // Bikes/scooters/motos: higher zoom (more detail) + outdoor tiles show
+    // alleys, cycleways, parking and shortcuts not visible on street maps.
+    return { zoom: 18 + bonus, lineWeight: 4, showSpeed: true, speedUnit: "kmh" };
   }
   // walking / default
   return { zoom: 17 + bonus, lineWeight: 3, showSpeed: false, speedUnit: "none" };
@@ -654,8 +669,9 @@ function LiveMapInner({
         onUserInteractRef.current?.();
       });
       const maptilerKey = process.env.NEXT_PUBLIC_MAPTILER_KEY;
+      const style = mapTileStyle(transportMode);
       const tileUrl = maptilerKey
-        ? `https://api.maptiler.com/maps/bright-v2/{z}/{x}/{y}.png?key=${maptilerKey}`
+        ? `https://api.maptiler.com/maps/${style}/{z}/{x}/{y}.png?key=${maptilerKey}`
         : "https://tiles.stadiamaps.com/tiles/alidade_smooth/{z}/{x}/{y}{r}.png";
       const attribution = maptilerKey
         ? '&copy; <a href="https://www.maptiler.com/copyright/">MapTiler</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
@@ -719,6 +735,36 @@ function LiveMapInner({
   useEffect(() => {
     layerRef.current?.setOpacity(tileOpacity);
   }, [tileOpacity]);
+
+  // Swap tile layer when transport mode switches between car and two-wheeled
+  // (outdoor tiles for bikes/scooters/motos, bright-v2 for everything else).
+  useEffect(() => {
+    const m = mapRef.current;
+    const oldLayer = layerRef.current;
+    if (!m || !oldLayer) return;
+    const maptilerKey = process.env.NEXT_PUBLIC_MAPTILER_KEY;
+    if (!maptilerKey) return;
+    const style = mapTileStyle(transportMode);
+    const currentUrl: string = (oldLayer as unknown as { _url: string })._url ?? "";
+    if (currentUrl.includes(style)) return; // already correct tiles
+    void (async () => {
+      const L = (await import("leaflet")).default;
+      const newUrl = `https://api.maptiler.com/maps/${style}/{z}/{x}/{y}.png?key=${maptilerKey}`;
+      const newLayer = L.tileLayer(newUrl, {
+        maxZoom: 20,
+        opacity: tileOpacity,
+        keepBuffer: 1,
+        updateWhenIdle: false,
+        updateWhenZooming: false,
+        attribution: '&copy; <a href="https://www.maptiler.com/copyright/">MapTiler</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+      });
+      if (!mapRef.current) return; // unmounted while loading
+      newLayer.addTo(mapRef.current);
+      oldLayer.remove();
+      layerRef.current = newLayer;
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [transportMode]);
 
   // FPS monitor: if sustained < 30fps for 3s, notify parent to shed expensive work.
   // One-way trigger; the RAF counter itself costs ~0 CPU.
