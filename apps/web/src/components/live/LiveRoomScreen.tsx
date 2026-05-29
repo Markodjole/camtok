@@ -2306,7 +2306,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       ) : null}
 
       {/* ── PiP corner: swapped view + expand toggle ── */}
-      <div
+      {/* EXPERIMENT: dashcam PiP hidden while YouTube feed is active — restore together with LiveVideoPlayer */}
+      {false && <div
         className="absolute z-30 overflow-hidden border-y border-l border-white/15 shadow-2xl"
         style={{
           top: pipPos.top,
@@ -2397,7 +2398,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             <path d="M3 7V3h4a1 1 0 110 2H5v2a1 1 0 11-2 0zm10-4h4v4a1 1 0 11-2 0V5h-2a1 1 0 110-2zM3 13a1 1 0 011 1v2h2a1 1 0 110 2H2v-4a1 1 0 011-1zm14 0a1 1 0 011 1v4h-4a1 1 0 110-2h2v-2a1 1 0 011-1z" />
           </svg>
         </button>
-      </div>
+      </div>}
+      {/* END EXPERIMENT PiP hide */}
 
       {/* ── Bottom gradient scrim ────────────────────────── */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-44 bg-gradient-to-t from-black/70 to-transparent" />

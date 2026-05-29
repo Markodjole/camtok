@@ -45,8 +45,35 @@ type MapCheckpoint = {
   isActive: boolean;
 };
 
-/** Force rear camera first; fallback to selfie only if rear is unavailable. */
-async function openLiveCameraStream(): Promise<MediaStream> {
+const TWO_WHEELED_MODES = new Set<string>(["bike", "scooter", "motorcycle"]);
+
+/**
+ * Open the rear camera. For two-wheeled vehicles, request the ultra-wide lens
+ * (zoom: 0.5) so the rider can mount the phone at a readable angle while still
+ * capturing road + surroundings in frame.
+ */
+async function openLiveCameraStream(transportMode: string): Promise<MediaStream> {
+  const useWide = TWO_WHEELED_MODES.has(transportMode);
+
+  if (useWide) {
+    // Ultra-wide: zoom: 0.5 selects the 0.5× lens on iPhone / modern Android.
+    // Falls back to standard rear camera if the device doesn't support it.
+    try {
+      return await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: {
+          facingMode: { exact: "environment" },
+          // @ts-expect-error — zoom is a non-standard constraint, present on most mobile browsers
+          zoom: 0.5,
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+        },
+      });
+    } catch {
+      // Device may not support zoom constraint — fall through to standard
+    }
+  }
+
   try {
     return await navigator.mediaDevices.getUserMedia({
       audio: true,
@@ -79,6 +106,24 @@ async function openLiveCameraStream(): Promise<MediaStream> {
   }
 }
 
+/** Lock the screen to landscape for two-wheeled rides; release on end. */
+async function lockOrientation(mode: string): Promise<void> {
+  if (!TWO_WHEELED_MODES.has(mode)) return;
+  try {
+    await screen.orientation.lock("landscape");
+  } catch {
+    // Not supported on all browsers / PWAs — silently ignore
+  }
+}
+
+async function unlockOrientation(): Promise<void> {
+  try {
+    screen.orientation.unlock();
+  } catch {
+    // ignore
+  }
+}
+
 export function OwnerLiveControlPanel({
   characterId,
   characterDrivingRouteStyle,
@@ -86,8 +131,7 @@ export function OwnerLiveControlPanel({
   characterId: string;
   characterDrivingRouteStyle?: DrivingRouteStyle;
 }) {
-  /** Driving sessions always use car transport (safety + routing tuned for road). */
-  const DRIVER_TRANSPORT: TransportMode = "car";
+  const [driverTransport, setDriverTransport] = useState<TransportMode>("car");
   const [destination, setDestination] = useState<PickedDestination | null>(null);
   const [recentDestinations, setRecentDestinations] = useState<PickedDestination[]>([]);
   const [showNewPlaceSearch, setShowNewPlaceSearch] = useState(false);
@@ -162,9 +206,9 @@ export function OwnerLiveControlPanel({
     () =>
       drivingRouteStyleBadges(
         characterDrivingRouteStyle ?? DEFAULT_DRIVING_ROUTE_STYLE,
-        DRIVER_TRANSPORT,
+        driverTransport,
       ),
-    [characterDrivingRouteStyle],
+    [characterDrivingRouteStyle, driverTransport],
   );
 
   const watchIdRef = useRef<number | null>(null);
@@ -207,7 +251,7 @@ export function OwnerLiveControlPanel({
     setError(null);
     let media: MediaStream;
     try {
-      media = await openLiveCameraStream();
+      media = await openLiveCameraStream(driverTransport);
     } catch {
       setError("Camera/microphone permission denied");
       setStarting(false);
@@ -215,9 +259,11 @@ export function OwnerLiveControlPanel({
     }
     setStream(media);
 
+    await lockOrientation(driverTransport);
+
     const res = await startLiveSession({
       characterId,
-      transportMode: DRIVER_TRANSPORT,
+      transportMode: driverTransport,
       destination: destination
         ? {
             lat: destination.lat,
@@ -297,7 +343,7 @@ export function OwnerLiveControlPanel({
         await fetch(`/api/live/sessions/${sid}/location`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ transportMode: DRIVER_TRANSPORT, points: batch }),
+          body: JSON.stringify({ transportMode: driverTransport, points: batch }),
         }).catch(() => undefined);
       }
       const hb = await fetch(`/api/live/sessions/${sid}/heartbeat`, {
@@ -322,6 +368,7 @@ export function OwnerLiveControlPanel({
 
   async function stopLive() {
     if (sessionId) await endLiveSession(sessionId);
+    void unlockOrientation();
     cleanup();
     router.refresh();
   }
@@ -659,36 +706,64 @@ export function OwnerLiveControlPanel({
       <div className="relative h-full min-h-0 w-full flex-1 overflow-hidden bg-black">
         <div className="absolute inset-0 z-0">
           {mapExpanded ? (
-            <LiveMap
-              routePoints={routePoints}
+            // For two-wheeled vehicles the phone sits at ~45-60° on a handlebar
+            // mount. A subtle perspective + rotateX makes the map plane look flat
+            // from that viewing angle without distorting it badly.
+            <div
               className="h-full w-full"
-              interactive={true}
-              audienceRole="streamer"
-              transportMode={DRIVER_TRANSPORT}
-              rotateWithHeading={true}
-              followMode={mapFollow}
-              onUserInteract={() => setMapFollow(false)}
-              tileOpacity={1}
-              mapCaption={
-                destination
-                  ? `Destination: ${destination.label}`
-                  : "You \u00b7 follow green arrow"
+              style={
+                TWO_WHEELED_MODES.has(driverTransport)
+                  ? {
+                      perspective: "600px",
+                      perspectiveOrigin: "50% 100%",
+                    }
+                  : undefined
               }
-              zones={osmZones}
-              checkpoints={osmCheckpoints}
-              showZones={false}
-              showCheckpoints={false}
-              turnHint={aiTurnHint}
-              turnHintEtaSec={aiTurnEtaSec}
-              turnHintDistanceM={aiTurnDistanceM}
-              turnTarget={turnTarget}
-              driverPins={driverPins}
-              approachLine={approachLine}
-              railPhase={railPhase}
-              destination={destination}
-              destinationRoute={null}
-              driverRouteBadges={driverRouteBadges}
-            />
+            >
+              <div
+                className="h-full w-full"
+                style={
+                  TWO_WHEELED_MODES.has(driverTransport)
+                    ? {
+                        transform: "rotateX(18deg) scaleY(1.12)",
+                        transformOrigin: "50% 100%",
+                        transformStyle: "preserve-3d",
+                      }
+                    : undefined
+                }
+              >
+                <LiveMap
+                  routePoints={routePoints}
+                  className="h-full w-full"
+                  interactive={true}
+                  audienceRole="streamer"
+                  transportMode={driverTransport}
+                  rotateWithHeading={true}
+                  followMode={mapFollow}
+                  onUserInteract={() => setMapFollow(false)}
+                  tileOpacity={1}
+                  mapCaption={
+                    destination
+                      ? `Destination: ${destination.label}`
+                      : "You \u00b7 follow green arrow"
+                  }
+                  zones={osmZones}
+                  checkpoints={osmCheckpoints}
+                  showZones={false}
+                  showCheckpoints={false}
+                  turnHint={aiTurnHint}
+                  turnHintEtaSec={aiTurnEtaSec}
+                  turnHintDistanceM={aiTurnDistanceM}
+                  turnTarget={turnTarget}
+                  driverPins={driverPins}
+                  approachLine={approachLine}
+                  railPhase={railPhase}
+                  destination={destination}
+                  destinationRoute={null}
+                  driverRouteBadges={driverRouteBadges}
+                />
+              </div>
+            </div>
           ) : (
             <LiveVideoPlayer localStream={stream} className="h-full w-full" />
           )}
@@ -724,8 +799,8 @@ export function OwnerLiveControlPanel({
             aria-label="Live"
             title="Live"
           />
-          <span className="text-white/85" aria-label={DRIVER_TRANSPORT} title={DRIVER_TRANSPORT}>
-            <TransportModeIcon mode={DRIVER_TRANSPORT} className="h-6 w-6" />
+          <span className="text-white/85" aria-label={driverTransport} title={driverTransport}>
+            <TransportModeIcon mode={driverTransport} className="h-6 w-6" />
           </span>
           <IconRailButton
             active={mapFollow}
@@ -765,7 +840,7 @@ export function OwnerLiveControlPanel({
                 className="h-full w-full"
                 interactive={false}
                 audienceRole="streamer"
-                transportMode={DRIVER_TRANSPORT}
+                transportMode={driverTransport}
                 rotateWithHeading={true}
                 followMode={true}
                 tileOpacity={0.65}
@@ -850,9 +925,38 @@ export function OwnerLiveControlPanel({
       <h1 className="mb-6 text-xl font-semibold text-white">Go live</h1>
 
       <div className="space-y-4">
-        <p className="text-[11px] text-white/45">
-          Transport: car · saved destinations below (search to add a new one).
-        </p>
+        <div>
+          <label className="text-xs text-white/40">Vehicle</label>
+          <div className="mt-1 flex gap-2">
+            {(
+              [
+                { mode: "car" as TransportMode, label: "Car" },
+                { mode: "bike" as TransportMode, label: "Bike" },
+                { mode: "scooter" as TransportMode, label: "Scooter" },
+                { mode: "motorcycle" as TransportMode, label: "Moto" },
+              ] as const
+            ).map(({ mode, label }) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => setDriverTransport(mode)}
+                className={`flex flex-1 flex-col items-center gap-1 rounded-xl border py-2 text-[11px] font-medium transition active:scale-95 ${
+                  driverTransport === mode
+                    ? "border-red-500 bg-red-500/15 text-white"
+                    : "border-white/10 bg-white/5 text-white/50"
+                }`}
+              >
+                <TransportModeIcon mode={mode} className="h-5 w-5" />
+                {label}
+              </button>
+            ))}
+          </div>
+          {TWO_WHEELED_MODES.has(driverTransport) && (
+            <p className="mt-1.5 text-[11px] text-white/40">
+              Ultra-wide camera · landscape screen
+            </p>
+          )}
+        </div>
 
         <div>
           <label className="text-xs text-white/40">Destination</label>
@@ -934,10 +1038,6 @@ export function OwnerLiveControlPanel({
             </button>
           </div>
         ) : null}
-
-        <p className="text-[11px] text-white/35">
-          Uses your rear (world-facing) camera when the device supports it.
-        </p>
 
         {error && <div className="text-xs text-red-400">{error}</div>}
 
