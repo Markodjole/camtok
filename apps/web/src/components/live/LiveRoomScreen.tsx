@@ -2105,59 +2105,77 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         />
       )}
 
-      {/* ── Full-screen layer: video (default) or map (when mapExpanded) ── */}
+      {/* ── EXPERIMENT: YouTube dashcam feed (top 1/3) + map (bottom 2/3) ── */}
+      {/* Original full-screen layer commented out below — restore when done:
       <div className="absolute inset-0 z-0">
         {mapExpanded ? (
-          <LiveMap
-            routePoints={routePoints}
-            className="h-full w-full"
-            interactive={true}
-            audienceRole="viewer"
-            showCourseArrow={true}
-            transportMode={room.transportMode}
-            rotateWithHeading={true}
-            followMode={mapFollow}
-            onUserInteract={handleMapUserInteract}
-            onPerformanceDegrade={handleMapPerfDegrade}
-            tileOpacity={1}
-            mapCaption={
-              viewerCurrentBetHeadline ?? currentMarket?.title ?? undefined
-            }
-            zones={zones}
-            checkpoints={checkpoints}
-            selectedZoneId={selectedZoneId}
-            currentZoneId={currentZoneId}
-            selectedCheckpointId={selectedCheckpointId}
-            showZones={effectiveShowZones}
-            zonesVisualStyle={zonesVisualStyleForBet}
-            showCheckpoints={true}
-            turnTarget={viewerTurnTargetForMap}
-            stepPin={stepPin}
-            driverPins={viewerOsrmPreviewPins}
-            approachLine={approachLine}
-            railPhase={viewerRailPhase}
-            destination={room.destination}
-            destinationRoute={destinationRoute}
-            destinationRouteTraffic={destinationRouteTraffic}
-            destinationRouteLabel="Google suggested route"
-            driverRouteBadges={driverRouteBadges}
-            trafficCameras={trafficCameras}
-            activeCameraId={nearestCamera?.id ?? null}
-            leftInsetPx={nearestCamera ? pipSizePx : 0}
-            viewerFollowLatLngBounds={null}
-            viewerFollowBoundsMinZoom={null}
-            viewerTargetWidthMeters={viewerTargetWidthMeters}
-            viewerZoomRuleKey={`zoom:${Math.round(viewerTargetWidthMeters)}:${currentMarket?.id ?? "nomarket"}`}
-            layoutViewportWidthPx={layoutViewportW}
-            onZoneSelect={handleZoneSelect}
-            onCheckpointSelect={handleCheckpointSelect}
-          />
+          <LiveMap ... />
         ) : (
           <LiveVideoPlayer
             liveSessionId={room.liveSessionId}
             className="h-full w-full"
           />
         )}
+      </div>
+      */}
+
+      {/* YouTube dashcam panel — top 33% of screen */}
+      <div className="absolute inset-x-0 top-0 z-0" style={{ height: "33dvh" }}>
+        <iframe
+          src="https://www.youtube.com/embed/8G1MiDfIDig?start=7&autoplay=1&mute=1&controls=0&loop=1&playlist=8G1MiDfIDig&modestbranding=1&rel=0"
+          className="h-full w-full"
+          allow="autoplay; encrypted-media"
+          allowFullScreen
+          title="Dashcam feed"
+        />
+      </div>
+
+      {/* Map panel — bottom 67% of screen */}
+      <div className="absolute inset-x-0 bottom-0 z-0" style={{ top: "33dvh" }}>
+        <LiveMap
+          routePoints={routePoints}
+          className="h-full w-full"
+          interactive={true}
+          audienceRole="viewer"
+          showCourseArrow={true}
+          transportMode={room.transportMode}
+          rotateWithHeading={true}
+          followMode={mapFollow}
+          onUserInteract={handleMapUserInteract}
+          onPerformanceDegrade={handleMapPerfDegrade}
+          tileOpacity={1}
+          mapCaption={
+            viewerCurrentBetHeadline ?? currentMarket?.title ?? undefined
+          }
+          zones={zones}
+          checkpoints={checkpoints}
+          selectedZoneId={selectedZoneId}
+          currentZoneId={currentZoneId}
+          selectedCheckpointId={selectedCheckpointId}
+          showZones={effectiveShowZones}
+          zonesVisualStyle={zonesVisualStyleForBet}
+          showCheckpoints={true}
+          turnTarget={viewerTurnTargetForMap}
+          stepPin={stepPin}
+          driverPins={viewerOsrmPreviewPins}
+          approachLine={approachLine}
+          railPhase={viewerRailPhase}
+          destination={room.destination}
+          destinationRoute={destinationRoute}
+          destinationRouteTraffic={destinationRouteTraffic}
+          destinationRouteLabel="Google suggested route"
+          driverRouteBadges={driverRouteBadges}
+          trafficCameras={trafficCameras}
+          activeCameraId={nearestCamera?.id ?? null}
+          leftInsetPx={nearestCamera ? pipSizePx : 0}
+          viewerFollowLatLngBounds={null}
+          viewerFollowBoundsMinZoom={null}
+          viewerTargetWidthMeters={viewerTargetWidthMeters}
+          viewerZoomRuleKey={`zoom:${Math.round(viewerTargetWidthMeters)}:${currentMarket?.id ?? "nomarket"}`}
+          layoutViewportWidthPx={layoutViewportW}
+          onZoneSelect={handleZoneSelect}
+          onCheckpointSelect={handleCheckpointSelect}
+        />
       </div>
 
       {room.destination ? (
