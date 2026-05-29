@@ -110,7 +110,10 @@ async function openLiveCameraStream(transportMode: string): Promise<MediaStream>
 async function lockOrientation(mode: string): Promise<void> {
   if (!TWO_WHEELED_MODES.has(mode)) return;
   try {
-    await screen.orientation.lock("landscape");
+    // screen.orientation.lock is part of the Screen Orientation API but absent
+    // from older TS lib typings — cast to any to avoid the compile error.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (screen.orientation as any).lock("landscape");
   } catch {
     // Not supported on all browsers / PWAs — silently ignore
   }
@@ -118,7 +121,8 @@ async function lockOrientation(mode: string): Promise<void> {
 
 async function unlockOrientation(): Promise<void> {
   try {
-    screen.orientation.unlock();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (screen.orientation as any).unlock?.();
   } catch {
     // ignore
   }
