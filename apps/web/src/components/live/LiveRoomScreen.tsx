@@ -3283,27 +3283,20 @@ function shortOptionLabel(
   refStreak: number | null = null,
 ): string {
   if (mode === "turn") {
-    if (opt.id === "left") return "Left";
-    if (opt.id === "right") return "Right";
-    return "Straight";
+    if (opt.id === "left") return "←";
+    if (opt.id === "right") return "→";
+    return "↑";
   }
   if (mode === "streak") {
-    const n = refStreak ?? (() => {
-      const m = opt.shortLabel?.match(/(\d+)/);
-      return m ? Number(m[1]) : null;
-    })();
-    if (n != null) {
-      if (opt.id === "streak_under" || opt.id.includes("under")) return `< ${n}`;
-      if (opt.id === "streak_at" || opt.id.includes("_at")) return `= ${n}`;
-      if (opt.id === "streak_over" || opt.id.includes("over")) return `> ${n}`;
-    }
+    if (opt.id === "streak_under" || opt.id.includes("under")) return "<";
+    if (opt.id === "streak_at" || opt.id.includes("_at")) return "=";
+    if (opt.id === "streak_over" || opt.id.includes("over")) return ">";
     return opt.shortLabel ?? opt.label;
   }
-  if ((mode === "zoneTime" || mode === "compare") && refSec != null) {
-    const sec = Math.max(0, Math.round(refSec));
-    if (opt.id === "exit_under" || opt.id === "step_under" || opt.id.startsWith("lt")) return `< ${sec}s`;
-    if (opt.id === "exit_at" || opt.id === "step_at" || opt.id.startsWith("eq")) return `= ${sec}s`;
-    if (opt.id === "exit_over" || opt.id === "step_over" || opt.id.startsWith("gt")) return `> ${sec}s`;
+  if (mode === "zoneTime") {
+    if (opt.id === "exit_under" || opt.id === "step_under" || opt.id.startsWith("lt")) return "<";
+    if (opt.id === "exit_at" || opt.id === "step_at" || opt.id.startsWith("eq")) return "=";
+    if (opt.id === "exit_over" || opt.id === "step_over" || opt.id.startsWith("gt")) return ">";
   }
   if (mode === "compare") {
     if (opt.id.includes("under") || opt.id.startsWith("lt")) return "<";
@@ -3319,7 +3312,7 @@ function shortOptionLabel(
 function BetFeedStack({ children }: { children: ReactNode }) {
   return (
     <div
-      className="bet-feed-stack pointer-events-none fixed inset-x-0 bottom-0 z-[200] flex max-h-[36dvh] flex-col justify-end gap-1 overflow-hidden px-2 pb-14"
+      className="bet-feed-stack pointer-events-none fixed inset-x-0 bottom-0 z-[200] flex max-h-[36dvh] flex-col justify-end gap-1.5 overflow-hidden px-3 pb-14"
     >
       {children}
     </div>
@@ -3341,7 +3334,7 @@ const BetFeedCard = memo(function BetFeedCard({
   error,
   opensAt,
   locksAt,
-  onClose,
+  onClose: _onClose,
   onPlaceBet,
   gridMode = false,
   turnMode = false,
@@ -3406,9 +3399,9 @@ const BetFeedCard = memo(function BetFeedCard({
 
   const optionBtnClass = (active: boolean, disabled: boolean) =>
     [
-      "flex h-8 w-[50px] shrink-0 items-center justify-center rounded-md px-0.5 text-[10px] font-bold leading-none transition active:scale-[0.97] sm:w-[54px] sm:text-[11px]",
+      "flex h-9 min-w-[44px] items-center justify-center rounded-lg px-3 text-sm font-bold leading-none transition active:scale-[0.97]",
       active
-        ? "bg-white text-black shadow-md ring-1 ring-white/30"
+        ? "bg-white text-black shadow-md ring-2 ring-white/25"
         : disabled
           ? "bg-white/5 text-white/30"
           : "bg-white/15 text-white hover:bg-white/25",
@@ -3461,14 +3454,14 @@ const BetFeedCard = memo(function BetFeedCard({
           transition: "background-color 0.35s ease",
         }}
       >
-        <div className="flex items-center gap-1.5 px-2 py-1.5">
-          <p className="min-w-0 shrink truncate text-xs font-bold tabular-nums text-white">
+        <div className="flex items-center gap-3 px-3 py-2.5">
+          <p className="min-w-0 flex-1 truncate text-sm font-bold tabular-nums text-white">
             {headline}
           </p>
 
           {gridMode ? (
             <>
-              <span className="min-w-0 max-w-[28%] shrink truncate text-[10px] text-white/55">
+              <span className="shrink-0 truncate text-xs text-white/60">
                 {selectionDetail ?? "Tap map"}
               </span>
               {!oneTapOptionBet ? (
@@ -3476,31 +3469,23 @@ const BetFeedCard = memo(function BetFeedCard({
                   type="button"
                   disabled={bettingClosed || !selectedOptionId || isPlacing}
                   onClick={() => void onPlaceBet()}
-                  className="h-8 shrink-0 rounded-md bg-red-500 px-2.5 text-[10px] font-bold text-white disabled:bg-white/10 disabled:text-white/35"
+                  className="h-9 shrink-0 rounded-lg bg-red-500 px-4 text-xs font-bold text-white disabled:bg-white/10 disabled:text-white/35"
                 >
                   {isPlacing ? "…" : bettingClosed ? "Closed" : "Bet"}
                 </button>
               ) : null}
             </>
           ) : (
-            <div className="flex shrink-0 items-center gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <div className="flex shrink-0 items-center gap-1.5">
               {renderOptionButtons()}
             </div>
           )}
 
           <FeedTimer locksAt={locksAt} />
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Dismiss"
-            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white/12 text-xs leading-none text-white/70"
-          >
-            ×
-          </button>
         </div>
 
         {error ? (
-          <div className="truncate px-2 pb-1 text-[10px] text-red-300">{error}</div>
+          <div className="truncate px-3 pb-2 text-xs text-red-300">{error}</div>
         ) : null}
       </div>
     </div>
@@ -3513,7 +3498,7 @@ const FeedTimer = memo(function FeedTimer({ locksAt }: { locksAt: string }) {
   const locked = secondsLeft <= 0;
   return (
     <span
-      className={`shrink-0 rounded-full px-1.5 py-px text-[10px] font-bold tabular-nums ${
+      className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-bold tabular-nums ${
         locked
           ? "bg-red-500/25 text-red-300"
           : secondsLeft < 4
