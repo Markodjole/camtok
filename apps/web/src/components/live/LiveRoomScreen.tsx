@@ -1695,10 +1695,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const betWindowClosed = !!(currentMarket && _locksAtMs != null && marketLocked);
   /**
    * Unified bet card visibility: every active bet type renders through the
-   * same `MapSelectionBottomSheet` so the viewer sees the same component,
-   * the same countdown, and the same one-touch interaction regardless of
-   * whether the round is `next_turn`, `next_zone`, or `zone_exit_time`.
-   * The old joystick + grid-map-tap surfaces are gone.
+   * same compact `BetFeedCard` stack so multiple markets can show at once.
    */
   /**
    * Bet card overlays video or map — do not require `mapExpanded`, or viewers
@@ -1736,7 +1733,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     }>
   >(() => currentMarket?.options ?? [], [currentMarket]);
 
-  // zoneTimeRemainingEstSec moved into MapSelectionBottomSheet (owns its own clock).
+  // Zone countdown clock lives inside BetFeedCard.
 
   /**
    * One-touch sheet: tapping an option places the bet immediately. The only
@@ -2415,121 +2412,116 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       {/* ── Bottom gradient scrim ────────────────────────── */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-44 bg-gradient-to-t from-black/70 to-transparent" />
 
-      {showUnifiedBetSheet ? (
-        <MapSelectionBottomSheet
-          betHeadline={
-            currentMarket.title ??
-            viewerCurrentBetHeadline ??
-            sheetBetHeadline
-          }
-          selectionDetail={
-            currentMarket.marketType === "city_grid"
-              ? selectedZone
-                ? `Selected · ${selectedZone.name}`
-                : "Tap a square on the map"
-              : null
-          }
-          marketOptions={sheetMarketOptions}
-          selectedOptionId={selectedMapOptionId}
-          onSelectOption={(id) => {
-            /**
-             * Non-grid markets: tapping any option commits the bet
-             * immediately. `city_grid` selection happens via the map
-             * (`onZoneSelect` above) and ignores this path.
-             */
-            setSelectedMapOptionId(id);
-            if (currentMarket.marketType === "city_grid") return;
-            if (
-              sheetBettingClosed ||
-              placingOptionId ||
-              viewerHasBetOnCurrentMarket
-            ) {
-              viewerLiveLog("place_bet_skipped", {
-                optionId: id,
-                sheetBettingClosed,
-                placingOptionId: !!placingOptionId,
-                viewerHasBetOnCurrentMarket,
-              });
-              return;
-            }
-            scheduleBetClose();
-            void placeBet(id).then((result) => {
-              if (result?.ok) {
+      {/* ── Bet feed (full-width stacked cards) ───────────── */}
+      {(showUnifiedBetSheet || showStepBetSheet) ? (
+        <BetFeedStack>
+          {showUnifiedBetSheet && currentMarket ? (
+            <BetFeedCard
+              key={currentMarket.id}
+              betHeadline={shortBetHeadline(
+                currentMarket.title ?? viewerCurrentBetHeadline ?? sheetBetHeadline,
+                currentMarket.marketType,
+              )}
+              selectionDetail={
+                currentMarket.marketType === "city_grid"
+                  ? selectedZone
+                    ? selectedZone.name
+                    : "Tap map"
+                  : null
+              }
+              marketOptions={sheetMarketOptions}
+              selectedOptionId={selectedMapOptionId}
+              onSelectOption={(id) => {
+                setSelectedMapOptionId(id);
+                if (currentMarket.marketType === "city_grid") return;
+                if (
+                  sheetBettingClosed ||
+                  placingOptionId ||
+                  viewerHasBetOnCurrentMarket
+                ) {
+                  viewerLiveLog("place_bet_skipped", {
+                    optionId: id,
+                    sheetBettingClosed,
+                    placingOptionId: !!placingOptionId,
+                    viewerHasBetOnCurrentMarket,
+                  });
+                  return;
+                }
+                scheduleBetClose();
+                void placeBet(id).then((result) => {
+                  if (result?.ok) {
+                    setSelectedZoneId(null);
+                    setSelectedCheckpointId(null);
+                    setMapSheetError(null);
+                  }
+                });
+              }}
+              bettingClosed={sheetBettingClosed}
+              isPlacing={!!placingOptionId}
+              error={mapSheetError}
+              opensAt={currentMarket.opensAt}
+              locksAt={currentMarket.locksAt}
+              onClose={() => {
                 setSelectedZoneId(null);
                 setSelectedCheckpointId(null);
                 setMapSheetError(null);
+              }}
+              onPlaceBet={async () => {
+                if (!selectedMapOptionId || sheetBettingClosed) return;
+                scheduleBetClose();
+                const result = await placeBet(selectedMapOptionId);
+                if (result?.ok) {
+                  setSelectedZoneId(null);
+                  setSelectedCheckpointId(null);
+                  setMapSheetError(null);
+                }
+              }}
+              gridMode={currentMarket.marketType === "city_grid"}
+              turnMode={currentMarket.marketType === "next_turn"}
+              zoneMarket={
+                currentMarket.marketType === "zone_exit_time"
+                  ? (parseZoneExitMarketMeta(currentMarket) ?? null)
+                  : null
               }
-            });
-          }}
-          bettingClosed={sheetBettingClosed}
-          isPlacing={!!placingOptionId}
-          error={mapSheetError}
-          opensAt={currentMarket.opensAt}
-          locksAt={currentMarket.locksAt}
-          countdown={
-            currentMarket ? <MarketTimer locksAt={currentMarket.locksAt} /> : null
-          }
-          onClose={() => {
-            setSelectedZoneId(null);
-            setSelectedCheckpointId(null);
-            setMapSheetError(null);
-          }}
-          onPlaceBet={async () => {
-            if (!selectedMapOptionId || sheetBettingClosed) return;
-            scheduleBetClose();
-            const result = await placeBet(selectedMapOptionId);
-            if (result?.ok) {
-              setSelectedZoneId(null);
-              setSelectedCheckpointId(null);
-              setMapSheetError(null);
-            }
-          }}
-          gridMode={currentMarket.marketType === "city_grid"}
-          turnMode={currentMarket.marketType === "next_turn"}
-          zoneMarket={
-            currentMarket.marketType === "zone_exit_time"
-              ? (parseZoneExitMarketMeta(currentMarket) ?? null)
-              : null
-          }
-          oneTapOptionBet={currentMarket.marketType !== "city_grid"}
-        />
-      ) : null}
-
-      {/* ── Step market bet sheet (independent pin/camera slot) ─── */}
-      {showStepBetSheet ? (
-        <MapSelectionBottomSheet
-          betHeadline={currentStepMarket!.title ?? "To pin"}
-          selectionDetail={null}
-          marketOptions={currentStepMarket!.options ?? []}
-          selectedOptionId={null}
-          onSelectOption={(id) => {
-            if (stepMarketLocked || stepPlacingOptionId || viewerHasBetOnStepMarket) return;
-            if (stepBetJustPlacedTimerRef.current) clearTimeout(stepBetJustPlacedTimerRef.current);
-            stepBetJustPlacedTimerRef.current = setTimeout(() => {
-              setStepBetJustPlaced(true);
-              stepBetJustPlacedTimerRef.current = null;
-            }, 1000);
-            void placeBet(id, currentStepMarket!).then(() => {
-              setMapSheetError(null);
-            });
-          }}
-          bettingClosed={!!stepMarketLocked}
-          isPlacing={!!stepPlacingOptionId}
-          error={null}
-          opensAt={currentStepMarket!.opensAt}
-          locksAt={currentStepMarket!.locksAt}
-          countdown={<MarketTimer locksAt={currentStepMarket!.locksAt} />}
-          onClose={() => { setStepBetJustPlaced(true); }}
-          onPlaceBet={async () => {
-            const opts = currentStepMarket!.options ?? [];
-            if (!opts[0] || stepMarketLocked) return;
-            void placeBet(opts[0].id, currentStepMarket!);
-          }}
-          gridMode={false}
-          turnMode={false}
-          zoneMarket={null}
-          oneTapOptionBet
-        />
+              oneTapOptionBet={currentMarket.marketType !== "city_grid"}
+            />
+          ) : null}
+          {showStepBetSheet && currentStepMarket ? (
+            <BetFeedCard
+              key={currentStepMarket.id}
+              betHeadline={shortBetHeadline(currentStepMarket.title, "next_step")}
+              selectionDetail={null}
+              marketOptions={currentStepMarket.options ?? []}
+              selectedOptionId={null}
+              onSelectOption={(id) => {
+                if (stepMarketLocked || stepPlacingOptionId || viewerHasBetOnStepMarket) return;
+                if (stepBetJustPlacedTimerRef.current) clearTimeout(stepBetJustPlacedTimerRef.current);
+                stepBetJustPlacedTimerRef.current = setTimeout(() => {
+                  setStepBetJustPlaced(true);
+                  stepBetJustPlacedTimerRef.current = null;
+                }, 1000);
+                void placeBet(id, currentStepMarket).then(() => {
+                  setMapSheetError(null);
+                });
+              }}
+              bettingClosed={!!stepMarketLocked}
+              isPlacing={!!stepPlacingOptionId}
+              error={null}
+              opensAt={currentStepMarket.opensAt}
+              locksAt={currentStepMarket.locksAt}
+              onClose={() => { setStepBetJustPlaced(true); }}
+              onPlaceBet={async () => {
+                const opts = currentStepMarket.options ?? [];
+                if (!opts[0] || stepMarketLocked) return;
+                void placeBet(opts[0].id, currentStepMarket);
+              }}
+              gridMode={false}
+              turnMode={false}
+              zoneMarket={null}
+              oneTapOptionBet
+            />
+          ) : null}
+        </BetFeedStack>
       ) : null}
 
       {/* ── Straight streak passage tracker ──────────────────── */}
@@ -3158,25 +3150,6 @@ function zoneTimeOptionLabel(optionId: string, remainingSec: number | null): str
   return null;
 }
 
-const MarketTimer = memo(function MarketTimer({ locksAt }: { locksAt: string }) {
-  const { secondsLeft, label } = useCountdown(locksAt);
-  if (secondsLeft === -1) return null;
-  const locked = secondsLeft <= 0;
-  return (
-    <span
-      className={`shrink-0 text-xs font-semibold ${
-        locked
-          ? "text-red-400"
-          : secondsLeft < 10
-            ? "text-amber-400"
-            : "text-white/45"
-      }`}
-    >
-      {locked ? "locked" : label}
-    </span>
-  );
-});
-
 /** 0 = start of window (green-grey), 1 = lock (red-grey). */
 /** Returns seconds elapsed since the market opened. */
 function useBetWindowElapsed(opensAt: string): number {
@@ -3202,7 +3175,67 @@ function betSheetUrgencyBackground(elapsedSec: number): string {
   return "rgba(54, 24, 24, 0.78)";                         // red-grey
 }
 
-const MapSelectionBottomSheet = memo(function MapSelectionBottomSheet({
+function shortBetHeadline(title: string | null | undefined, marketType?: string | null): string {
+  switch (marketType) {
+    case "next_step":
+      return "To pin";
+    case "zone_exit_time":
+      return "Zone time";
+    case "next_turn":
+      return "Turn";
+    case "straight_streak":
+      return "Straights";
+    case "city_grid":
+      return "Grid";
+    case "next_zone":
+      return "Next zone";
+    default:
+      break;
+  }
+  const t = (title ?? "").trim();
+  if (!t) return "Bet";
+  if (t.length <= 20) return t;
+  return `${t.slice(0, 18)}…`;
+}
+
+function shortOptionLabel(
+  opt: { id: string; label: string; shortLabel?: string },
+  mode: "turn" | "zoneTime" | "compare" | "default",
+  zoneRemainingSec: number | null,
+): string {
+  if (mode === "turn") {
+    if (opt.id === "left") return "←";
+    if (opt.id === "right") return "→";
+    return "↑";
+  }
+  if (mode === "zoneTime" && zoneRemainingSec != null) {
+    const sec = Math.round(zoneRemainingSec);
+    if (opt.id === "exit_under") return `< ${sec}s`;
+    if (opt.id === "exit_at") return `= ${sec}s`;
+    if (opt.id === "exit_over") return `> ${sec}s`;
+  }
+  if (mode === "compare") {
+    if (opt.id.includes("under") || opt.id.startsWith("lt")) return "<";
+    if (opt.id.includes("over") || opt.id.startsWith("gt")) return ">";
+    if (opt.id.includes("at") || opt.id.startsWith("eq")) return "=";
+  }
+  const raw = opt.shortLabel ?? opt.label;
+  if (raw.length <= 8) return raw;
+  return raw.slice(0, 7) + "…";
+}
+
+/** Full-width stacked bet cards — newest at bottom, older pushed up. */
+function BetFeedStack({ children }: { children: ReactNode }) {
+  return (
+    <div
+      className="bet-feed-stack pointer-events-none fixed inset-x-0 bottom-0 z-[200] flex max-h-[42dvh] flex-col justify-end gap-1 overflow-hidden px-2 pb-16"
+    >
+      {children}
+    </div>
+  );
+}
+
+const BetFeedCard = memo(function BetFeedCard({
   betHeadline,
   selectionDetail,
   marketOptions,
@@ -3212,7 +3245,6 @@ const MapSelectionBottomSheet = memo(function MapSelectionBottomSheet({
   bettingPending = false,
   isPlacing,
   error,
-  countdown,
   opensAt,
   locksAt,
   onClose,
@@ -3231,21 +3263,18 @@ const MapSelectionBottomSheet = memo(function MapSelectionBottomSheet({
   bettingPending?: boolean;
   isPlacing: boolean;
   error: string | null;
-  countdown: ReactNode;
   opensAt: string;
   locksAt: string;
   onClose: () => void;
   onPlaceBet: () => Promise<void>;
   gridMode?: boolean;
   turnMode?: boolean;
-  /** When non-null, renders a 3-column < / ≈ / > layout with live countdown labels. */
   zoneMarket?: { opensAtMs: number; estimatedSec: number } | null;
   oneTapOptionBet?: boolean;
 }) {
   const elapsed = useBetWindowElapsed(opensAt);
   const sheetBg = betSheetUrgencyBackground(elapsed);
   const sorted = [...marketOptions].sort((a, b) => a.displayOrder - b.displayOrder);
-  // Own 1s clock for zone countdown — only runs when this sheet is for zone_exit_time.
   const [sheetNow, setSheetNow] = useState(() => Date.now());
   useEffect(() => {
     if (!zoneMarket) return;
@@ -3265,154 +3294,176 @@ const MapSelectionBottomSheet = memo(function MapSelectionBottomSheet({
         .map((id) => sorted.find((o) => o.id === id))
         .filter((o): o is NonNullable<typeof o> => o != null)
     : [];
+  const compareMode =
+    !gridMode &&
+    !turnMode &&
+    !zoneTimeMode &&
+    sorted.length <= 3 &&
+    sorted.some((o) =>
+      /under|over|at|lt|gt|eq/i.test(o.id),
+    );
+
+  const optionMode: "turn" | "zoneTime" | "compare" | "default" = turnMode
+    ? "turn"
+    : zoneTimeMode
+      ? "zoneTime"
+      : compareMode
+        ? "compare"
+        : "default";
+
+  const optionBtnClass = (active: boolean, disabled: boolean) =>
+    [
+      "flex h-7 min-w-0 flex-1 items-center justify-center rounded-md px-1 text-center text-[10px] font-bold leading-none transition active:scale-95",
+      active
+        ? "bg-white text-black shadow-sm"
+        : disabled
+          ? "bg-white/5 text-white/25"
+          : "bg-white/12 text-white/90 hover:bg-white/20",
+    ].join(" ");
+
   return (
-    <div
-      className="pointer-events-none fixed bottom-0 right-0 z-[200] pb-16"
-      style={{
-        // Use full remaining screen width to the right of the PiP square —
-        // no horizontal margins. pb-16 = BottomNav h-16, so no bottom gap.
-        left: "min(34vw, 180px)",
-        paddingRight: "0px",
-      }}
-    >
+    <div className="bet-feed-enter pointer-events-auto w-full shrink-0">
       <div
-        className="pointer-events-auto flex h-full flex-col border-y border-r border-white/10 p-2 text-white shadow-lg"
-        /** Match the PiP square (left): width:34vw capped at 180px → height the same. */
+        className="overflow-hidden rounded-lg border border-white/10 shadow-lg backdrop-blur-sm"
         style={{
-          height: "min(34vw, 180px)",
-          minHeight: "min(34vw, 180px)",
           backgroundColor: sheetBg,
           transition: "background-color 0.35s ease",
         }}
       >
-        <div className="mb-1 flex items-start gap-2">
-          <div className="min-w-0 flex-1">
-            <div className="text-[11px] font-semibold leading-snug text-white">
-              {betHeadline}
-            </div>
-            {selectionDetail ? (
-              <div
-                className={`mt-1 text-[10px] leading-snug ${
-                  gridMode ? "text-white/70" : "mt-0.5 text-white/55"
-                }`}
-              >
-                {selectionDetail}
-              </div>
-            ) : null}
+        <div className="flex items-center gap-2 px-2 py-1">
+          <div className="min-w-0 flex-1 truncate text-[10px] font-semibold text-white">
+            {betHeadline}
           </div>
-          <div className="flex shrink-0 items-center gap-1.5">
-            <div className="text-[10px] text-white/55">{countdown}</div>
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded-full bg-white/10 px-2 py-0.5 text-[10px] text-white/75"
-            >
-              Close
-            </button>
-          </div>
-        </div>
-        {gridMode ? null : zoneTimeMode ? (
-          <div className="grid min-h-0 flex-1 grid-cols-3 gap-1">
-            {zoneTimeOptions.map((opt) => {
-              const active = selectedOptionId === opt.id;
-              const label =
-                zoneTimeOptionLabel(opt.id, zoneTimeRemainingEstSec) ??
-                (opt.shortLabel ?? opt.label);
-              return (
-                <button
-                  key={opt.id}
-                  type="button"
-                  onClick={() => void onSelectOption(opt.id)}
-                  className={`flex h-full items-center justify-center rounded-lg px-1 text-center text-[11px] font-semibold ${
-                    active
-                      ? "bg-white text-black"
-                      : bettingClosed
-                        ? "bg-white/5 text-white/30"
-                        : "bg-white/15 text-white"
-                  }`}
-                  disabled={bettingClosed || isPlacing}
-                >
-                  {label}
-                </button>
-              );
-            })}
-          </div>
-        ) : turnMode ? (
-          <div className="grid min-h-0 flex-1 grid-cols-3 gap-1">
-            {turnOptions.map((opt) => {
-              const active = selectedOptionId === opt.id;
-              const arrow =
-                opt.id === "left"
-                  ? "←"
-                  : opt.id === "right"
-                    ? "→"
-                    : "↑";
-              const label =
-                opt.id === "left"
-                  ? "Left"
-                  : opt.id === "right"
-                    ? "Right"
-                    : "Straight";
-              return (
-                <button
-                  key={opt.id}
-                  type="button"
-                  onClick={() => void onSelectOption(opt.id)}
-                  className={`flex h-full flex-col items-center justify-center gap-0.5 rounded-lg px-1 text-center font-semibold ${
-                    active
-                      ? "border border-violet-400/55 bg-violet-500/20 text-white"
-                      : "border border-transparent bg-white/5 text-white/85"
-                  }`}
-                >
-                  <span className="text-base leading-none">{arrow}</span>
-                  <span className="text-[9px] leading-none">{label}</span>
-                </button>
-              );
-            })}
-          </div>
-        ) : (
-          <div className="min-h-0 flex-1 space-y-1 overflow-y-auto">
-            {sorted.map((opt) => {
-              const active = selectedOptionId === opt.id;
-              return (
-                <button
-                  key={opt.id}
-                  type="button"
-                  onClick={() => void onSelectOption(opt.id)}
-                  className={`block w-full rounded-lg px-2 py-1 text-left text-[10px] ${
-                    active
-                      ? "border border-violet-400/55 bg-violet-500/20 text-white"
-                      : "border border-transparent bg-white/5 text-white/80"
-                  }`}
-                >
-                  {opt.shortLabel ?? opt.label}
-                </button>
-              );
-            })}
-          </div>
-        )}
-        {error ? <div className="mt-1.5 text-[10px] text-red-300">{error}</div> : null}
-        {oneTapOptionBet ? null : (
+          {selectionDetail ? (
+            <span className="max-w-[28%] truncate text-[9px] text-white/50">
+              {selectionDetail}
+            </span>
+          ) : null}
+          <FeedTimer locksAt={locksAt} />
           <button
             type="button"
-            disabled={bettingClosed || !selectedOptionId || isPlacing}
-            onClick={() => void onPlaceBet()}
-            className="mt-2 w-full rounded-lg bg-red-500/90 px-2 py-1.5 text-[11px] font-semibold text-white disabled:bg-white/15 disabled:text-white/45"
+            onClick={onClose}
+            aria-label="Dismiss"
+            className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-white/10 text-[10px] text-white/60"
           >
-            {bettingPending
-              ? "Opening soon…"
-              : bettingClosed
-                ? "Betting closed"
-                : isPlacing
-                  ? "Placing…"
-                  : !selectedOptionId
-                    ? gridMode
-                      ? "Choose a cell on the map"
-                      : "Select option"
-                    : "Place bet"}
+            ×
           </button>
+        </div>
+
+        {gridMode ? (
+          <div className="flex items-center gap-1.5 px-2 pb-1.5">
+            <span className="min-w-0 flex-1 truncate text-[9px] text-white/55">
+              {selectionDetail ?? "Tap map"}
+            </span>
+            {!oneTapOptionBet ? (
+              <button
+                type="button"
+                disabled={bettingClosed || !selectedOptionId || isPlacing}
+                onClick={() => void onPlaceBet()}
+                className="h-6 shrink-0 rounded-md bg-red-500/90 px-2 text-[9px] font-bold text-white disabled:bg-white/10 disabled:text-white/35"
+              >
+                {isPlacing ? "…" : bettingClosed ? "Closed" : "Bet"}
+              </button>
+            ) : null}
+          </div>
+        ) : zoneTimeMode ? (
+          <div className="grid grid-cols-3 gap-1 px-2 pb-1.5">
+            {zoneTimeOptions.map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => void onSelectOption(opt.id)}
+                disabled={bettingClosed || isPlacing}
+                className={optionBtnClass(selectedOptionId === opt.id, bettingClosed || isPlacing)}
+              >
+                {shortOptionLabel(opt, "zoneTime", zoneTimeRemainingEstSec)}
+              </button>
+            ))}
+          </div>
+        ) : turnMode ? (
+          <div className="grid grid-cols-3 gap-1 px-2 pb-1.5">
+            {turnOptions.map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => void onSelectOption(opt.id)}
+                disabled={bettingClosed || isPlacing}
+                className={optionBtnClass(selectedOptionId === opt.id, bettingClosed || isPlacing)}
+              >
+                {shortOptionLabel(opt, "turn", null)}
+              </button>
+            ))}
+          </div>
+        ) : compareMode ? (
+          <div className="grid grid-cols-3 gap-1 px-2 pb-1.5">
+            {sorted.map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => void onSelectOption(opt.id)}
+                disabled={bettingClosed || isPlacing}
+                className={optionBtnClass(selectedOptionId === opt.id, bettingClosed || isPlacing)}
+              >
+                {shortOptionLabel(opt, "compare", null)}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="flex flex-wrap gap-1 px-2 pb-1.5">
+            {sorted.map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => void onSelectOption(opt.id)}
+                disabled={bettingClosed || isPlacing}
+                className={[
+                  optionBtnClass(selectedOptionId === opt.id, bettingClosed || isPlacing),
+                  sorted.length <= 3 ? "" : "min-w-[calc(33%-4px)] max-w-[50%]",
+                ].join(" ")}
+              >
+                {shortOptionLabel(opt, "default", null)}
+              </button>
+            ))}
+          </div>
         )}
+
+        {error ? (
+          <div className="truncate px-2 pb-1 text-[9px] text-red-300">{error}</div>
+        ) : null}
+        {!oneTapOptionBet && !gridMode ? (
+          <div className="px-2 pb-1.5">
+            <button
+              type="button"
+              disabled={bettingClosed || !selectedOptionId || isPlacing}
+              onClick={() => void onPlaceBet()}
+              className="h-6 w-full rounded-md bg-red-500/90 text-[9px] font-bold text-white disabled:bg-white/10 disabled:text-white/35"
+            >
+              {bettingPending
+                ? "Soon…"
+                : bettingClosed
+                  ? "Closed"
+                  : isPlacing
+                    ? "…"
+                    : "Bet"}
+            </button>
+          </div>
+        ) : null}
       </div>
     </div>
+  );
+});
+
+const FeedTimer = memo(function FeedTimer({ locksAt }: { locksAt: string }) {
+  const { secondsLeft } = useCountdown(locksAt);
+  if (secondsLeft === -1) return null;
+  const locked = secondsLeft <= 0;
+  return (
+    <span
+      className={`shrink-0 text-[9px] font-bold tabular-nums ${
+        locked ? "text-red-400" : secondsLeft < 4 ? "text-amber-400" : "text-white/45"
+      }`}
+    >
+      {locked ? "0s" : `${secondsLeft}s`}
+    </span>
   );
 });

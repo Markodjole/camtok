@@ -73,6 +73,26 @@ body {
   }
 }
 
+@keyframes betFeedEnter {
+  from {
+    opacity: 0;
+    transform: translateY(18px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.bet-feed-enter {
+  animation: betFeedEnter 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.bet-feed-stack > * {
+  transition: transform 280ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 200ms ease;
+}
+
 /* Mobile viewport fix */
 @supports (height: 100dvh) {
   body {
