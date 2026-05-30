@@ -15,10 +15,12 @@ export function LiveVideoPlayer({
   localStream,
   liveSessionId,
   className,
+  objectFit = "cover",
 }: {
   localStream?: MediaStream | null;
   liveSessionId?: string | null;
   className?: string;
+  objectFit?: "cover" | "contain";
 }) {
   const ref = useRef<HTMLVideoElement | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
@@ -113,7 +115,12 @@ export function LiveVideoPlayer({
 
   return (
     <div className={`relative overflow-hidden bg-black ${className ?? "aspect-[9/16] w-full"}`}>
-      <video ref={ref} playsInline autoPlay className="h-full w-full object-cover" />
+      <video
+        ref={ref}
+        playsInline
+        autoPlay
+        className={`h-full w-full ${objectFit === "contain" ? "object-contain" : "object-cover"}`}
+      />
       {viewerConnecting ? (
         <div className="absolute inset-0 flex items-center justify-center bg-black/60 text-xs text-muted-foreground">
           Connecting to live stream…
