@@ -998,15 +998,17 @@ function LiveMapInner({
         ) => {
           L.polyline(pts, {
             color: "rgba(255,255,255,0.92)",
-            weight: weight + 3,
-            opacity: 1,
+            weight: weight + 2,
+            opacity: 0.45,
+            dashArray: "10 8",
             lineCap: "round",
             lineJoin: "round",
           }).addTo(group);
           L.polyline(pts, {
             color,
             weight,
-            opacity: 1,
+            opacity: 0.72,
+            dashArray: "10 8",
             lineCap: "round",
             lineJoin: "round",
           }).addTo(group);
