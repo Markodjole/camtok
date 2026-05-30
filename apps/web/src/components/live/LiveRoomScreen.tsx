@@ -59,6 +59,7 @@ import { walletLiveBalance } from "@/lib/live/walletBalance";
 import type { TrafficCamera } from "@/app/api/live/traffic-cameras/route";
 import { TrafficCameraPanel } from "./TrafficCameraPanel";
 import { StraightStreakTracker } from "./StraightStreakTracker";
+import { isTwoWheeled } from "./LiveMap";
 
 const LiveMap = dynamic(() => import("./LiveMap").then((m) => m.LiveMap), {
   ssr: false,
@@ -1209,16 +1210,19 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const zones: MapZone[] = useMemo(() => {
     if (!zonesSpec) return [];
     const cells = enumerateGridCells(zonesSpec);
+    const bike = isTwoWheeled(room.transportMode);
     return cells.map((c) => ({
       id: c.id,
       slug: c.id,
       name: c.label,
       kind: "district" as const,
-      color: `hsl(${(c.col * 47 + c.row * 29) % 360} 68% 58%)`,
+      color: bike
+        ? `hsl(${(c.col * 37 + c.row * 17) % 360} 14% 78%)`
+        : `hsl(${(c.col * 47 + c.row * 29) % 360} 68% 58%)`,
       isActive: true,
       polygon: c.polygon,
     }));
-  }, [zonesSpec]);
+  }, [zonesSpec, room.transportMode]);
 
   const zoneMarketActive =
     currentMarket?.marketType === "city_grid" && zones.length > 0;

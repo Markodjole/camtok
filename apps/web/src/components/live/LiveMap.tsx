@@ -205,8 +205,16 @@ export function isTwoWheeled(mode?: string): boolean {
 }
 
 /** MapTiler style slug to use per vehicle class. */
-export function mapTileStyle(mode?: string): "outdoor-v2" | "bright-v2" {
-  return isTwoWheeled(mode) ? "outdoor-v2" : "bright-v2";
+export function mapTileStyle(mode?: string): "openstreetmap" | "bright-v2" {
+  // OSM raster: natural colours + footpaths, alleys, cycleways (best for bikes).
+  return isTwoWheeled(mode) ? "openstreetmap" : "bright-v2";
+}
+
+/** Stadia fallback when MapTiler key is absent. */
+export function mapTileFallbackUrl(mode?: string): string {
+  return isTwoWheeled(mode)
+    ? "https://tiles.stadiamaps.com/tiles/osm_bright/{z}/{x}/{y}{r}.png"
+    : "https://tiles.stadiamaps.com/tiles/alidade_smooth/{z}/{x}/{y}{r}.png";
 }
 
 export function mapProfile(
@@ -672,7 +680,7 @@ function LiveMapInner({
       const style = mapTileStyle(transportMode);
       const tileUrl = maptilerKey
         ? `https://api.maptiler.com/maps/${style}/{z}/{x}/{y}.png?key=${maptilerKey}`
-        : "https://tiles.stadiamaps.com/tiles/alidade_smooth/{z}/{x}/{y}{r}.png";
+        : mapTileFallbackUrl(transportMode);
       const attribution = maptilerKey
         ? '&copy; <a href="https://www.maptiler.com/copyright/">MapTiler</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
         : '&copy; <a href="https://stadiamaps.com/">Stadia Maps</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
@@ -736,8 +744,7 @@ function LiveMapInner({
     layerRef.current?.setOpacity(tileOpacity);
   }, [tileOpacity]);
 
-  // Swap tile layer when transport mode switches between car and two-wheeled
-  // (outdoor tiles for bikes/scooters/motos, bright-v2 for everything else).
+  // Swap tile layer when transport mode switches between car and two-wheeled.
   useEffect(() => {
     const m = mapRef.current;
     const oldLayer = layerRef.current;
@@ -848,24 +855,41 @@ function LiveMapInner({
             }
             const muted = zonesVisualStyle === "muted";
             const pickZone = zonesVisualStyle === "pick_zone";
+            const bikeMap = isTwoWheeled(transportMode);
             const isHighlighted = selected || isCurrentZone;
-            const strokeColor = color;
+            let strokeColor: string;
+            let fillColor = color;
             let strokeWeight: number;
             let fillOp: number;
             let dashArr: string | undefined;
             let strokeOp: number;
 
-            if (pickZone) {
+            if (bikeMap) {
+              // Two-wheeled: neutral borders, barely-there fills — map detail stays readable.
+              strokeColor = isHighlighted
+                ? "rgba(71, 85, 105, 0.72)"
+                : "rgba(100, 116, 139, 0.38)";
+              strokeWeight = isHighlighted ? 2 : 1.2;
+              fillOp = isHighlighted ? (selected ? 0.1 : 0.07) : 0.035;
+              dashArr = isHighlighted ? undefined : "5 4";
+              strokeOp = 1;
+              fillColor = isHighlighted
+                ? "rgba(148, 163, 184, 0.35)"
+                : "rgba(148, 163, 184, 0.2)";
+            } else if (pickZone) {
+              strokeColor = color;
               strokeWeight = isHighlighted ? 2.75 : 1.75;
               fillOp = isHighlighted ? (selected ? 0.32 : 0.22) : 0.14;
               dashArr = isHighlighted ? undefined : "7 5";
               strokeOp = isHighlighted ? 1 : 0.82;
             } else if (muted) {
+              strokeColor = color;
               strokeWeight = isHighlighted ? 2.5 : 1.6;
               fillOp = isHighlighted ? (selected ? 0.26 : 0.18) : 0.12;
               dashArr = isHighlighted ? undefined : "6 5";
               strokeOp = isHighlighted ? 0.95 : 0.72;
             } else {
+              strokeColor = color;
               strokeWeight = isHighlighted ? 2.75 : 1.85;
               fillOp = isHighlighted ? (selected ? 0.3 : 0.2) : 0.15;
               dashArr = isHighlighted ? undefined : "7 5";
@@ -881,7 +905,7 @@ function LiveMapInner({
             const poly = L.polygon(latlngs, {
               color: strokeColor,
               weight: strokeWeight,
-              fillColor: color,
+              fillColor: fillColor,
               fillOpacity: fillOp,
               opacity: strokeOp,
               dashArray: dashArr,
@@ -901,7 +925,7 @@ function LiveMapInner({
     return () => {
       aborted = true;
     };
-  }, [zones, selectedZoneId, currentZoneId, showZones, interactive, onZoneSelect, mapReady, audienceRole, zonesVisualStyle]);
+  }, [zones, selectedZoneId, currentZoneId, showZones, interactive, onZoneSelect, mapReady, audienceRole, zonesVisualStyle, transportMode]);
 
   useEffect(() => {
     const group = checkpointLayerRef.current;
