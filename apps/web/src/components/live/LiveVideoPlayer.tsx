@@ -114,12 +114,18 @@ export function LiveVideoPlayer({
   const showError = (signalError || timedOut) && !remoteStream;
 
   return (
-    <div className={`relative overflow-hidden bg-black ${className ?? "aspect-[9/16] w-full"}`}>
+    <div
+      className={`relative flex items-center justify-center overflow-hidden bg-black ${className ?? "aspect-[9/16] w-full"}`}
+    >
       <video
         ref={ref}
         playsInline
         autoPlay
-        className={`h-full w-full ${objectFit === "contain" ? "object-contain" : "object-cover"}`}
+        className={
+          objectFit === "contain"
+            ? "max-h-full max-w-full object-contain"
+            : "h-full w-full object-cover"
+        }
       />
       {viewerConnecting ? (
         <div className="absolute inset-0 flex items-center justify-center bg-black/60 text-xs text-muted-foreground">

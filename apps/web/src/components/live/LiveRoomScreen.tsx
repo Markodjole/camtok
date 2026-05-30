@@ -2127,8 +2127,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
       {/* WebRTC dashcam panel — top 33%, native aspect (no crop) */}
       <div
-        className="absolute inset-x-0 top-0 z-0 flex items-center justify-center bg-black"
-        style={{ height: "33dvh" }}
+        className="absolute inset-x-0 top-0 z-[8] flex items-center justify-center overflow-hidden bg-black"
+        style={{ height: "33dvh", minHeight: "33dvh" }}
       >
         <LiveVideoPlayer
           liveSessionId={room.liveSessionId}
@@ -2137,8 +2137,11 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         />
       </div>
 
-      {/* Map panel — bottom 67% of screen */}
-      <div className="absolute inset-x-0 bottom-0 z-0" style={{ top: "33dvh" }}>
+      {/* Map panel — bottom 67% of screen; clip rotated map bleed */}
+      <div
+        className="absolute inset-x-0 bottom-0 z-0 overflow-hidden"
+        style={{ top: "33dvh" }}
+      >
         <LiveMap
           routePoints={routePoints}
           className="h-full w-full"
