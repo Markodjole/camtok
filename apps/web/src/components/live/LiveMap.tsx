@@ -848,42 +848,44 @@ function LiveMapInner({
             }
             const muted = zonesVisualStyle === "muted";
             const pickZone = zonesVisualStyle === "pick_zone";
-            // Very subtle dashed borders — grid is a hint, not a feature.
-            const LINE_CURRENT = "rgba(71, 85, 105, 0.5)";   // active/selected cell
-            const LINE_OTHER   = "rgba(100, 116, 139, 0.25)"; // all other cells
-            let strokeColor: string;
+            const isHighlighted = selected || isCurrentZone;
+            const strokeColor = color;
             let strokeWeight: number;
-            let fillC: string;
             let fillOp: number;
             let dashArr: string | undefined;
+            let strokeOp: number;
+
             if (pickZone) {
-              const isOurCell = isCurrentZone || selected;
-              strokeColor = isOurCell ? LINE_CURRENT : LINE_OTHER;
-              strokeWeight = selected ? 1.5 : isCurrentZone ? 1.5 : 0.8;
-              fillC = color;
-              fillOp = isOurCell ? (selected ? 0.14 : 0.09) : 0.02;
-              dashArr = isOurCell ? undefined : "5 5";
+              strokeWeight = isHighlighted ? 2.75 : 1.75;
+              fillOp = isHighlighted ? (selected ? 0.32 : 0.22) : 0.14;
+              dashArr = isHighlighted ? undefined : "7 5";
+              strokeOp = isHighlighted ? 1 : 0.82;
             } else if (muted) {
-              const isOurCell = isCurrentZone || selected;
-              strokeColor = isOurCell ? LINE_CURRENT : LINE_OTHER;
-              strokeWeight = isOurCell ? 1.5 : 0.8;
-              fillC = color;
-              fillOp = isOurCell ? (selected ? 0.08 : 0.06) : 0.02;
-              dashArr = "5 5";
+              strokeWeight = isHighlighted ? 2.5 : 1.6;
+              fillOp = isHighlighted ? (selected ? 0.26 : 0.18) : 0.12;
+              dashArr = isHighlighted ? undefined : "6 5";
+              strokeOp = isHighlighted ? 0.95 : 0.72;
             } else {
-              strokeColor = (selected || isCurrentZone) ? LINE_CURRENT : LINE_OTHER;
-              strokeWeight = (selected || isCurrentZone) ? 1.5 : 0.8;
-              fillC = color;
-              fillOp = selected ? 0.07 : isCurrentZone ? 0.04 : 0.03;
-              dashArr = "5 5";
+              strokeWeight = isHighlighted ? 2.75 : 1.85;
+              fillOp = isHighlighted ? (selected ? 0.3 : 0.2) : 0.15;
+              dashArr = isHighlighted ? undefined : "7 5";
+              strokeOp = isHighlighted ? 1 : 0.85;
             }
+
+            if (!isActive) {
+              fillOp *= 0.45;
+              strokeOp *= 0.5;
+              dashArr = dashArr ?? "4 4";
+            }
+
             const poly = L.polygon(latlngs, {
               color: strokeColor,
               weight: strokeWeight,
-              fillColor: fillC,
+              fillColor: color,
               fillOpacity: fillOp,
-              opacity: 1,
+              opacity: strokeOp,
               dashArray: dashArr,
+              lineJoin: "round",
             });
             if (interactive && onZoneSelect) {
               poly.on("click", () => onZoneSelect(selected ? null : zone.id));
