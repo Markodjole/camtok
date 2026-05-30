@@ -16,7 +16,7 @@ import { drivingRouteStyleBadges } from "@/lib/live/routing/drivingRouteStyle";
 import { fetchNearbyLandmark, type NearbyLandmark } from "@/lib/live/routing/wikipediaLandmark";
 import { NEXT_TURN_BETS_ENABLED } from "@/lib/live/featureFlags";
 import dynamic from "next/dynamic";
-import type { LiveFeedRow, RoutePoint } from "@/actions/live-feed";
+import type { LiveFeedRow, LiveMarketSlot, RoutePoint } from "@/actions/live-feed";
 import {
   LIVE_BET_LOCK_DISTANCE_M,
   NEXT_TURN_BET_LOCK_DISTANCE_M,
@@ -29,6 +29,7 @@ import { liveBetRelaxClient } from "@/lib/live/liveBetRelax";
 import { viewerLiveLog, viewerLiveWarn } from "@/lib/live/viewerLiveConsole";
 import { metersBetween } from "@/lib/live/routing/geometry";
 import {
+  BET_OPEN_WINDOW_MS,
   NEXT_TURN_PIN_MAX_M,
   NEXT_TURN_PIN_MIN_M,
 } from "@/lib/live/betting/betWindowConstants";
@@ -95,6 +96,28 @@ const ZONE_BET_ONCE_ORDER: BetTypeV2[] = [
   "zone_exit_time",
 ];
 const ZONE_BET_ONCE_SET = new Set<BetTypeV2>(ZONE_BET_ONCE_ORDER);
+
+type BetFeedSlot = "unified" | "step";
+
+type BetFeedEntry = {
+  marketId: string;
+  slot: BetFeedSlot;
+  shownAtMs: number;
+  market: LiveMarketSlot;
+};
+
+function snapshotBetFeedMarket(market: LiveMarketSlot): LiveMarketSlot {
+  return {
+    ...market,
+    options: market.options.map((o) => ({ ...o })),
+    meta: market.meta ? { ...market.meta } : null,
+  };
+}
+
+function isBetFeedMarketLocked(market: LiveMarketSlot, nowMs: number): boolean {
+  const locksMs = Date.parse(market.locksAt);
+  return Number.isFinite(locksMs) && nowMs >= locksMs;
+}
 
 export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const pathname = usePathname();
@@ -369,6 +392,31 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     baseLeft: 0,
   });
   const showLiveBets = true;
+  const [betFeedEntries, setBetFeedEntries] = useState<BetFeedEntry[]>([]);
+  const betFeedDismissedRef = useRef<Set<string>>(new Set());
+  const dismissBetFeedEntry = useCallback((marketId: string) => {
+    betFeedDismissedRef.current.add(marketId);
+    setBetFeedEntries((prev) => prev.filter((e) => e.marketId !== marketId));
+  }, []);
+  const restoreBetFeedEntry = useCallback(
+    (market: LiveMarketSlot, slot: BetFeedSlot) => {
+      if (isBetFeedMarketLocked(market, Date.now())) return;
+      betFeedDismissedRef.current.delete(market.id);
+      setBetFeedEntries((prev) => {
+        if (prev.some((e) => e.marketId === market.id)) return prev;
+        return [
+          ...prev,
+          {
+            marketId: market.id,
+            slot,
+            shownAtMs: Date.now(),
+            market: snapshotBetFeedMarket(market),
+          },
+        ];
+      });
+    },
+    [],
+  );
   const [joyPortalReady, setJoyPortalReady] = useState(false);
   /** Latched blue-pin position so viewer UI does not jump when /driver-route refreshes. */
   const [stickyViewerPin, setStickyViewerPin] = useState<{
@@ -980,7 +1028,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     } else {
       setLastBetMarketId(market.id);
       setLastBetOptionLabel(pickedLabel);
+      setBetJustPlaced(true);
     }
+    dismissBetFeedEntry(market.id);
     if (market.marketType === "zone_exit_time") {
       const parsed = parseZoneExitMarketMeta(market);
       const startCellKey = parsed?.startCellKey ?? currentZoneCellKey;
@@ -1068,7 +1118,10 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           stepBetJustPlacedTimerRef.current = null;
         }
         setStepBetJustPlaced(false);
-        if (showSheet) setLastBetStepMarketId(null);
+        if (showSheet) {
+          setLastBetStepMarketId(null);
+          restoreBetFeedEntry(market, "step");
+        }
       } else {
         if (betJustPlacedTimerRef.current) {
           clearTimeout(betJustPlacedTimerRef.current);
@@ -1078,6 +1131,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         if (showSheet) {
           setLastBetMarketId(null);
           setLastBetOptionLabel(null);
+          restoreBetFeedEntry(market, "unified");
         }
       }
     };
@@ -1099,11 +1153,6 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         betAcceptedTimerRef.current = setTimeout(() => setBetAcceptedLabel(null), 2500);
         if (isStepBet) {
           setLastBetStepMarketId(market.id);
-          if (stepBetJustPlacedTimerRef.current) clearTimeout(stepBetJustPlacedTimerRef.current);
-          stepBetJustPlacedTimerRef.current = setTimeout(() => {
-            setStepBetJustPlaced(true);
-            stepBetJustPlacedTimerRef.current = null;
-          }, 1000);
         } else {
           // Capture locksAt for the settling chip — stored independently so it
           // survives even if currentMarket goes null briefly between settlement
@@ -1687,30 +1736,13 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   }, [currentMarket?.id]);
 
   /**
-   * Product rule: every bet stays on screen for at most 7 seconds, or until
-   * the viewer commits a bet, whichever comes first. `locks_at` on the
-   * market row is exactly `opens_at + 7 s`, so flipping `betWindowClosed`
-   * the moment `locks_at` passes hides the popup without waiting for the
-   * server to clear `current_market_id`. The bet itself stays bettable on
-   * the server only inside the open window — once locked, attempts return
-   * "Market has locked", so the UI must match that gate.
+   * Product rule: each bet card stays until `locks_at` (≥ 8 s from open) or
+   * until the viewer places a bet — whichever makes it impossible to bet first.
+   * Cards stack independently; a new market does not replace older cards early.
    */
   // Reuse _locksAtMs / marketLocked computed above — no polling needed.
   const betWindowClosed = !!(currentMarket && _locksAtMs != null && marketLocked);
-  /**
-   * Unified bet card visibility: every active bet type renders through the
-   * same compact `BetFeedCard` stack so multiple markets can show at once.
-   */
-  /**
-   * Bet card overlays video or map — do not require `mapExpanded`, or viewers
-   * who stay on the camera fullscreen never see a market.
-   */
-  const showUnifiedBetSheet =
-    showLiveBets &&
-    currentMarket != null &&
-    !viewerHasBetOnCurrentMarket &&
-    !betJustPlaced &&
-    !betWindowClosed;
+  void betWindowClosed;
 
   const viewerHasBetOnStepMarket = Boolean(
     currentStepMarket && lastBetStepMarketId === currentStepMarket.id,
@@ -1719,23 +1751,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     ? new Date(currentStepMarket.locksAt).getTime()
     : null;
   const stepMarketLocked = useDeadlinePassed(stepMarketLockedMs);
-  const showStepBetSheet =
-    showLiveBets &&
-    currentStepMarket != null &&
-    !viewerHasBetOnStepMarket &&
-    !stepBetJustPlaced &&
-    !stepMarketLocked;
   void isLocked;
   void betPanelDismissed;
-
-  const sheetMarketOptions = useMemo<
-    Array<{
-      id: string;
-      label: string;
-      shortLabel?: string;
-      displayOrder: number;
-    }>
-  >(() => currentMarket?.options ?? [], [currentMarket]);
 
   // Zone countdown clock lives inside BetFeedCard.
 
@@ -1748,12 +1765,74 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     !currentMarket ||
     (!liveBetRelaxClient() && isLocked);
 
-  const mapBetSheetOpen = showUnifiedBetSheet;
-
   const viewerCurrentBetHeadline =
     viewerBetOfferType != null ? engineBetHeadline(viewerBetOfferType) : null;
 
   const sheetBetHeadline = viewerCurrentBetHeadline ?? "Live bet";
+
+  useEffect(() => {
+    betFeedDismissedRef.current.clear();
+    setBetFeedEntries([]);
+  }, [room.roomId]);
+
+  useEffect(() => {
+    if (!showLiveBets) return;
+    setBetFeedEntries((prev) => {
+      let next = [...prev];
+      const upsert = (market: LiveMarketSlot, slot: BetFeedSlot) => {
+        if (betFeedDismissedRef.current.has(market.id)) return;
+        if (isBetFeedMarketLocked(market, Date.now())) return;
+        const ix = next.findIndex((e) => e.marketId === market.id);
+        const snap = snapshotBetFeedMarket(market);
+        if (ix >= 0) {
+          next[ix] = { ...next[ix], market: snap };
+        } else {
+          next.push({
+            marketId: market.id,
+            slot,
+            shownAtMs: Date.now(),
+            market: snap,
+          });
+        }
+      };
+      if (currentMarket) upsert(currentMarket, "unified");
+      if (currentStepMarket) upsert(currentStepMarket, "step");
+      return next;
+    });
+  }, [showLiveBets, currentMarket, currentStepMarket]);
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      const now = Date.now();
+      setBetFeedEntries((prev) => {
+        const next = prev.filter((entry) => {
+          if (betFeedDismissedRef.current.has(entry.marketId)) return false;
+          const locked = isBetFeedMarketLocked(entry.market, now);
+          if (locked) {
+            betFeedDismissedRef.current.add(entry.marketId);
+            return false;
+          }
+          return true;
+        });
+        return next.length === prev.length ? prev : next;
+      });
+    }, 300);
+    return () => clearInterval(id);
+  }, []);
+
+  const sortedBetFeedEntries = useMemo(
+    () =>
+      [...betFeedEntries].sort(
+        (a, b) => Date.parse(b.market.opensAt) - Date.parse(a.market.opensAt),
+      ),
+    [betFeedEntries],
+  );
+
+  const mapBetSheetOpen =
+    currentMarket?.marketType === "city_grid" &&
+    sortedBetFeedEntries.some(
+      (e) => e.slot === "unified" && e.marketId === currentMarket.id,
+    );
 
   const driverRouteBadges = useMemo(
     () => drivingRouteStyleBadges(room.drivingRouteStyle, room.transportMode),
@@ -2056,134 +2135,17 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     setPipDragReady(false);
   };
 
-  const stepBetFeedCard =
-    showStepBetSheet && currentStepMarket ? (
-      <BetFeedCard
-        key={currentStepMarket.id}
-        marketType="next_step"
-        title={currentStepMarket.title}
-        referenceCountdown={parseNextStepMarketMeta(currentStepMarket)}
-        selectionDetail={null}
-        marketOptions={currentStepMarket.options ?? []}
-        selectedOptionId={null}
-        onSelectOption={(id) => {
-          if (stepMarketLocked || stepPlacingOptionId || viewerHasBetOnStepMarket) return;
-          if (stepBetJustPlacedTimerRef.current) clearTimeout(stepBetJustPlacedTimerRef.current);
-          stepBetJustPlacedTimerRef.current = setTimeout(() => {
-            setStepBetJustPlaced(true);
-            stepBetJustPlacedTimerRef.current = null;
-          }, 1000);
-          void placeBet(id, currentStepMarket).then(() => {
-            setMapSheetError(null);
-          });
-        }}
-        bettingClosed={!!stepMarketLocked}
-        isPlacing={!!stepPlacingOptionId}
-        error={null}
-        opensAt={currentStepMarket.opensAt}
-        locksAt={currentStepMarket.locksAt}
-        onClose={() => {
-          setStepBetJustPlaced(true);
-        }}
-        onPlaceBet={async () => {
-          const opts = currentStepMarket.options ?? [];
-          if (!opts[0] || stepMarketLocked) return;
-          void placeBet(opts[0].id, currentStepMarket);
-        }}
-        gridMode={false}
-        turnMode={false}
-        oneTapOptionBet
-      />
-    ) : null;
+  const feedEntryIsLive = (entry: BetFeedEntry) =>
+    entry.slot === "unified"
+      ? entry.marketId === currentMarket?.id
+      : entry.marketId === currentStepMarket?.id;
 
-  const unifiedBetFeedCard =
-    showUnifiedBetSheet && currentMarket ? (
-      <BetFeedCard
-        key={currentMarket.id}
-        marketType={currentMarket.marketType}
-        title={currentMarket.title ?? viewerCurrentBetHeadline ?? sheetBetHeadline}
-        referenceCountdown={
-          currentMarket.marketType === "zone_exit_time"
-            ? parseZoneExitMarketMeta(currentMarket)
-            : currentMarket.marketType === "next_step"
-              ? parseNextStepMarketMeta(currentMarket)
-              : null
-        }
-        referenceStreak={
-          currentMarket.marketType === "straight_streak"
-            ? parseStraightStreakMeta(currentMarket)
-            : null
-        }
-        selectionDetail={
-          currentMarket.marketType === "city_grid"
-            ? selectedZone
-              ? selectedZone.name
-              : "Tap map"
-            : null
-        }
-        marketOptions={sheetMarketOptions}
-        selectedOptionId={selectedMapOptionId}
-        onSelectOption={(id) => {
-          setSelectedMapOptionId(id);
-          if (currentMarket.marketType === "city_grid") return;
-          if (
-            sheetBettingClosed ||
-            placingOptionId ||
-            viewerHasBetOnCurrentMarket
-          ) {
-            viewerLiveLog("place_bet_skipped", {
-              optionId: id,
-              sheetBettingClosed,
-              placingOptionId: !!placingOptionId,
-              viewerHasBetOnCurrentMarket,
-            });
-            return;
-          }
-          scheduleBetClose();
-          void placeBet(id).then((result) => {
-            if (result?.ok) {
-              setSelectedZoneId(null);
-              setSelectedCheckpointId(null);
-              setMapSheetError(null);
-            }
-          });
-        }}
-        bettingClosed={sheetBettingClosed}
-        isPlacing={!!placingOptionId}
-        error={mapSheetError}
-        opensAt={currentMarket.opensAt}
-        locksAt={currentMarket.locksAt}
-        onClose={() => {
-          setSelectedZoneId(null);
-          setSelectedCheckpointId(null);
-          setMapSheetError(null);
-        }}
-        onPlaceBet={async () => {
-          if (!selectedMapOptionId || sheetBettingClosed) return;
-          scheduleBetClose();
-          const result = await placeBet(selectedMapOptionId);
-          if (result?.ok) {
-            setSelectedZoneId(null);
-            setSelectedCheckpointId(null);
-            setMapSheetError(null);
-          }
-        }}
-        gridMode={currentMarket.marketType === "city_grid"}
-        turnMode={currentMarket.marketType === "next_turn"}
-        oneTapOptionBet={currentMarket.marketType !== "city_grid"}
-      />
-    ) : null;
-
-  const stepBetOpensMs = currentStepMarket?.opensAt
-    ? Date.parse(currentStepMarket.opensAt)
-    : 0;
-  const unifiedBetOpensMs = currentMarket?.opensAt
-    ? Date.parse(currentMarket.opensAt)
-    : 0;
-  const stepBetRendersAboveUnified =
-    stepBetFeedCard != null &&
-    unifiedBetFeedCard != null &&
-    stepBetOpensMs >= unifiedBetOpensMs;
+  const feedEntryBettingClosed = (entry: BetFeedEntry) => {
+    if (isBetFeedMarketLocked(entry.market, Date.now())) return true;
+    if (!feedEntryIsLive(entry)) return true;
+    if (entry.slot === "unified") return sheetBettingClosed;
+    return !!stepMarketLocked;
+  };
 
   return (
     <div className="relative h-[100dvh] w-full overflow-hidden bg-black">
@@ -2549,19 +2511,105 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-44 bg-gradient-to-t from-black/70 to-transparent" />
 
       {/* ── Bet feed (full-width stacked cards) ───────────── */}
-      {(showUnifiedBetSheet || showStepBetSheet) ? (
+      {sortedBetFeedEntries.length > 0 ? (
         <BetFeedStack>
-          {stepBetRendersAboveUnified ? (
-            <>
-              {stepBetFeedCard}
-              {unifiedBetFeedCard}
-            </>
-          ) : (
-            <>
-              {unifiedBetFeedCard}
-              {stepBetFeedCard}
-            </>
-          )}
+          {sortedBetFeedEntries.map((entry) => {
+            const market = entry.market;
+            const isLive = feedEntryIsLive(entry);
+            const bettingClosed = feedEntryBettingClosed(entry);
+            const isUnified = entry.slot === "unified";
+            const referenceCountdown =
+              market.marketType === "zone_exit_time"
+                ? parseZoneExitMarketMeta(market)
+                : market.marketType === "next_step"
+                  ? parseNextStepMarketMeta(market)
+                  : null;
+            const referenceStreak =
+              market.marketType === "straight_streak"
+                ? parseStraightStreakMeta(market)
+                : null;
+            const title =
+              isUnified && isLive
+                ? market.title ?? viewerCurrentBetHeadline ?? sheetBetHeadline
+                : market.title;
+            const selectionDetail =
+              market.marketType === "city_grid" && isLive
+                ? selectedZone
+                  ? selectedZone.name
+                  : "Tap map"
+                : null;
+            return (
+              <BetFeedCard
+                key={entry.marketId}
+                marketType={market.marketType}
+                title={title}
+                referenceCountdown={referenceCountdown}
+                referenceStreak={referenceStreak}
+                selectionDetail={selectionDetail}
+                marketOptions={market.options ?? []}
+                selectedOptionId={
+                  isUnified && isLive && market.marketType === "city_grid"
+                    ? selectedMapOptionId
+                    : null
+                }
+                onSelectOption={(id) => {
+                  if (bettingClosed) return;
+                  if (isUnified) {
+                    setSelectedMapOptionId(id);
+                    if (market.marketType === "city_grid") return;
+                    if (placingOptionId || viewerHasBetOnCurrentMarket) return;
+                    void placeBet(id, market).then((result) => {
+                      if (result?.ok) {
+                        setSelectedZoneId(null);
+                        setSelectedCheckpointId(null);
+                        setMapSheetError(null);
+                      }
+                    });
+                    return;
+                  }
+                  if (stepPlacingOptionId || viewerHasBetOnStepMarket) return;
+                  void placeBet(id, market).then(() => {
+                    setMapSheetError(null);
+                  });
+                }}
+                bettingClosed={bettingClosed}
+                isPlacing={
+                  isUnified
+                    ? isLive && !!placingOptionId
+                    : isLive && !!stepPlacingOptionId
+                }
+                error={isUnified && isLive ? mapSheetError : null}
+                opensAt={market.opensAt}
+                locksAt={market.locksAt}
+                onClose={() => {
+                  if (isUnified) {
+                    setSelectedZoneId(null);
+                    setSelectedCheckpointId(null);
+                    setMapSheetError(null);
+                  }
+                }}
+                onPlaceBet={async () => {
+                  if (bettingClosed) return;
+                  if (isUnified) {
+                    if (!selectedMapOptionId) return;
+                    const result = await placeBet(selectedMapOptionId, market);
+                    if (result?.ok) {
+                      setSelectedZoneId(null);
+                      setSelectedCheckpointId(null);
+                      setMapSheetError(null);
+                    }
+                    return;
+                  }
+                  const opts = market.options ?? [];
+                  if (!opts[0]) return;
+                  void placeBet(opts[0].id, market);
+                }}
+                gridMode={market.marketType === "city_grid"}
+                turnMode={market.marketType === "next_turn"}
+                oneTapOptionBet={market.marketType !== "city_grid"}
+              />
+            );
+          })}
         </BetFeedStack>
       ) : null}
 
@@ -3311,9 +3359,7 @@ function shortOptionLabel(
 /** Full-width stacked bet cards — newest on top, older anchored at bottom. */
 function BetFeedStack({ children }: { children: ReactNode }) {
   return (
-    <div
-      className="bet-feed-stack pointer-events-none fixed inset-x-0 bottom-0 z-[200] flex max-h-[36dvh] flex-col justify-end gap-1 overflow-hidden pb-14"
-    >
+    <div className="bet-feed-stack pointer-events-none fixed inset-x-0 bottom-0 z-[200] flex flex-col justify-end gap-1.5 pb-14">
       {children}
     </div>
   );
