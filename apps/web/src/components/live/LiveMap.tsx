@@ -10,6 +10,10 @@ import {
 } from "react";
 import type { RoutePoint } from "@/actions/live-feed";
 import { metersBetween } from "@/lib/live/routing/geometry";
+import {
+  GOOGLE_TRAFFIC_COLORS,
+  trafficSegmentLatLngs,
+} from "@/lib/live/routing/googleDirections";
 
 function escapeDestinationLabel(s: string): string {
   return s
@@ -234,9 +238,8 @@ export function mapProfile(
     return { zoom: 16 + bonus, lineWeight: 4, showSpeed: true, speedUnit: "kmh" };
   }
   if (isTwoWheeled(mode)) {
-    // Bikes/scooters/motos: higher zoom (more detail) + outdoor tiles show
-    // alleys, cycleways, parking and shortcuts not visible on street maps.
-    return { zoom: 18 + bonus, lineWeight: 4, showSpeed: true, speedUnit: "kmh" };
+    // Bikes/scooters/motos: closer zoom for alleys, cycleways, and shortcuts.
+    return { zoom: 19 + bonus, lineWeight: 4, showSpeed: true, speedUnit: "kmh" };
   }
   // walking / default
   return { zoom: 17 + bonus, lineWeight: 3, showSpeed: false, speedUnit: "none" };
@@ -988,49 +991,48 @@ function LiveMapInner({
           (p) => Number.isFinite(p.lat) && Number.isFinite(p.lng),
         )
       ) {
-        // Traffic density colors (Google Maps convention):
-        //   NORMAL  = green (free flow)
-        //   SLOW    = amber (moderate)
-        //   JAM     = red   (heavy)
-        // All drawn at reduced opacity so they read as an overlay, not the main route.
-        const TRAFFIC_COLOR: Record<string, string> = {
-          NORMAL: "#22c55e",      // green-500
-          SLOW: "#f59e0b",        // amber-400
-          TRAFFIC_JAM: "#ef4444", // red-500
+        const drawGoogleRouteLine = (
+          pts: Array<[number, number]>,
+          color: string,
+          weight: number,
+        ) => {
+          L.polyline(pts, {
+            color: "rgba(255,255,255,0.92)",
+            weight: weight + 3,
+            opacity: 1,
+            lineCap: "round",
+            lineJoin: "round",
+          }).addTo(group);
+          L.polyline(pts, {
+            color,
+            weight,
+            opacity: 1,
+            lineCap: "round",
+            lineJoin: "round",
+          }).addTo(group);
         };
 
         const segments = destinationRouteTraffic;
         if (segments && segments.length > 0) {
           for (const seg of segments) {
-            const start = Math.max(0, seg.startIndex);
-            const end = Math.min(destinationRoute.length - 1, seg.endIndex);
-            if (end <= start) continue;
-            const pts = destinationRoute
-              .slice(start, end + 1)
-              .map((p) => [p.lat, p.lng] as [number, number]);
-            if (pts.length < 2) continue;
-            const color = TRAFFIC_COLOR[seg.speed] ?? TRAFFIC_COLOR.NORMAL;
-            const isBad = seg.speed === "SLOW" || seg.speed === "TRAFFIC_JAM";
-            L.polyline(pts, {
-              color,
-              weight: isBad ? 5 : 4,
-              opacity: isBad ? 0.60 : 0.40,
-              lineCap: "round",
-              lineJoin: "round",
-            }).addTo(group);
+            const slice = trafficSegmentLatLngs(
+              destinationRoute,
+              seg.startIndex,
+              seg.endIndex,
+            );
+            if (slice.length < 2) continue;
+            const pts = slice.map((p) => [p.lat, p.lng] as [number, number]);
+            const color =
+              GOOGLE_TRAFFIC_COLORS[seg.speed] ?? GOOGLE_TRAFFIC_COLORS.NORMAL;
+            const weight =
+              seg.speed === "TRAFFIC_JAM" ? 7 : seg.speed === "SLOW" ? 6 : 5;
+            drawGoogleRouteLine(pts, color, weight);
           }
         } else {
-          // No traffic data — solid semi-transparent blue route line.
           const pts = destinationRoute.map(
             (p) => [p.lat, p.lng] as [number, number],
           );
-          L.polyline(pts, {
-            color: "#3b82f6",
-            weight: 4,
-            opacity: 0.55,
-            lineCap: "round",
-            lineJoin: "round",
-          }).addTo(group);
+          drawGoogleRouteLine(pts, GOOGLE_TRAFFIC_COLORS.NORMAL, 5);
         }
       }
 

@@ -65,10 +65,32 @@ const ROUTES_TRAVEL_MODE: Record<string, string> = {
 export type TrafficSpeed = "NORMAL" | "SLOW" | "TRAFFIC_JAM";
 
 export type TrafficSegment = {
+  /** Inclusive polyline point index. */
   startIndex: number;
+  /** Exclusive polyline point index (Routes API convention). */
   endIndex: number;
   speed: TrafficSpeed;
 };
+
+/** Google Maps traffic palette (green / yellow / red). */
+export const GOOGLE_TRAFFIC_COLORS: Record<TrafficSpeed, string> = {
+  NORMAL: "#34A853",
+  SLOW: "#FBBC04",
+  TRAFFIC_JAM: "#EA4335",
+};
+
+/** Slice route points for one traffic interval (`endIndex` is exclusive). */
+export function trafficSegmentLatLngs(
+  polyline: LatLng[],
+  startIndex: number,
+  endIndexExclusive: number,
+): LatLng[] {
+  const start = Math.max(0, startIndex);
+  let end = Math.min(polyline.length, endIndexExclusive);
+  if (end <= start && start < polyline.length) end = start + 1;
+  if (end - start < 2 && end < polyline.length) end += 1;
+  return polyline.slice(start, end);
+}
 
 export async function fetchGoogleDirectionsRoute(
   from: LatLng,
@@ -212,7 +234,7 @@ export async function fetchGoogleDirectionsRoute(
           speed === "SLOW" || speed === "TRAFFIC_JAM" ? speed : "NORMAL";
         return {
           startIndex: iv.startPolylinePointIndex ?? 0,
-          endIndex: iv.endPolylinePointIndex ?? polyline.length - 1,
+          endIndex: iv.endPolylinePointIndex ?? polyline.length,
           speed: validSpeed,
         };
       })
