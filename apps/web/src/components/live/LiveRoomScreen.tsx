@@ -3312,7 +3312,7 @@ function shortOptionLabel(
 function BetFeedStack({ children }: { children: ReactNode }) {
   return (
     <div
-      className="bet-feed-stack pointer-events-none fixed inset-x-0 bottom-0 z-[200] flex max-h-[36dvh] flex-col justify-end gap-1.5 overflow-hidden px-3 pb-14"
+      className="bet-feed-stack pointer-events-none fixed inset-x-0 bottom-0 z-[200] flex max-h-[36dvh] flex-col justify-end gap-1 overflow-hidden pb-14"
     >
       {children}
     </div>
@@ -3448,13 +3448,17 @@ const BetFeedCard = memo(function BetFeedCard({
   return (
     <div className="bet-feed-enter pointer-events-auto w-full shrink-0">
       <div
-        className="overflow-hidden rounded-xl border border-white/15 shadow-xl backdrop-blur-md"
+        className="overflow-hidden border-t border-white/15 shadow-xl backdrop-blur-md"
         style={{
           backgroundColor: sheetBg,
           transition: "background-color 0.35s ease",
         }}
       >
-        <div className="flex items-center gap-3 px-3 py-2.5">
+        <div className="flex justify-end px-3 pt-1">
+          <FeedTimer locksAt={locksAt} />
+        </div>
+
+        <div className="flex items-center gap-2 px-3 pb-2.5">
           <p className="min-w-0 flex-1 truncate text-sm font-bold tabular-nums text-white">
             {headline}
           </p>
@@ -3480,8 +3484,6 @@ const BetFeedCard = memo(function BetFeedCard({
               {renderOptionButtons()}
             </div>
           )}
-
-          <FeedTimer locksAt={locksAt} />
         </div>
 
         {error ? (
@@ -3498,12 +3500,12 @@ const FeedTimer = memo(function FeedTimer({ locksAt }: { locksAt: string }) {
   const locked = secondsLeft <= 0;
   return (
     <span
-      className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-bold tabular-nums ${
+      className={`shrink-0 rounded px-1.5 py-px text-[10px] font-semibold tabular-nums leading-none ${
         locked
-          ? "bg-red-500/25 text-red-300"
+          ? "bg-red-500/20 text-red-300"
           : secondsLeft < 4
-            ? "bg-amber-500/25 text-amber-200"
-            : "bg-white/10 text-white/60"
+            ? "bg-amber-500/20 text-amber-200"
+            : "text-white/45"
       }`}
       title="Seconds left to place bet"
     >
