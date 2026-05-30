@@ -16,11 +16,14 @@ export function LiveVideoPlayer({
   liveSessionId,
   className,
   objectFit = "cover",
+  objectPosition = "center",
 }: {
   localStream?: MediaStream | null;
   liveSessionId?: string | null;
   className?: string;
   objectFit?: "cover" | "contain";
+  /** e.g. "top" — anchor cover crop from the bottom (mobile dashcam strip). */
+  objectPosition?: "center" | "top";
 }) {
   const ref = useRef<HTMLVideoElement | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
@@ -124,7 +127,7 @@ export function LiveVideoPlayer({
         className={
           objectFit === "contain"
             ? "max-h-full max-w-full object-contain"
-            : "h-full w-full object-cover"
+            : `h-full w-full object-cover${objectPosition === "top" ? " object-top" : ""}`
         }
       />
       {viewerConnecting ? (

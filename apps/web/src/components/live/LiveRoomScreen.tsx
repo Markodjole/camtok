@@ -2133,7 +2133,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         <LiveVideoPlayer
           liveSessionId={room.liveSessionId}
           className="h-full w-full"
-          objectFit="contain"
+          objectFit={isMobileViewport ? "cover" : "contain"}
+          objectPosition={isMobileViewport ? "top" : "center"}
         />
       </div>
 
@@ -2428,6 +2429,11 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
                   : currentMarket.marketType === "next_step"
                     ? parseNextStepMarketMeta(currentMarket)
                     : null
+              }
+              referenceStreak={
+                currentMarket.marketType === "straight_streak"
+                  ? parseStraightStreakMeta(currentMarket)
+                  : null
               }
               selectionDetail={
                 currentMarket.marketType === "city_grid"
@@ -3194,10 +3200,24 @@ function useLiveReferenceSec(
   );
 }
 
+function parseStraightStreakMeta(
+  market: NonNullable<LiveFeedRow["currentMarket"]>,
+): number | null {
+  if (market.marketType !== "straight_streak") return null;
+  const raw = market.meta?.expectedStreak;
+  if (typeof raw === "number" && raw > 0) return Math.round(raw);
+  if (typeof raw === "string") {
+    const n = Number(raw);
+    if (Number.isFinite(n) && n > 0) return Math.round(n);
+  }
+  return null;
+}
+
 function betFeedHeadline(
   marketType: string,
   refSec: number | null,
   title?: string | null,
+  refStreak: number | null = null,
 ): string {
   const sec = refSec != null ? Math.max(0, Math.round(refSec)) : null;
   switch (marketType) {
@@ -3208,7 +3228,9 @@ function betFeedHeadline(
     case "next_turn":
       return "Next turn";
     case "straight_streak":
-      return "Straights in a row";
+      return refStreak != null
+        ? `${refStreak} straight crosses`
+        : "Straight crosses";
     case "city_grid":
       return "Pick grid square";
     case "next_zone":
@@ -3224,13 +3246,26 @@ function betFeedHeadline(
 
 function shortOptionLabel(
   opt: { id: string; label: string; shortLabel?: string },
-  mode: "turn" | "zoneTime" | "compare" | "default",
+  mode: "turn" | "zoneTime" | "compare" | "streak" | "default",
   refSec: number | null,
+  refStreak: number | null = null,
 ): string {
   if (mode === "turn") {
     if (opt.id === "left") return "Left";
     if (opt.id === "right") return "Right";
     return "Straight";
+  }
+  if (mode === "streak") {
+    const n = refStreak ?? (() => {
+      const m = opt.shortLabel?.match(/(\d+)/);
+      return m ? Number(m[1]) : null;
+    })();
+    if (n != null) {
+      if (opt.id === "streak_under" || opt.id.includes("under")) return `< ${n}`;
+      if (opt.id === "streak_at" || opt.id.includes("_at")) return `= ${n}`;
+      if (opt.id === "streak_over" || opt.id.includes("over")) return `> ${n}`;
+    }
+    return opt.shortLabel ?? opt.label;
   }
   if ((mode === "zoneTime" || mode === "compare") && refSec != null) {
     const sec = Math.max(0, Math.round(refSec));
@@ -3239,9 +3274,9 @@ function shortOptionLabel(
     if (opt.id === "exit_over" || opt.id === "step_over" || opt.id.startsWith("gt")) return `> ${sec}s`;
   }
   if (mode === "compare") {
-    if (opt.id.includes("under") || opt.id.startsWith("lt")) return "Faster";
-    if (opt.id.includes("over") || opt.id.startsWith("gt")) return "Slower";
-    if (opt.id.includes("at") || opt.id.startsWith("eq")) return "On time";
+    if (opt.id.includes("under") || opt.id.startsWith("lt")) return "<";
+    if (opt.id.includes("over") || opt.id.startsWith("gt")) return ">";
+    if (opt.id.includes("at") || opt.id.startsWith("eq")) return "=";
   }
   const raw = opt.shortLabel ?? opt.label;
   if (raw.length <= 12) return raw;
@@ -3263,6 +3298,7 @@ const BetFeedCard = memo(function BetFeedCard({
   marketType,
   title,
   referenceCountdown = null,
+  referenceStreak = null,
   selectionDetail,
   marketOptions,
   selectedOptionId,
@@ -3282,6 +3318,7 @@ const BetFeedCard = memo(function BetFeedCard({
   marketType: string;
   title?: string | null;
   referenceCountdown?: { opensAtMs: number; estimatedSec: number } | null;
+  referenceStreak?: number | null;
   selectionDetail: string | null;
   marketOptions: Array<{ id: string; label: string; shortLabel?: string; displayOrder: number }>;
   selectedOptionId: string | null;
@@ -3301,15 +3338,24 @@ const BetFeedCard = memo(function BetFeedCard({
   const elapsed = useBetWindowElapsed(opensAt);
   const sheetBg = betSheetUrgencyBackground(elapsed);
   const refSec = useLiveReferenceSec(referenceCountdown);
-  const headline = betFeedHeadline(marketType, refSec, title);
+  const headline = betFeedHeadline(marketType, refSec, title, referenceStreak);
   const sorted = [...marketOptions].sort((a, b) => a.displayOrder - b.displayOrder);
+  const streakMode =
+    marketType === "straight_streak" ||
+    sorted.some((o) => o.id.startsWith("streak_"));
   const zoneTimeMode =
+    !streakMode &&
     refSec != null &&
     (marketType === "zone_exit_time" ||
       marketType === "next_step" ||
       sorted.some((o) => /exit_|step_/.test(o.id)));
   const zoneTimeOptions = zoneTimeMode
     ? (["exit_under", "exit_at", "exit_over", "step_under", "step_at", "step_over"] as const)
+        .map((id) => sorted.find((o) => o.id === id))
+        .filter((o): o is NonNullable<typeof o> => o != null)
+    : [];
+  const streakOptions = streakMode
+    ? (["streak_under", "streak_at", "streak_over"] as const)
         .map((id) => sorted.find((o) => o.id === id))
         .filter((o): o is NonNullable<typeof o> => o != null)
     : [];
@@ -3322,16 +3368,9 @@ const BetFeedCard = memo(function BetFeedCard({
     !gridMode &&
     !turnMode &&
     !zoneTimeMode &&
+    !streakMode &&
     sorted.length <= 3 &&
     sorted.some((o) => /under|over|at|lt|gt|eq/i.test(o.id));
-
-  const optionMode: "turn" | "zoneTime" | "compare" | "default" = turnMode
-    ? "turn"
-    : zoneTimeMode
-      ? "zoneTime"
-      : compareMode
-        ? "compare"
-        : "default";
 
   const optionBtnClass = (active: boolean, disabled: boolean) =>
     [
@@ -3399,6 +3438,20 @@ const BetFeedCard = memo(function BetFeedCard({
                 className={optionBtnClass(selectedOptionId === opt.id, bettingClosed || isPlacing)}
               >
                 {shortOptionLabel(opt, "zoneTime", refSec)}
+              </button>
+            ))}
+          </div>
+        ) : streakMode ? (
+          <div className="grid grid-cols-3 gap-1.5 px-3 pb-2.5">
+            {streakOptions.map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => void onSelectOption(opt.id)}
+                disabled={bettingClosed || isPlacing}
+                className={optionBtnClass(selectedOptionId === opt.id, bettingClosed || isPlacing)}
+              >
+                {shortOptionLabel(opt, "streak", refSec, referenceStreak)}
               </button>
             ))}
           </div>
