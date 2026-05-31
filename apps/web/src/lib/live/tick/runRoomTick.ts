@@ -37,14 +37,13 @@ import {
   ZONE_EXIT_CENTER_TRIGGER_M,
   ZONE_EXIT_OUTER_TRIGGER_MIN_M,
 } from "@/lib/live/betting/betWindowConstants";
-import { betSchedulePriority, getFillerEntries } from "@/lib/live/betting/betScheduleConfig";
 import {
+  betSchedulePriority,
   evaluateBetOpen,
-  filterTriggersByPolicy,
-  BET_OPEN_POLICY,
+  triggerCellDwellMs,
   type BetOpenContext,
   type BetTriggerType,
-} from "@/lib/live/betting/betOpenPolicy";
+} from "@/lib/live/betting/betScheduleConfig";
 import {
   buildBetOpenContext,
   loadBetSchedulerState,
@@ -372,6 +371,7 @@ export async function runRoomTick(
   const { eligible: rawFreshTriggers, routeCtx } = detectResult;
 
   const mainMarketType = await resolveMainMarketType(service, marketIdNow);
+  const stepMarketOpen = await resolveStepMarketOpen(service, stepMarketIdNow);
   const openCtx = buildBetOpenContext(
     scheduler,
     {
@@ -380,8 +380,8 @@ export async function runRoomTick(
       current_step_market_id: stepMarketIdNow,
     },
     mainMarketType,
+    stepMarketOpen,
   );
-  const freshTriggers = filterTriggersByPolicy(rawFreshTriggers, openCtx);
 
   if (phaseNow === "market_open") {
     const updatedQueue = buildUpdatedQueue(currentQueue, rawFreshTriggers);
@@ -392,66 +392,95 @@ export async function runRoomTick(
         .eq("id", roomId);
     }
 
+    if (
+      !stepMarketIdNow &&
+      NEXT_STEP_BETS_ENABLED &&
+      evaluateBetOpen("next_step", openCtx).allowed
+    ) {
+      const stepTrigger = rawFreshTriggers.find((t) => t.type === "next_step");
+      if (stepTrigger) {
+        const res = await openNextStepMarketForRoom(roomId, {
+          windowMs: BET_OPEN_WINDOW_IDLE_MS,
+          stepKey: stepTrigger.stepKey,
+          stepLat: stepTrigger.stepLat,
+          stepLng: stepTrigger.stepLng,
+          maneuverType: stepTrigger.maneuverType,
+          maneuverModifier: stepTrigger.maneuverModifier,
+          stepName: stepTrigger.maneuverType === "camera" ? undefined : stepTrigger.stepName,
+        });
+        if ("marketId" in res && res.marketId) {
+          scheduler = await recordBetOpened(service, roomId, scheduler);
+          return {
+            action: "opened_next_step_concurrent",
+            marketId: res.marketId,
+            queued: updatedQueue.length,
+            settled: settleNotes,
+          };
+        }
+      }
+    }
+
     return { action: "market_open_queued", queued: updatedQueue.length, settled: settleNotes };
   }
 
   if (phaseNow === "waiting_for_next_market") {
-    const opened = await openFromQueueOrTriggers(
+    const result = await tryOpenPendingBets(
       service,
       roomId,
+      sessionId,
       currentQueue,
-      freshTriggers,
+      rawFreshTriggers,
       openCtx,
+      scheduler,
+      routeCtx,
+      firedKeys,
     );
-    if ("scheduler" in opened && opened.scheduler) {
-      scheduler = opened.scheduler;
-    }
-
-    if (opened.action === "no_eligible_bet") {
-      const fillerOpened = await tryFillerNextStep(
-        service,
-        roomId,
-        sessionId,
-        routeCtx,
-        firedKeys,
-        openCtx,
-        scheduler,
-      );
-      if (fillerOpened) {
-        return {
-          action: fillerOpened.action,
-          ...(fillerOpened.detail ?? {}),
-          settled: settleNotes,
-        };
-      }
-    }
-
-    return { action: opened.action, ...(opened.detail ?? {}), settled: settleNotes };
+    return {
+      action: result.action,
+      ...(result.detail ?? {}),
+      settled: settleNotes,
+    };
   }
 
-  if (phaseNow === "market_locked" && marketId) {
+  if (phaseNow === "market_locked" && marketIdNow) {
     // Check market type before settling.  Engine-driven markets (zone_exit_time)
     // must wait for sweepPendingSettlements / shouldSettleEngineMarket — settling
     // here would fire before the driver has had a chance to exit the zone.
     const { data: lockedMarket } = await service
       .from("live_betting_markets")
       .select("market_type")
-      .eq("id", marketId)
+      .eq("id", marketIdNow)
       .maybeSingle();
     const lockedType = (lockedMarket as { market_type?: string } | null)?.market_type ?? "";
 
     if (isEngineMarketType(lockedType)) {
-      // Correct state: locked but waiting for engine settlement condition.
-      // sweepPendingSettlements will settle this when shouldSettleEngineMarket fires.
       console.log(
-        `[tick] engine market ${marketId} (${lockedType}) locked — awaiting sweep`,
+        `[tick] engine market ${marketIdNow} (${lockedType}) locked — awaiting sweep; draining queue`,
         { roomId },
       );
-      return { action: "engine_market_locked_awaiting_sweep", marketId, settled: settleNotes };
+      const result = await tryOpenPendingBets(
+        service,
+        roomId,
+        sessionId,
+        currentQueue,
+        rawFreshTriggers,
+        openCtx,
+        scheduler,
+        routeCtx,
+        firedKeys,
+      );
+      return {
+        action: result.action === "no_eligible_bet"
+          ? "engine_market_locked_awaiting_sweep"
+          : result.action,
+        marketId: marketIdNow,
+        ...(result.detail ?? {}),
+        settled: settleNotes,
+      };
     }
 
     // Non-engine: settle immediately (legacy path for next_turn / city_grid stuck in locked).
-    const r = await revealAndSettleMarket(marketId);
+    const r = await revealAndSettleMarket(marketIdNow);
     if ("error" in r) {
       // Unstick: market may already be settled or the row disappeared.
       await service
@@ -983,6 +1012,89 @@ async function resolveMainMarketType(
   return (data as { market_type: string } | null)?.market_type ?? null;
 }
 
+async function resolveStepMarketOpen(
+  service: Awaited<ReturnType<typeof createServiceClient>>,
+  stepMarketId: string | null,
+): Promise<boolean> {
+  if (!stepMarketId) return false;
+  const { data } = await service
+    .from("live_betting_markets")
+    .select("status")
+    .eq("id", stepMarketId)
+    .maybeSingle();
+  return (data as { status: string } | null)?.status === "open";
+}
+
+async function tryOpenPendingBets(
+  service: Awaited<ReturnType<typeof createServiceClient>>,
+  roomId: string,
+  sessionId: string,
+  currentQueue: QueuedTrigger[],
+  freshTriggers: FreshTrigger[],
+  openCtx: BetOpenContext,
+  scheduler: BetSchedulerState,
+  routeCtx: RouteCtx | null,
+  firedKeys: FiredKeysSnapshot,
+): Promise<{ action: string; detail?: Record<string, unknown>; scheduler: BetSchedulerState }> {
+  let workingScheduler = scheduler;
+  const opened = await openFromQueueOrTriggers(
+    service,
+    roomId,
+    currentQueue,
+    freshTriggers,
+    openCtx,
+  );
+  if (opened.scheduler) {
+    workingScheduler = opened.scheduler;
+  }
+
+  if (opened.action !== "no_eligible_bet") {
+    return { ...opened, scheduler: workingScheduler };
+  }
+
+  const fillerOpened = await tryFillerNextStep(
+    service,
+    roomId,
+    sessionId,
+    routeCtx,
+    firedKeys,
+    openCtx,
+    workingScheduler,
+  );
+  if (fillerOpened) {
+    return {
+      action: fillerOpened.action,
+      detail: fillerOpened.detail,
+      scheduler: workingScheduler,
+    };
+  }
+
+  if (NEXT_STEP_BETS_ENABLED) {
+    const stepTrigger = freshTriggers.find((t) => t.type === "next_step");
+    if (stepTrigger && evaluateBetOpen("next_step", openCtx).allowed) {
+      const res = await openNextStepMarketForRoom(roomId, {
+        windowMs: BET_OPEN_WINDOW_IDLE_MS,
+        stepKey: stepTrigger.stepKey,
+        stepLat: stepTrigger.stepLat,
+        stepLng: stepTrigger.stepLng,
+        maneuverType: stepTrigger.maneuverType,
+        maneuverModifier: stepTrigger.maneuverModifier,
+        stepName: stepTrigger.maneuverType === "camera" ? undefined : stepTrigger.stepName,
+      });
+      if ("marketId" in res && res.marketId) {
+        workingScheduler = await recordBetOpened(service, roomId, workingScheduler);
+        return {
+          action: "opened_next_step",
+          detail: { marketId: res.marketId },
+          scheduler: workingScheduler,
+        };
+      }
+    }
+  }
+
+  return { action: opened.action, detail: opened.detail, scheduler: workingScheduler };
+}
+
 // ─── Pure helper: filter OSRM steps to eligible next_step candidates ─────────
 
 /**
@@ -1435,11 +1547,11 @@ async function detectEligibleTriggers(
           eligible.push({ type: "zone_exit_time", phase: "exit_outer", cellKey, capturedZone });
         }
 
-        // city_grid / next_zone — after cell dwell (betOpenPolicy), not on entry.
+        // city_grid / next_zone — after cell dwell (betScheduleConfig), not on entry.
         const dwellMs = schedulerNext.cellDwell?.cellKey === cellKey
           ? nowMs - schedulerNext.cellDwell.enteredAtMs
           : 0;
-        const dwellRule = BET_OPEN_POLICY.triggers.next_zone.cellDwellMs ?? 0;
+        const dwellRule = triggerCellDwellMs("next_zone") ?? 0;
         if (!fired.cityGrid.has(cellKey) && dwellMs >= dwellRule) {
           eligible.push({ type: "next_zone", cellKey });
         }

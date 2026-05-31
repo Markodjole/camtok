@@ -3,7 +3,7 @@
  * Stored in live_rooms.bet_scheduler_state (jsonb).
  */
 
-import type { BetOpenContext } from "@/lib/live/betting/betOpenPolicy";
+import type { BetOpenContext } from "@/lib/live/betting/betScheduleConfig";
 import type { createServiceClient } from "@/lib/supabase/server";
 
 type ServiceClient = Awaited<ReturnType<typeof createServiceClient>>;
@@ -34,7 +34,6 @@ export function parseBetSchedulerState(raw: unknown): BetSchedulerState {
   return { cellDwell, lastBetOpenedAtMs };
 }
 
-/** Advance cell dwell when the driver moves to a new grid cell. */
 export function nextCellDwellState(
   prev: BetSchedulerState,
   cellKey: string | null,
@@ -60,6 +59,7 @@ export function buildBetOpenContext(
     current_step_market_id: string | null;
   },
   mainMarketType: string | null,
+  stepMarketOpen: boolean,
   nowMs: number = Date.now(),
 ): BetOpenContext {
   return {
@@ -70,9 +70,11 @@ export function buildBetOpenContext(
       phase: room.phase,
       marketId: room.current_market_id,
       marketType: mainMarketType,
+      bettingOpen: room.phase === "market_open" && room.current_market_id != null,
     },
     stepSlot: {
       marketId: room.current_step_market_id,
+      bettingOpen: room.current_step_market_id != null && stepMarketOpen,
     },
   };
 }
@@ -100,23 +102,6 @@ export async function persistBetSchedulerState(
     .from("live_rooms")
     .update({ bet_scheduler_state: state })
     .eq("id", roomId);
-}
-
-export async function syncCellDwellAndPersist(
-  service: ServiceClient,
-  roomId: string,
-  cellKey: string | null,
-  nowMs: number = Date.now(),
-): Promise<BetSchedulerState> {
-  const prev = await loadBetSchedulerState(service, roomId);
-  const next = nextCellDwellState(prev, cellKey, nowMs);
-  if (
-    next.cellDwell?.cellKey !== prev.cellDwell?.cellKey ||
-    next.cellDwell?.enteredAtMs !== prev.cellDwell?.enteredAtMs
-  ) {
-    await persistBetSchedulerState(service, roomId, next);
-  }
-  return next;
 }
 
 export async function recordBetOpened(
