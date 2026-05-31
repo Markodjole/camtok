@@ -1902,10 +1902,12 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const sortedBetFeedEntries = useMemo(
     () =>
       [...betFeedEntries].sort(
-        (a, b) => Date.parse(b.market.opensAt) - Date.parse(a.market.opensAt),
+        (a, b) => Date.parse(a.market.opensAt) - Date.parse(b.market.opensAt),
       ),
     [betFeedEntries],
   );
+
+  const betFeedVisible = sortedBetFeedEntries.length > 0;
 
   const mapBetSheetOpen =
     currentMarket?.marketType === "city_grid" &&
@@ -2253,7 +2255,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         }}
         leftOffsetPx={nearestCamera ? pipSizePx : 0}
       />
-      <BottomNav />
+      {!betFeedVisible ? <BottomNav /> : null}
       <LiveEventToasts
         roomId={room.roomId}
         role="viewer"
@@ -3339,29 +3341,23 @@ function betSheetUrgencyPhase(secondsLeft: number): BetSheetUrgencyPhase {
 
 function betSheetUrgencyStyle(secondsLeft: number): {
   backgroundColor: string;
-  boxShadow: string;
   borderColor: string;
 } {
   switch (betSheetUrgencyPhase(secondsLeft)) {
     case "calm":
       return {
-        backgroundColor: "rgba(30, 46, 32, 0.78)",
-        boxShadow: "0 -4px 18px rgba(0, 0, 0, 0.32)",
-        borderColor: "rgba(255, 255, 255, 0.15)",
+        backgroundColor: "rgba(22, 36, 26, 0.97)",
+        borderColor: "rgba(255, 255, 255, 0.18)",
       };
     case "warn":
       return {
-        backgroundColor: "rgba(50, 46, 22, 0.82)",
-        boxShadow:
-          "0 0 18px rgba(245, 158, 11, 0.3), 0 -4px 18px rgba(0, 0, 0, 0.32)",
-        borderColor: "rgba(251, 191, 36, 0.28)",
+        backgroundColor: "rgba(42, 38, 16, 0.97)",
+        borderColor: "rgba(251, 191, 36, 0.35)",
       };
     case "urgent":
       return {
-        backgroundColor: "rgba(110, 8, 8, 0.94)",
-        boxShadow:
-          "0 0 36px rgba(239, 68, 68, 0.9), 0 -10px 52px rgba(220, 38, 38, 0.75), inset 0 0 0 1px rgba(252, 165, 165, 0.4)",
-        borderColor: "rgba(248, 113, 113, 0.55)",
+        backgroundColor: "rgba(96, 10, 10, 0.98)",
+        borderColor: "rgba(248, 113, 113, 0.5)",
       };
   }
 }
@@ -3458,10 +3454,10 @@ function shortOptionLabel(
   return raw.slice(0, 11) + "…";
 }
 
-/** Full-width stacked bet cards — newest on top, older anchored at bottom. */
+/** Full-width stacked bet cards — oldest above, newest flush to the bottom edge. */
 function BetFeedStack({ children }: { children: ReactNode }) {
   return (
-    <div className="bet-feed-stack pointer-events-none fixed inset-x-0 bottom-0 z-[200] flex flex-col justify-end gap-1 pb-12">
+    <div className="bet-feed-stack pointer-events-none fixed inset-x-0 bottom-0 z-[200] flex flex-col justify-end gap-0 pb-[env(safe-area-inset-bottom,0px)]">
       {children}
     </div>
   );
@@ -3594,12 +3590,11 @@ const BetFeedCard = memo(function BetFeedCard({
   return (
     <div className="bet-feed-enter pointer-events-auto w-full shrink-0">
       <div
-        className="overflow-hidden border-t backdrop-blur-md"
+        className="overflow-hidden border-t"
         style={{
           backgroundColor: sheetStyle.backgroundColor,
-          boxShadow: sheetStyle.boxShadow,
           borderColor: sheetStyle.borderColor,
-          transition: "background-color 0.3s ease, box-shadow 0.3s ease, border-color 0.3s ease",
+          transition: "background-color 0.3s ease, border-color 0.3s ease",
         }}
       >
         <div className="flex items-center gap-1.5 px-2.5 py-1.5">
@@ -3650,7 +3645,7 @@ const FeedTimer = memo(function FeedTimer({ locksAt }: { locksAt: string }) {
     <span
       className={`shrink-0 rounded px-1 py-px text-[10px] font-semibold tabular-nums leading-none ${
         locked || urgent
-          ? "bg-red-600/55 text-red-50 ring-1 ring-red-400/70"
+          ? "bg-red-700/80 text-red-50"
           : warn
             ? "bg-amber-500/30 text-amber-100"
             : "text-white/45"
