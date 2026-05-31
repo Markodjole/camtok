@@ -28,13 +28,6 @@ export const BET_OPEN_WINDOW_MS = 10_000;
  */
 export const BET_OPEN_WINDOW_IDLE_MS = 14_000;
 
-/**
- * Minimum gap between opening two bet popups (main slot or step slot).
- * When zone-exit and time-to-pin would fire together, the lower-priority
- * trigger is queued until this window has passed — usually one bet on screen.
- */
-export const BET_OPEN_STAGGER_MS = 10_000;
-
 // ─── next_zone ────────────────────────────────────────────────────────────────
 
 /** Open next_zone when driver is within this distance of current cell center (m). */
