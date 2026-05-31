@@ -38,6 +38,21 @@ import {
   ZONE_EXIT_OUTER_TRIGGER_MIN_M,
 } from "@/lib/live/betting/betWindowConstants";
 import { betSchedulePriority, getFillerEntries } from "@/lib/live/betting/betScheduleConfig";
+import {
+  evaluateBetOpen,
+  filterTriggersByPolicy,
+  BET_OPEN_POLICY,
+  type BetOpenContext,
+  type BetTriggerType,
+} from "@/lib/live/betting/betOpenPolicy";
+import {
+  buildBetOpenContext,
+  loadBetSchedulerState,
+  nextCellDwellState,
+  persistBetSchedulerState,
+  recordBetOpened,
+  type BetSchedulerState,
+} from "@/lib/live/betting/betSchedulerState";
 import type { OsrmStep } from "@/lib/live/routing/osrmSteps";
 import {
   evaluateResolutionConditions,
@@ -315,12 +330,15 @@ export async function runRoomTick(
   // ─── 2. Re-read phase + queue ────────────────────────────────────────────
   const { data: room2 } = await service
     .from("live_rooms")
-    .select("phase, current_step_market_id")
+    .select("phase, current_market_id, current_step_market_id")
     .eq("id", roomId)
     .maybeSingle();
   const phaseNow = (room2 as { phase: string } | null)?.phase ?? phase;
-  // Re-read step market id in case sweep just cleared it.
-  const stepMarketIdNow = (room2 as { current_step_market_id: string | null } | null)?.current_step_market_id ?? stepMarketId;
+  const marketIdNow =
+    (room2 as { current_market_id: string | null } | null)?.current_market_id ?? marketId;
+  const stepMarketIdNow =
+    (room2 as { current_step_market_id: string | null } | null)?.current_step_market_id ??
+    stepMarketId;
 
   let currentQueue: QueuedTrigger[] = [];
   try {
@@ -338,17 +356,35 @@ export async function runRoomTick(
   // ─── 3. Detect fresh triggers ────────────────────────────────────────────
   // Load all fired-key data in one batch query (replaces 5 per-type queries).
   const firedKeys = await loadFiredKeysSnapshot(service, sessionId);
-  const { eligible: freshTriggers, routeCtx } = await detectEligibleTriggers(
+  let scheduler = await loadBetSchedulerState(service, roomId);
+  const detectResult = await detectEligibleTriggers(
     service,
     roomId,
     sessionId,
     capturedZone,
     firedKeys,
+    scheduler,
   );
+  if (detectResult.scheduler !== scheduler) {
+    await persistBetSchedulerState(service, roomId, detectResult.scheduler);
+  }
+  scheduler = detectResult.scheduler;
+  const { eligible: rawFreshTriggers, routeCtx } = detectResult;
+
+  const mainMarketType = await resolveMainMarketType(service, marketIdNow);
+  const openCtx = buildBetOpenContext(
+    scheduler,
+    {
+      phase: phaseNow,
+      current_market_id: marketIdNow,
+      current_step_market_id: stepMarketIdNow,
+    },
+    mainMarketType,
+  );
+  const freshTriggers = filterTriggersByPolicy(rawFreshTriggers, openCtx);
 
   if (phaseNow === "market_open") {
-    // Main slot is occupied — queue non-step triggers for later.
-    const updatedQueue = buildUpdatedQueue(currentQueue, freshTriggers);
+    const updatedQueue = buildUpdatedQueue(currentQueue, rawFreshTriggers);
     if (updatedQueue.length !== currentQueue.length) {
       await service
         .from("live_rooms")
@@ -356,58 +392,37 @@ export async function runRoomTick(
         .eq("id", roomId);
     }
 
-    // Step slot is independent — open a pin/camera bet while the zone/turn bet runs.
-    const stepSlotFree = !stepMarketIdNow;
-    if (stepSlotFree && NEXT_STEP_BETS_ENABLED) {
-      const stepTrigger = freshTriggers.find((t) => t.type === "next_step");
-      if (stepTrigger) {
-        const res = await openNextStepMarketForRoom(roomId, {
-          windowMs: BET_OPEN_WINDOW_IDLE_MS,
-          stepKey: stepTrigger.stepKey,
-          stepLat: stepTrigger.stepLat,
-          stepLng: stepTrigger.stepLng,
-          maneuverType: stepTrigger.maneuverType,
-          maneuverModifier: stepTrigger.maneuverModifier,
-          stepName: stepTrigger.maneuverType === "camera" ? undefined : stepTrigger.stepName,
-        });
-        if ("marketId" in res && res.marketId) {
-          return { action: "opened_next_step_concurrent", marketId: res.marketId, queued: updatedQueue.length, settled: settleNotes };
-        }
-      }
-      const fillerOpened = await tryFillerNextStep(service, roomId, sessionId, routeCtx, firedKeys);
-      if (fillerOpened) {
-        return { action: fillerOpened.action, ...(fillerOpened.detail ?? {}), queued: updatedQueue.length, settled: settleNotes };
-      }
-    }
-
     return { action: "market_open_queued", queued: updatedQueue.length, settled: settleNotes };
   }
 
   if (phaseNow === "waiting_for_next_market") {
-    const opened = await openFromQueueOrTriggers(service, roomId, currentQueue, freshTriggers);
-
-    if (opened.action === "no_eligible_bet") {
-      const fillerOpened = await tryFillerNextStep(service, roomId, sessionId, routeCtx, firedKeys);
-      if (fillerOpened) {
-        return { action: fillerOpened.action, ...(fillerOpened.detail ?? {}), settled: settleNotes };
-      }
+    const opened = await openFromQueueOrTriggers(
+      service,
+      roomId,
+      currentQueue,
+      freshTriggers,
+      openCtx,
+    );
+    if ("scheduler" in opened && opened.scheduler) {
+      scheduler = opened.scheduler;
     }
 
-    if (!stepMarketIdNow && NEXT_STEP_BETS_ENABLED) {
-      const stepTrigger = freshTriggers.find((t) => t.type === "next_step");
-      if (stepTrigger && opened.action !== "opened_next_step" && opened.action !== "opened_next_step_filler_fwd") {
-        const res = await openNextStepMarketForRoom(roomId, {
-          windowMs: BET_OPEN_WINDOW_IDLE_MS,
-          stepKey: stepTrigger.stepKey,
-          stepLat: stepTrigger.stepLat,
-          stepLng: stepTrigger.stepLng,
-          maneuverType: stepTrigger.maneuverType,
-          maneuverModifier: stepTrigger.maneuverModifier,
-          stepName: stepTrigger.maneuverType === "camera" ? undefined : stepTrigger.stepName,
-        });
-        if ("marketId" in res && res.marketId) {
-          console.log(`[tick] opened concurrent step bet ${res.marketId} alongside main slot`, { roomId });
-        }
+    if (opened.action === "no_eligible_bet") {
+      const fillerOpened = await tryFillerNextStep(
+        service,
+        roomId,
+        sessionId,
+        routeCtx,
+        firedKeys,
+        openCtx,
+        scheduler,
+      );
+      if (fillerOpened) {
+        return {
+          action: fillerOpened.action,
+          ...(fillerOpened.detail ?? {}),
+          settled: settleNotes,
+        };
       }
     }
 
@@ -568,8 +583,10 @@ async function openFromQueueOrTriggers(
   roomId: string,
   queue: QueuedTrigger[],
   fresh: FreshTrigger[],
-): Promise<{ action: string; detail?: Record<string, unknown> }> {
+  openCtx: BetOpenContext,
+): Promise<{ action: string; detail?: Record<string, unknown>; scheduler?: BetSchedulerState }> {
   const now = Date.now();
+  let scheduler = await loadBetSchedulerState(service, roomId);
 
   // Re-read phase to guard against interleaved ticks that slipped through
   // before the lock was added.
@@ -608,6 +625,12 @@ async function openFromQueueOrTriggers(
 
   for (let i = 0; i < unified.length; i++) {
     const item = unified[i]!;
+    const triggerType = item.trigger.type as BetTriggerType;
+    const gate = evaluateBetOpen(triggerType, openCtx);
+    if (!gate.allowed) {
+      continue;
+    }
+
     // remaining = how many lower-priority items are still waiting
     const remaining = unified.length - 1 - i;
 
@@ -619,6 +642,7 @@ async function openFromQueueOrTriggers(
     }
 
     if ("marketId" in res && res.marketId) {
+      scheduler = await recordBetOpened(service, roomId, scheduler, now);
       // Success: write the queue minus the trigger we just opened + expired items.
       const openedKey = item.source === "queue" ? triggerKey(item.trigger) : null;
       const remainingQueue = validQueue.filter(
@@ -632,6 +656,7 @@ async function openFromQueueOrTriggers(
       return {
         action: `opened_${item.trigger.type}${label}`,
         detail: { marketId: res.marketId, trigger: item.trigger },
+        scheduler,
       };
     }
 
@@ -804,9 +829,12 @@ async function tryFillerNextStep(
   sessionId: string,
   routeCtx: RouteCtx | null,
   fired: FiredKeysSnapshot,
+  openCtx: BetOpenContext,
+  scheduler: BetSchedulerState,
 ): Promise<{ action: string; detail?: Record<string, unknown> } | null> {
   if (!NEXT_STEP_BETS_ENABLED) return null;
   if (!routeCtx) return null;
+  if (!evaluateBetOpen("next_step", openCtx).allowed) return null;
 
   // ── PRIMARY: forward-pin retry (200 m ahead on Google Maps polyline) ────────
   //
@@ -843,6 +871,7 @@ async function tryFillerNextStep(
         });
 
         if ("marketId" in res && res.marketId) {
+          await recordBetOpened(service, roomId, scheduler);
           return { action: "opened_next_step_filler_fwd", detail: { marketId: res.marketId } };
         }
 
@@ -912,6 +941,7 @@ async function tryFillerNextStep(
     });
 
     if ("marketId" in res && res.marketId) {
+      await recordBetOpened(service, roomId, scheduler);
       return { action: "opened_next_step_filler_osrm", detail: { marketId: res.marketId } };
     }
 
@@ -936,13 +966,22 @@ type RouteCtx = {
 
 type DetectResult = {
   eligible: FreshTrigger[];
-  /**
-   * Route context that the filler path can reuse without re-fetching.
-   * Always non-null when GPS is available — planningPolyline/osrmSteps
-   * may still be null when the route calculation failed.
-   */
   routeCtx: RouteCtx | null;
+  scheduler: BetSchedulerState;
 };
+
+async function resolveMainMarketType(
+  service: Awaited<ReturnType<typeof createServiceClient>>,
+  marketId: string | null,
+): Promise<string | null> {
+  if (!marketId) return null;
+  const { data } = await service
+    .from("live_betting_markets")
+    .select("market_type")
+    .eq("id", marketId)
+    .maybeSingle();
+  return (data as { market_type: string } | null)?.market_type ?? null;
+}
 
 // ─── Pure helper: filter OSRM steps to eligible next_step candidates ─────────
 
@@ -1341,8 +1380,10 @@ async function detectEligibleTriggers(
   sessionId: string,
   capturedZone: string | null,
   fired: FiredKeysSnapshot,
+  scheduler: BetSchedulerState,
 ): Promise<DetectResult> {
   const eligible: FreshTrigger[] = [];
+  let schedulerNext = scheduler;
 
   const { data: gpsRow } = await service
     .from("live_route_snapshots")
@@ -1351,7 +1392,7 @@ async function detectEligibleTriggers(
     .order("recorded_at", { ascending: false })
     .limit(1)
     .maybeSingle();
-  if (!gpsRow) return { eligible, routeCtx: null }; // no position — filler can't run either
+  if (!gpsRow) return { eligible, routeCtx: null, scheduler: schedulerNext };
   const g = gpsRow as {
     normalized_lat: number | null;
     normalized_lng: number | null;
@@ -1374,17 +1415,10 @@ async function detectEligibleTriggers(
         const center = gridCellCenter(spec, parsed.row, parsed.col);
         const distM = metersBetween({ lat, lng }, center);
         const cellKey = `cell:r${parsed.row}:c${parsed.col}`;
+        const nowMs = Date.now();
+        schedulerNext = nextCellDwellState(schedulerNext, cellKey, nowMs);
 
-        // Fire next_zone whenever the driver is anywhere inside the cell
-        // (same entry condition as zone_exit_time "entry").  The old 100 m
-        // center gate blocked most routes because road paths rarely pass
-        // within 100 m of a 500 m cell centre.  The opener still verifies
-        // the driver is within bounds at open time.
-        if (!fired.cityGrid.has(cellKey)) {
-          eligible.push({ type: "next_zone", cellKey });
-        }
-
-        // zone_exit_time phases — read from pre-loaded snapshot (no extra DB hit).
+        // zone_exit_time — on cell entry / center / exit (see betWindowConstants).
         const firedPhases = fired.zonePhases.get(cellKey) ?? new Set<ZoneExitPhase>();
 
         if (!firedPhases.has("entry")) {
@@ -1399,6 +1433,15 @@ async function detectEligibleTriggers(
           distM >= ZONE_EXIT_OUTER_TRIGGER_MIN_M
         ) {
           eligible.push({ type: "zone_exit_time", phase: "exit_outer", cellKey, capturedZone });
+        }
+
+        // city_grid / next_zone — after cell dwell (betOpenPolicy), not on entry.
+        const dwellMs = schedulerNext.cellDwell?.cellKey === cellKey
+          ? nowMs - schedulerNext.cellDwell.enteredAtMs
+          : 0;
+        const dwellRule = BET_OPEN_POLICY.triggers.next_zone.cellDwellMs ?? 0;
+        if (!fired.cityGrid.has(cellKey) && dwellMs >= dwellRule) {
+          eligible.push({ type: "next_zone", cellKey });
         }
       }
     }
@@ -1667,7 +1710,7 @@ async function detectEligibleTriggers(
     osrmSteps: osrmStepsCache,
   };
 
-  return { eligible, routeCtx };
+  return { eligible, routeCtx, scheduler: schedulerNext };
 }
 
 // ─── DB helpers ───────────────────────────────────────────────────────────────

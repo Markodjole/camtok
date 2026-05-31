@@ -5,7 +5,7 @@
  * viewer sees a popup, and when betting is unlocked.
  *
  * Product rules:
- *  - next_zone       → fires ONCE per zone cell when driver ≤ 100 m from cell center
+ *  - next_zone       → fires once per cell after BET_OPEN_POLICY cell dwell (12 s)
  *  - zone_exit_time  → fires up to 3× per zone:
  *                       1) on zone entry (driver inside the cell)
  *                       2) when driver ≤ 70 m from cell center

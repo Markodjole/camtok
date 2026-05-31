@@ -37,12 +37,11 @@ import {
  *
  * ─── Zone flow ───────────────────────────────────────────────────────────────
  *
- *   Zone entry:  zone_exit_time (entry) + city_grid both trigger simultaneously.
- *                zone_exit_time (priority 1) opens first, city_grid queues up
- *                at priority 5 and opens immediately after zone_exit_time settles.
- *   Zone center: zone_exit_time (center_70m) — opens or queues.
+ *   Zone entry:  zone_exit_time (entry) only — city_grid waits 12 s dwell + idle
+ *                (see betOpenPolicy.ts).
+ *   Zone center: zone_exit_time (center_70m) — opens or queues per policy.
  *   Zone exit:   zone_exit_time (exit_outer) — opens or queues.
- *   Gaps between zone events: next_step filler fills dead air.
+ *   Gaps:        next_step filler when policy allows (5 s min gap, one popup max).
  */
 
 export type BetScheduleEntry = {
@@ -111,8 +110,8 @@ export const BET_SCHEDULE: BetScheduleEntry[] = [
     priority: 5,
     isFiller: false,
     description:
-      "Pick the next 500 m grid square — fires once per cell on zone entry, " +
-      "typically queues behind zone_exit_time and opens immediately after it settles.",
+      "Pick the next 500 m grid square — fires once per cell after 12 s dwell " +
+      "with no other popup on screen (see betOpenPolicy.ts).",
   },
 ];
 
