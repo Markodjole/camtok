@@ -115,6 +115,35 @@ export function cellIdForPosition(
   return cellId(row, col);
 }
 
+/** Parse `grid:r{row}:c{col}` into grid indices. */
+export function parseCellGridId(
+  cellKey: string,
+): { row: number; col: number } | null {
+  const m = /^grid:r(\d+):c(\d+)$/.exec(cellKey);
+  if (!m) return null;
+  return { row: Number(m[1]), col: Number(m[2]) };
+}
+
+/** Orthogonal + diagonal neighbours of a grid cell (in-bounds only). */
+export function neighborCellIds(
+  spec: CityGridSpecCompact,
+  cellKey: string,
+): string[] {
+  const p = parseCellGridId(cellKey);
+  if (!p) return [];
+  const out: string[] = [];
+  for (let dr = -1; dr <= 1; dr += 1) {
+    for (let dc = -1; dc <= 1; dc += 1) {
+      if (dr === 0 && dc === 0) continue;
+      const row = p.row + dr;
+      const col = p.col + dc;
+      if (row < 0 || row >= spec.nRows || col < 0 || col >= spec.nCols) continue;
+      out.push(cellId(row, col));
+    }
+  }
+  return out;
+}
+
 /**
  * Distance in meters from the given point to the nearest edge of its current cell.
  * Returns `null` when point is outside the grid.

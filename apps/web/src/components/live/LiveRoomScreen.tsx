@@ -10,6 +10,7 @@ import {
   distanceToCurrentCellEdgeMeters,
   enumerateGridCells,
   gridCellCenter,
+  neighborCellIds,
   parseGridOptionId,
 } from "@/lib/live/grid/cityGrid500";
 import { drivingRouteStyleBadges } from "@/lib/live/routing/drivingRouteStyle";
@@ -121,6 +122,13 @@ function snapshotBetFeedMarket(market: LiveMarketSlot): LiveMarketSlot {
 function isBetFeedMarketLocked(market: LiveMarketSlot, nowMs: number): boolean {
   const locksMs = Date.parse(market.locksAt);
   return Number.isFinite(locksMs) && nowMs >= locksMs;
+}
+
+/** Estimated popup height for stack layout (px). */
+const BET_FEED_EST_CARD_PX = 56;
+
+function betFeedStackInsetPx(stackFromBottom: number): number {
+  return Math.min(stackFromBottom, 3) * 5;
 }
 
 export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
@@ -1912,6 +1920,38 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     [betFeedEntries],
   );
 
+  const betFeedVisible = sortedBetFeedEntries.length > 0;
+
+  const betMapHighlights = useMemo(() => {
+    const now = Date.now();
+    const open = sortedBetFeedEntries.filter(
+      (e) => !isBetFeedMarketLocked(e.market, now),
+    );
+    let stepPinPulse = false;
+    const zonePulseById: Record<string, "current" | "neighbor"> = {};
+
+    for (const e of open) {
+      const t = e.market.marketType;
+      if (t === "next_step") stepPinPulse = true;
+      if (t === "zone_exit_time" && currentZoneCellKey) {
+        zonePulseById[currentZoneCellKey] = "current";
+      }
+      if (t === "city_grid" && zonesSpec && currentZoneCellKey) {
+        for (const nid of neighborCellIds(zonesSpec, currentZoneCellKey)) {
+          if (zonePulseById[nid] !== "current") {
+            zonePulseById[nid] = "neighbor";
+          }
+        }
+      }
+    }
+
+    return {
+      stepPinPulse,
+      zonePulseById:
+        Object.keys(zonePulseById).length > 0 ? zonePulseById : undefined,
+    };
+  }, [sortedBetFeedEntries, currentZoneCellKey, zonesSpec]);
+
   const mapBetSheetOpen =
     currentMarket?.marketType === "city_grid" &&
     sortedBetFeedEntries.some(
@@ -2258,11 +2298,11 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         }}
         leftOffsetPx={nearestCamera ? pipSizePx : 0}
       />
-      {immersiveLiveRoom ? (
+      {immersiveLiveRoom && !betFeedVisible ? (
         <button
           type="button"
           onClick={() => router.push("/live")}
-          className="fixed bottom-[max(0.75rem,env(safe-area-inset-bottom))] left-3 z-[210] flex h-10 w-10 items-center justify-center rounded-full border border-white/20 bg-black/80 text-base text-white/90 shadow-md active:bg-black/95"
+          className="fixed bottom-[max(0.75rem,env(safe-area-inset-bottom))] left-3 z-[55] flex h-10 w-10 items-center justify-center rounded-full border border-white/20 bg-black/80 text-base text-white/90 active:bg-black/95"
           title="Leave room"
           aria-label="Leave room"
         >
@@ -2357,6 +2397,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           showCheckpoints={true}
           turnTarget={viewerTurnTargetForMap}
           stepPin={stepPin}
+          stepPinPulse={betMapHighlights.stepPinPulse}
+          zonePulseById={betMapHighlights.zonePulseById ?? undefined}
           driverPins={viewerOsrmPreviewPins}
           approachLine={approachLine}
           railPhase={viewerRailPhase}
@@ -2607,8 +2649,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
       {/* ── Bet feed (full-width stacked cards) ───────────── */}
       {sortedBetFeedEntries.length > 0 ? (
-        <BetFeedStack>
-          {sortedBetFeedEntries.map((entry) => {
+        <BetFeedStack count={sortedBetFeedEntries.length}>
+          {sortedBetFeedEntries.map((entry, index) => {
+            const stackFromBottom = sortedBetFeedEntries.length - 1 - index;
             const market = entry.market;
             const isLive = feedEntryIsLive(entry);
             const bettingClosed = feedEntryBettingClosed(entry);
@@ -2636,6 +2679,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             return (
               <BetFeedCard
                 key={entry.marketId}
+                stackFromBottom={stackFromBottom}
+                stackTotal={sortedBetFeedEntries.length}
                 marketType={market.marketType}
                 title={title}
                 referenceCountdown={referenceCountdown}
@@ -3469,15 +3514,28 @@ function shortOptionLabel(
 }
 
 /** Full-width stacked bet cards — oldest above, newest flush to the bottom edge. */
-function BetFeedStack({ children }: { children: ReactNode }) {
+function BetFeedStack({
+  children,
+  count,
+}: {
+  children: ReactNode;
+  count: number;
+}) {
+  const reservePx =
+    count > 0 ? count * BET_FEED_EST_CARD_PX + Math.max(0, count - 1) * 2 : 0;
   return (
-    <div className="bet-feed-stack pointer-events-none fixed inset-x-0 bottom-0 z-[200] flex flex-col justify-end gap-0 pb-[env(safe-area-inset-bottom,0px)]">
+    <div
+      className="bet-feed-stack pointer-events-none fixed inset-x-0 bottom-0 z-[200] flex flex-col justify-end gap-0.5 pb-[env(safe-area-inset-bottom,0px)]"
+      style={{ minHeight: reservePx > 0 ? reservePx : undefined }}
+    >
       {children}
     </div>
   );
 }
 
 const BetFeedCard = memo(function BetFeedCard({
+  stackFromBottom = 0,
+  stackTotal = 1,
   marketType,
   title,
   referenceCountdown = null,
@@ -3497,6 +3555,8 @@ const BetFeedCard = memo(function BetFeedCard({
   turnMode = false,
   oneTapOptionBet = false,
 }: {
+  stackFromBottom?: number;
+  stackTotal?: number;
   marketType: string;
   title?: string | null;
   referenceCountdown?: { opensAtMs: number; estimatedSec: number } | null;
@@ -3602,7 +3662,14 @@ const BetFeedCard = memo(function BetFeedCard({
   };
 
   return (
-    <div className="bet-feed-enter pointer-events-auto w-full shrink-0">
+    <div
+      className="bet-feed-enter pointer-events-auto w-full shrink-0"
+      style={{
+        marginLeft: betFeedStackInsetPx(stackFromBottom),
+        marginRight: betFeedStackInsetPx(stackFromBottom),
+        zIndex: 200 + (stackTotal - stackFromBottom),
+      }}
+    >
       <div
         className="overflow-hidden border-t"
         style={{

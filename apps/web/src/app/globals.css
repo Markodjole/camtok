@@ -90,7 +90,43 @@ body {
 
 .bet-feed-stack > * {
   transition: transform 280ms cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 200ms ease;
+    opacity 200ms ease,
+    margin 280ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Discrete map pulses tied to open bet popups */
+@keyframes camtokStepPinPulse {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 4px rgba(59, 130, 246, 0.35);
+  }
+  50% {
+    opacity: 0.82;
+    box-shadow: 0 0 9px rgba(59, 130, 246, 0.55);
+  }
+}
+
+.camtok-step-pin-head-pulse {
+  animation: camtokStepPinPulse 2.4s ease-in-out infinite;
+}
+
+@keyframes camtokZoneBorderPulse {
+  0%,
+  100% {
+    stroke-opacity: 0.42;
+  }
+  50% {
+    stroke-opacity: 0.88;
+  }
+}
+
+.camtok-zone-pulse-current {
+  animation: camtokZoneBorderPulse 2.6s ease-in-out infinite;
+}
+
+.camtok-zone-pulse-neighbor {
+  animation: camtokZoneBorderPulse 2.8s ease-in-out infinite;
 }
 
 /* Mobile viewport fix */

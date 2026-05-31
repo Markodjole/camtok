@@ -178,11 +178,15 @@ export interface LiveMapProps {
   layoutViewportWidthPx?: number | null;
   /** Muted polygons for engine-highlighted zone overlays. */
   zonesVisualStyle?: "default" | "muted" | "pick_zone";
+  /** Soft pulse on the step pin while a time-to-pin bet popup is open. */
+  stepPinPulse?: boolean;
+  /** Zone cell ids → pulse style (current cell vs neighbouring pick targets). */
+  zonePulseById?: Record<string, "current" | "neighbor">;
   /** Called once when sustained FPS < 30 — parent can disable rotation / reduce work. */
   onPerformanceDegrade?: () => void;
   /** Extra zoom levels (e.g. +1 for active time-to-pin bet on two-wheeled). */
   zoomLevelBonus?: number;
-}
+};
 
 const C = {
   streamer: { line: "#2563eb", lineOp: 0.35, fill: "#4ade80", r: 7 },
@@ -386,6 +390,8 @@ function LiveMapInner({
   viewerZoomRuleKey = null,
   layoutViewportWidthPx = null,
   zonesVisualStyle = "default" as "default" | "muted" | "pick_zone",
+  stepPinPulse = false,
+  zonePulseById,
   onPerformanceDegrade,
   zoomLevelBonus = 0,
 }: LiveMapProps) {
@@ -889,6 +895,7 @@ function LiveMapInner({
             const pickZone = zonesVisualStyle === "pick_zone";
             const bikeMap = isTwoWheeled(transportMode);
             const isHighlighted = selected || isCurrentZone;
+            const pulseKind = zonePulseById?.[zone.id];
             let strokeColor: string;
             let fillColor = color;
             let strokeWeight: number;
@@ -896,7 +903,7 @@ function LiveMapInner({
             let dashArr: string | undefined;
             let strokeOp: number;
 
-            if (bikeMap) {
+            if (bikeMap && !pulseKind) {
               // Two-wheeled: neutral borders, barely-there fills — map detail stays readable.
               strokeColor = isHighlighted
                 ? "rgba(71, 85, 105, 0.72)"
@@ -908,12 +915,20 @@ function LiveMapInner({
               fillColor = isHighlighted
                 ? "rgba(148, 163, 184, 0.35)"
                 : "rgba(148, 163, 184, 0.2)";
-            } else if (pickZone) {
+            } else if (pickZone || pulseKind) {
               strokeColor = color;
-              strokeWeight = isHighlighted ? 2.75 : 1.75;
-              fillOp = isHighlighted ? (selected ? 0.32 : 0.22) : 0.14;
-              dashArr = isHighlighted ? undefined : "7 5";
-              strokeOp = isHighlighted ? 1 : 0.82;
+              strokeWeight =
+                pulseKind === "current" ? 2.6 : isHighlighted ? 2.75 : 1.85;
+              fillOp =
+                pulseKind === "current"
+                  ? 0.16
+                  : isHighlighted
+                    ? selected
+                      ? 0.32
+                      : 0.22
+                    : 0.12;
+              dashArr = isHighlighted || pulseKind ? undefined : "7 5";
+              strokeOp = pulseKind ? 0.78 : isHighlighted ? 1 : 0.82;
             } else if (muted) {
               strokeColor = color;
               strokeWeight = isHighlighted ? 2.5 : 1.6;
@@ -934,6 +949,16 @@ function LiveMapInner({
               dashArr = dashArr ?? "4 4";
             }
 
+            if (pulseKind === "neighbor") {
+              strokeWeight = Math.max(strokeWeight, 2.1);
+              strokeOp = Math.max(strokeOp, 0.72);
+              dashArr = undefined;
+            } else if (pulseKind === "current") {
+              strokeWeight = Math.max(strokeWeight, 2.6);
+              strokeOp = Math.max(strokeOp, 0.82);
+              dashArr = undefined;
+            }
+
             const poly = L.polygon(latlngs, {
               color: strokeColor,
               weight: strokeWeight,
@@ -942,6 +967,12 @@ function LiveMapInner({
               opacity: strokeOp,
               dashArray: dashArr,
               lineJoin: "round",
+              className:
+                pulseKind === "current"
+                  ? "camtok-zone-pulse-current"
+                  : pulseKind === "neighbor"
+                    ? "camtok-zone-pulse-neighbor"
+                    : undefined,
             });
             if (interactive && onZoneSelect) {
               poly.on("click", () => onZoneSelect(selected ? null : zone.id));
@@ -957,7 +988,7 @@ function LiveMapInner({
     return () => {
       aborted = true;
     };
-  }, [zones, selectedZoneId, currentZoneId, showZones, interactive, onZoneSelect, mapReady, audienceRole, zonesVisualStyle, transportMode]);
+  }, [zones, selectedZoneId, currentZoneId, showZones, interactive, onZoneSelect, mapReady, audienceRole, zonesVisualStyle, transportMode, zonePulseById]);
 
   useEffect(() => {
     const group = checkpointLayerRef.current;
@@ -1277,9 +1308,10 @@ function LiveMapInner({
       if (cancelled) return;
 
       // Simple small blue pin — same shape as the destination pin but blue.
+      const pulseClass = stepPinPulse ? " camtok-step-pin-head-pulse" : "";
       const html = `
         <div class="camtok-landmark-screen-flat" style="display:flex;flex-direction:column;align-items:center;transform:rotate(0deg);transform-origin:50% 100%;will-change:transform">
-          <div style="width:14px;height:14px;border-radius:50%;background:#3b82f6;border:2.5px solid #fff;box-shadow:0 0 8px rgba(59,130,246,0.7)"></div>
+          <div class="${pulseClass.trim()}" style="width:14px;height:14px;border-radius:50%;background:#3b82f6;border:2.5px solid #fff;box-shadow:0 0 8px rgba(59,130,246,0.7)"></div>
           <div style="width:2px;height:8px;background:#3b82f6"></div>
           <div style="width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;border-top:6px solid #3b82f6;margin-top:-1px"></div>
         </div>`;
@@ -1316,7 +1348,7 @@ function LiveMapInner({
       });
     })();
     return () => { cancelled = true; };
-  }, [stepPin, mapReady]);
+  }, [stepPin, stepPinPulse, mapReady]);
 
   useEffect(() => {
     const m = mapRef.current;
