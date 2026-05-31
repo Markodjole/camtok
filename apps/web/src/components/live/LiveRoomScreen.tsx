@@ -109,6 +109,9 @@ type BetFeedEntry = {
   slot: BetFeedSlot;
   shownAtMs: number;
   market: LiveMarketSlot;
+  /** Fixed vertical slot — 0 = bottom anchor; never renumbered when siblings leave. */
+  stackSlot: number;
+  betPlaced?: boolean;
 };
 
 function snapshotBetFeedMarket(market: LiveMarketSlot): LiveMarketSlot {
@@ -125,10 +128,17 @@ function isBetFeedMarketLocked(market: LiveMarketSlot, nowMs: number): boolean {
 }
 
 /** Estimated popup height for stack layout (px). */
-const BET_FEED_EST_CARD_PX = 56;
+const BET_FEED_EST_CARD_PX = 62;
 
-function betFeedStackInsetPx(stackFromBottom: number): number {
-  return Math.min(stackFromBottom, 3) * 5;
+function betFeedStackInsetPx(stackSlot: number): number {
+  return Math.min(stackSlot, 3) * 5;
+}
+
+function nextFreeBetFeedStackSlot(entries: BetFeedEntry[]): number {
+  const used = new Set(entries.map((e) => e.stackSlot));
+  let slot = 0;
+  while (used.has(slot)) slot += 1;
+  return slot;
 }
 
 export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
@@ -412,12 +422,25 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     betFeedDismissedRef.current.add(marketId);
     setBetFeedEntries((prev) => prev.filter((e) => e.marketId !== marketId));
   }, []);
+  const markBetFeedPlaced = useCallback((marketId: string) => {
+    setBetFeedEntries((prev) =>
+      prev.map((e) =>
+        e.marketId === marketId ? { ...e, betPlaced: true } : e,
+      ),
+    );
+  }, []);
   const restoreBetFeedEntry = useCallback(
     (market: LiveMarketSlot, slot: BetFeedSlot) => {
       if (isBetFeedMarketLocked(market, Date.now())) return;
       betFeedDismissedRef.current.delete(market.id);
       setBetFeedEntries((prev) => {
-        if (prev.some((e) => e.marketId === market.id)) return prev;
+        if (prev.some((e) => e.marketId === market.id)) {
+          return prev.map((e) =>
+            e.marketId === market.id
+              ? { ...e, betPlaced: false, market: snapshotBetFeedMarket(market) }
+              : e,
+          );
+        }
         return [
           ...prev,
           {
@@ -425,6 +448,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             slot,
             shownAtMs: Date.now(),
             market: snapshotBetFeedMarket(market),
+            stackSlot: nextFreeBetFeedStackSlot(prev),
+            betPlaced: false,
           },
         ];
       });
@@ -1105,7 +1130,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       setLastBetOptionLabel(pickedLabel);
       setBetJustPlaced(true);
     }
-    dismissBetFeedEntry(market.id);
+    markBetFeedPlaced(market.id);
     if (market.marketType === "zone_exit_time") {
       const parsed = parseZoneExitMarketMeta(market);
       const startCellKey = parsed?.startCellKey ?? currentZoneCellKey;
@@ -1870,20 +1895,25 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   useEffect(() => {
     if (!showLiveBets) return;
     setBetFeedEntries((prev) => {
-      let next = [...prev];
+      let next = prev.filter((e) => !betFeedDismissedRef.current.has(e.marketId));
       const upsert = (market: LiveMarketSlot, slot: BetFeedSlot) => {
         if (betFeedDismissedRef.current.has(market.id)) return;
         if (isBetFeedMarketLocked(market, Date.now())) return;
         const ix = next.findIndex((e) => e.marketId === market.id);
         const snap = snapshotBetFeedMarket(market);
         if (ix >= 0) {
-          next[ix] = { ...next[ix], market: snap };
+          next[ix] = {
+            ...next[ix],
+            market: snap,
+            stackSlot: next[ix]!.stackSlot,
+          };
         } else {
           next.push({
             marketId: market.id,
             slot,
             shownAtMs: Date.now(),
             market: snap,
+            stackSlot: nextFreeBetFeedStackSlot(next),
           });
         }
       };
@@ -2276,6 +2306,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       : entry.marketId === currentStepMarket?.id;
 
   const feedEntryBettingClosed = (entry: BetFeedEntry) => {
+    if (entry.betPlaced) return true;
     if (isBetFeedMarketLocked(entry.market, Date.now())) return true;
     if (!feedEntryIsLive(entry)) return true;
     if (entry.slot === "unified") return sheetBettingClosed;
@@ -2672,9 +2703,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
       {/* ── Bet feed (full-width stacked cards) ───────────── */}
       {sortedBetFeedEntries.length > 0 ? (
-        <BetFeedStack count={sortedBetFeedEntries.length}>
-          {sortedBetFeedEntries.map((entry, index) => {
-            const stackFromBottom = sortedBetFeedEntries.length - 1 - index;
+        <BetFeedStack entries={sortedBetFeedEntries}>
+          {(entry) => {
             const market = entry.market;
             const isLive = feedEntryIsLive(entry);
             const bettingClosed = feedEntryBettingClosed(entry);
@@ -2699,13 +2729,18 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
                   ? selectedZone.name
                   : "Tap map"
                 : null;
+            const isPlacingThis =
+              isUnified
+                ? isLive && !!placingOptionId && market.id === currentMarket?.id
+                : isLive && !!stepPlacingOptionId && market.id === currentStepMarket?.id;
             return (
               <BetFeedCard
                 key={entry.marketId}
-                stackFromBottom={stackFromBottom}
-                stackTotal={sortedBetFeedEntries.length}
+                stackSlot={entry.stackSlot}
+                maxStackSlot={Math.max(...sortedBetFeedEntries.map((e) => e.stackSlot))}
                 marketType={market.marketType}
                 title={title}
+                betPlaced={entry.betPlaced}
                 referenceCountdown={referenceCountdown}
                 referenceStreak={referenceStreak}
                 selectionDetail={selectionDetail}
@@ -2720,7 +2755,12 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
                   if (isUnified) {
                     setSelectedMapOptionId(id);
                     if (market.marketType === "city_grid") return;
-                    if (placingOptionId || viewerHasBetOnCurrentMarket) return;
+                    if (
+                      (placingOptionId && market.id === currentMarket?.id) ||
+                      (viewerHasBetOnCurrentMarket && market.id === currentMarket?.id)
+                    ) {
+                      return;
+                    }
                     void placeBet(id, market).then((result) => {
                       if (result?.ok) {
                         setSelectedZoneId(null);
@@ -2730,17 +2770,18 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
                     });
                     return;
                   }
-                  if (stepPlacingOptionId || viewerHasBetOnStepMarket) return;
+                  if (
+                    (stepPlacingOptionId && market.id === currentStepMarket?.id) ||
+                    (viewerHasBetOnStepMarket && market.id === currentStepMarket?.id)
+                  ) {
+                    return;
+                  }
                   void placeBet(id, market).then(() => {
                     setMapSheetError(null);
                   });
                 }}
                 bettingClosed={bettingClosed}
-                isPlacing={
-                  isUnified
-                    ? isLive && !!placingOptionId
-                    : isLive && !!stepPlacingOptionId
-                }
+                isPlacing={isPlacingThis}
                 error={isUnified && isLive ? mapSheetError : null}
                 locksAt={market.locksAt}
                 onClose={() => {
@@ -2771,7 +2812,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
                 oneTapOptionBet={market.marketType !== "city_grid"}
               />
             );
-          })}
+          }}
         </BetFeedStack>
       ) : null}
 
@@ -3536,31 +3577,59 @@ function shortOptionLabel(
   return raw.slice(0, 11) + "…";
 }
 
-/** Full-width stacked bet cards — oldest above, newest flush to the bottom edge. */
+/** Full-width stacked bet cards — fixed slots so cards never jump when one leaves. */
 function BetFeedStack({
+  entries,
   children,
-  count,
 }: {
-  children: ReactNode;
-  count: number;
+  entries: BetFeedEntry[];
+  children: (entry: BetFeedEntry) => ReactNode;
 }) {
+  const maxSlot = Math.max(-1, ...entries.map((e) => e.stackSlot));
+  if (maxSlot < 0) return null;
+  const slotCount = maxSlot + 1;
   const reservePx =
-    count > 0 ? count * BET_FEED_EST_CARD_PX + Math.max(0, count - 1) * 2 : 0;
+    slotCount > 0 ? slotCount * BET_FEED_EST_CARD_PX + Math.max(0, slotCount - 1) * 2 : 0;
+
   return (
     <div
       className="bet-feed-stack pointer-events-none fixed inset-x-0 bottom-0 z-[200] flex flex-col justify-end gap-0.5 pb-[env(safe-area-inset-bottom,0px)]"
       style={{ minHeight: reservePx > 0 ? reservePx : undefined }}
     >
-      {children}
+      {Array.from({ length: slotCount }, (_, i) => maxSlot - i).map((slot) => {
+        const entry = entries.find((e) => e.stackSlot === slot);
+        if (entry) return children(entry);
+        return (
+          <BetFeedSlotPlaceholder
+            key={`bet-feed-slot-${slot}`}
+            stackSlot={slot}
+          />
+        );
+      })}
     </div>
   );
 }
 
+function BetFeedSlotPlaceholder({ stackSlot }: { stackSlot: number }) {
+  return (
+    <div
+      aria-hidden
+      className="pointer-events-none w-full shrink-0"
+      style={{
+        minHeight: BET_FEED_EST_CARD_PX,
+        marginLeft: betFeedStackInsetPx(stackSlot),
+        marginRight: betFeedStackInsetPx(stackSlot),
+      }}
+    />
+  );
+}
+
 const BetFeedCard = memo(function BetFeedCard({
-  stackFromBottom = 0,
-  stackTotal = 1,
+  stackSlot = 0,
+  maxStackSlot = 0,
   marketType,
   title,
+  betPlaced = false,
   referenceCountdown = null,
   referenceStreak = null,
   selectionDetail,
@@ -3578,10 +3647,11 @@ const BetFeedCard = memo(function BetFeedCard({
   turnMode = false,
   oneTapOptionBet = false,
 }: {
-  stackFromBottom?: number;
-  stackTotal?: number;
+  stackSlot?: number;
+  maxStackSlot?: number;
   marketType: string;
   title?: string | null;
+  betPlaced?: boolean;
   referenceCountdown?: { opensAtMs: number; estimatedSec: number } | null;
   referenceStreak?: number | null;
   selectionDetail: string | null;
@@ -3638,7 +3708,7 @@ const BetFeedCard = memo(function BetFeedCard({
 
   const optionBtnClass = (active: boolean, disabled: boolean) =>
     [
-      "flex h-9 min-w-[44px] items-center justify-center rounded-md px-3 text-sm font-bold leading-none transition active:scale-[0.97]",
+      "flex h-10 min-w-[50px] items-center justify-center rounded-lg px-3.5 text-base font-bold leading-none transition active:scale-[0.97]",
       active
         ? "bg-white text-black shadow-md ring-2 ring-white/25"
         : disabled
@@ -3688,9 +3758,10 @@ const BetFeedCard = memo(function BetFeedCard({
     <div
       className="bet-feed-enter pointer-events-auto w-full shrink-0"
       style={{
-        marginLeft: betFeedStackInsetPx(stackFromBottom),
-        marginRight: betFeedStackInsetPx(stackFromBottom),
-        zIndex: 200 + (stackTotal - stackFromBottom),
+        minHeight: BET_FEED_EST_CARD_PX,
+        marginLeft: betFeedStackInsetPx(stackSlot),
+        marginRight: betFeedStackInsetPx(stackSlot),
+        zIndex: 200 + (maxStackSlot - stackSlot),
       }}
     >
       <div
@@ -3708,7 +3779,11 @@ const BetFeedCard = memo(function BetFeedCard({
 
           <FeedTimer locksAt={locksAt} />
 
-          {gridMode ? (
+          {betPlaced ? (
+            <span className="shrink-0 rounded-md bg-emerald-600/80 px-2.5 py-1.5 text-xs font-bold text-white">
+              ✓ Placed
+            </span>
+          ) : gridMode ? (
             <>
               <span className="max-w-[28%] shrink truncate text-[11px] text-white/60">
                 {selectionDetail ?? "Tap map"}
@@ -3718,14 +3793,14 @@ const BetFeedCard = memo(function BetFeedCard({
                   type="button"
                   disabled={bettingClosed || !selectedOptionId || isPlacing}
                   onClick={() => void onPlaceBet()}
-                  className="h-9 shrink-0 rounded-md bg-red-500 px-3.5 text-xs font-bold text-white disabled:bg-white/10 disabled:text-white/35"
+                  className="h-10 shrink-0 rounded-lg bg-red-500 px-4 text-sm font-bold text-white disabled:bg-white/10 disabled:text-white/35"
                 >
                   {isPlacing ? "…" : bettingClosed ? "Closed" : "Bet"}
                 </button>
               ) : null}
             </>
           ) : (
-            <div className="flex shrink-0 items-center gap-1.5">
+            <div className="flex shrink-0 items-center gap-2">
               {renderOptionButtons()}
             </div>
           )}
