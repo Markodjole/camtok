@@ -180,8 +180,10 @@ export interface LiveMapProps {
   zonesVisualStyle?: "default" | "muted" | "pick_zone";
   /** Soft pulse on the step pin while a time-to-pin bet popup is open. */
   stepPinPulse?: boolean;
+  /** Pulse the next-turn pin while a turn bet popup is open. */
+  turnPinPulse?: boolean;
   /** Zone cell ids → pulse style (current cell vs neighbouring pick targets). */
-  zonePulseById?: Record<string, "current" | "neighbor">;
+  zonePulseById?: Record<string, "current" | `neighbor-${number}`>;
   /** Called once when sustained FPS < 30 — parent can disable rotation / reduce work. */
   onPerformanceDegrade?: () => void;
   /** Extra zoom levels (e.g. +1 for active time-to-pin bet on two-wheeled). */
@@ -192,6 +194,35 @@ const C = {
   streamer: { line: "#2563eb", lineOp: 0.35, fill: "#4ade80", r: 7 },
   viewer: { line: "#2563eb", lineOp: 0.35, fill: "#4ade80", r: 7 },
 };
+
+const NEIGHBOR_PULSE_STROKE = [
+  "#a78bfa",
+  "#34d399",
+  "#f472b6",
+  "#38bdf8",
+  "#fb923c",
+  "#facc15",
+  "#e879f9",
+  "#2dd4bf",
+];
+
+function zonePulseClassName(
+  kind: "current" | `neighbor-${number}` | undefined,
+): string | undefined {
+  if (!kind) return undefined;
+  if (kind === "current") return "camtok-zone-pulse-current";
+  const m = /^neighbor-(\d+)$/.exec(kind);
+  if (!m) return "camtok-zone-pulse-neighbor";
+  return `camtok-zone-pulse-neighbor camtok-zone-pulse-neighbor-${Number(m[1]) % 8}`;
+}
+
+function neighborPulseIndex(
+  kind: "current" | `neighbor-${number}` | undefined,
+): number | null {
+  if (!kind || kind === "current") return null;
+  const m = /^neighbor-(\d+)$/.exec(kind);
+  return m ? Number(m[1]) % 8 : null;
+}
 
 function headingDivIcon(
   L: { divIcon: (o: object) => import("leaflet").DivIcon },
@@ -391,6 +422,7 @@ function LiveMapInner({
   layoutViewportWidthPx = null,
   zonesVisualStyle = "default" as "default" | "muted" | "pick_zone",
   stepPinPulse = false,
+  turnPinPulse = false,
   zonePulseById,
   onPerformanceDegrade,
   zoomLevelBonus = 0,
@@ -896,6 +928,7 @@ function LiveMapInner({
             const bikeMap = isTwoWheeled(transportMode);
             const isHighlighted = selected || isCurrentZone;
             const pulseKind = zonePulseById?.[zone.id];
+            const neighborPulseIdx = neighborPulseIndex(pulseKind);
             let strokeColor: string;
             let fillColor = color;
             let strokeWeight: number;
@@ -916,19 +949,30 @@ function LiveMapInner({
                 ? "rgba(148, 163, 184, 0.35)"
                 : "rgba(148, 163, 184, 0.2)";
             } else if (pickZone || pulseKind) {
-              strokeColor = color;
+              strokeColor =
+                neighborPulseIdx != null
+                  ? NEIGHBOR_PULSE_STROKE[neighborPulseIdx]!
+                  : color;
               strokeWeight =
-                pulseKind === "current" ? 2.6 : isHighlighted ? 2.75 : 1.85;
+                pulseKind === "current"
+                  ? 3.4
+                  : neighborPulseIdx != null
+                    ? 3
+                    : isHighlighted
+                      ? 2.75
+                      : 1.85;
               fillOp =
                 pulseKind === "current"
-                  ? 0.16
-                  : isHighlighted
-                    ? selected
-                      ? 0.32
-                      : 0.22
-                    : 0.12;
+                  ? 0.24
+                  : neighborPulseIdx != null
+                    ? 0.18
+                    : isHighlighted
+                      ? selected
+                        ? 0.32
+                        : 0.22
+                      : 0.12;
               dashArr = isHighlighted || pulseKind ? undefined : "7 5";
-              strokeOp = pulseKind ? 0.78 : isHighlighted ? 1 : 0.82;
+              strokeOp = pulseKind ? 0.95 : isHighlighted ? 1 : 0.82;
             } else if (muted) {
               strokeColor = color;
               strokeWeight = isHighlighted ? 2.5 : 1.6;
@@ -949,13 +993,17 @@ function LiveMapInner({
               dashArr = dashArr ?? "4 4";
             }
 
-            if (pulseKind === "neighbor") {
-              strokeWeight = Math.max(strokeWeight, 2.1);
-              strokeOp = Math.max(strokeOp, 0.72);
+            if (pulseKind === "current") {
+              strokeColor = "#fbbf24";
+              strokeWeight = Math.max(strokeWeight, 3.4);
+              fillOp = Math.max(fillOp, 0.22);
+              strokeOp = Math.max(strokeOp, 0.95);
               dashArr = undefined;
-            } else if (pulseKind === "current") {
-              strokeWeight = Math.max(strokeWeight, 2.6);
-              strokeOp = Math.max(strokeOp, 0.82);
+            } else if (neighborPulseIdx != null) {
+              strokeColor = NEIGHBOR_PULSE_STROKE[neighborPulseIdx]!;
+              strokeWeight = Math.max(strokeWeight, 3);
+              fillOp = Math.max(fillOp, 0.16);
+              strokeOp = Math.max(strokeOp, 0.92);
               dashArr = undefined;
             }
 
@@ -967,12 +1015,7 @@ function LiveMapInner({
               opacity: strokeOp,
               dashArray: dashArr,
               lineJoin: "round",
-              className:
-                pulseKind === "current"
-                  ? "camtok-zone-pulse-current"
-                  : pulseKind === "neighbor"
-                    ? "camtok-zone-pulse-neighbor"
-                    : undefined,
+              className: zonePulseClassName(pulseKind),
             });
             if (interactive && onZoneSelect) {
               poly.on("click", () => onZoneSelect(selected ? null : zone.id));
@@ -1216,8 +1259,8 @@ function LiveMapInner({
     // the first pin position and approach line length haven't changed.
     const pin0 = driverPins?.[0] ?? (turnTarget ? { lat: turnTarget.lat, lng: turnTarget.lng } : null);
     const newFingerprint = pin0
-      ? `${pin0.lat.toFixed(5)},${pin0.lng.toFixed(5)}|${approachLine?.length ?? 0}`
-      : `none|${approachLine?.length ?? 0}`;
+      ? `${pin0.lat.toFixed(5)},${pin0.lng.toFixed(5)}|${approachLine?.length ?? 0}|p${turnPinPulse ? 1 : 0}`
+      : `none|${approachLine?.length ?? 0}|p${turnPinPulse ? 1 : 0}`;
     if (newFingerprint === turnLayerFingerprintRef.current) return;
     turnLayerFingerprintRef.current = newFingerprint;
 
@@ -1247,19 +1290,21 @@ function LiveMapInner({
 
       if (showPin) {
         L.circle([nextPin.lat, nextPin.lng], {
-          radius: 16,
+          radius: turnPinPulse ? 24 : 16,
           color: "#2563eb",
-          weight: 2,
+          weight: turnPinPulse ? 3 : 2,
           fillColor: "#3b82f6",
-          fillOpacity: 0.22,
-          opacity: 0.9,
+          fillOpacity: turnPinPulse ? 0.14 : 0.22,
+          opacity: turnPinPulse ? 0.95 : 0.9,
+          className: turnPinPulse ? "camtok-turn-pin-ring-pulse" : undefined,
         }).addTo(group);
         L.circleMarker([nextPin.lat, nextPin.lng], {
-          radius: 7,
+          radius: turnPinPulse ? 9 : 7,
           color: "#ffffff",
-          weight: 2,
+          weight: turnPinPulse ? 3 : 2,
           fillColor: "#2563eb",
           fillOpacity: 1,
+          className: turnPinPulse ? "camtok-turn-pin-pulse" : undefined,
         }).addTo(group);
       }
 
@@ -1284,7 +1329,7 @@ function LiveMapInner({
         lineJoin: "round",
       }).addTo(rail);
     })();
-  }, [turnTarget, driverPins, approachLine, mapReady, audienceRole]);
+  }, [turnTarget, driverPins, approachLine, mapReady, audienceRole, turnPinPulse]);
 
   // ── Nearby landmark photo marker for active `next_step` bets ─────────────
   //
@@ -1309,17 +1354,24 @@ function LiveMapInner({
 
       // Simple small blue pin — same shape as the destination pin but blue.
       const pulseClass = stepPinPulse ? " camtok-step-pin-head-pulse" : "";
+      const ringHtml = stepPinPulse
+        ? `<div class="camtok-step-pin-outer-ring"></div>`
+        : "";
+      const headSize = stepPinPulse ? 18 : 14;
       const html = `
         <div class="camtok-landmark-screen-flat" style="display:flex;flex-direction:column;align-items:center;transform:rotate(0deg);transform-origin:50% 100%;will-change:transform">
-          <div class="${pulseClass.trim()}" style="width:14px;height:14px;border-radius:50%;background:#3b82f6;border:2.5px solid #fff;box-shadow:0 0 8px rgba(59,130,246,0.7)"></div>
+          <div style="position:relative;width:${headSize}px;height:${headSize}px;display:flex;align-items:center;justify-content:center">
+            ${ringHtml}
+            <div class="${pulseClass.trim()}" style="width:${headSize}px;height:${headSize}px;border-radius:50%;background:#3b82f6;border:2.5px solid #fff;box-shadow:0 0 10px rgba(59,130,246,0.85)"></div>
+          </div>
           <div style="width:2px;height:8px;background:#3b82f6"></div>
           <div style="width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;border-top:6px solid #3b82f6;margin-top:-1px"></div>
         </div>`;
       const icon = L.divIcon({
         html,
         className: "camtok-landmark-pin",
-        iconSize: [14, 30],
-        iconAnchor: [7, 30],
+        iconSize: [headSize, headSize + 16],
+        iconAnchor: [headSize / 2, headSize + 16],
       });
 
       group.clearLayers(); // clear again in case another async settled first

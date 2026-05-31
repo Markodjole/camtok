@@ -1928,18 +1928,23 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       (e) => !isBetFeedMarketLocked(e.market, now),
     );
     let stepPinPulse = false;
-    const zonePulseById: Record<string, "current" | "neighbor"> = {};
+    let turnPinPulse = false;
+    const zonePulseById: Record<string, "current" | `neighbor-${number}`> = {};
 
     for (const e of open) {
       const t = e.market.marketType;
       if (t === "next_step") stepPinPulse = true;
+      if (t === "next_turn") turnPinPulse = true;
       if (t === "zone_exit_time" && currentZoneCellKey) {
         zonePulseById[currentZoneCellKey] = "current";
       }
       if (t === "city_grid" && zonesSpec && currentZoneCellKey) {
-        for (const nid of neighborCellIds(zonesSpec, currentZoneCellKey)) {
+        for (const [i, nid] of neighborCellIds(
+          zonesSpec,
+          currentZoneCellKey,
+        ).entries()) {
           if (zonePulseById[nid] !== "current") {
-            zonePulseById[nid] = "neighbor";
+            zonePulseById[nid] = `neighbor-${i}` as `neighbor-${number}`;
           }
         }
       }
@@ -1947,10 +1952,16 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
     return {
       stepPinPulse,
+      turnPinPulse,
       zonePulseById:
         Object.keys(zonePulseById).length > 0 ? zonePulseById : undefined,
     };
   }, [sortedBetFeedEntries, currentZoneCellKey, zonesSpec]);
+
+  const mapHighlightsActive =
+    betMapHighlights.stepPinPulse ||
+    betMapHighlights.turnPinPulse ||
+    !!betMapHighlights.zonePulseById;
 
   const mapBetSheetOpen =
     currentMarket?.marketType === "city_grid" &&
@@ -2392,12 +2403,17 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           selectedZoneId={selectedZoneId}
           currentZoneId={currentZoneId}
           selectedCheckpointId={selectedCheckpointId}
-          showZones={effectiveShowZones}
-          zonesVisualStyle={zonesVisualStyleForBet}
+          showZones={effectiveShowZones || mapHighlightsActive}
+          zonesVisualStyle={
+            mapHighlightsActive && betMapHighlights.zonePulseById
+              ? "pick_zone"
+              : zonesVisualStyleForBet
+          }
           showCheckpoints={true}
           turnTarget={viewerTurnTargetForMap}
           stepPin={stepPin}
           stepPinPulse={betMapHighlights.stepPinPulse}
+          turnPinPulse={betMapHighlights.turnPinPulse}
           zonePulseById={betMapHighlights.zonePulseById ?? undefined}
           driverPins={viewerOsrmPreviewPins}
           approachLine={approachLine}
@@ -2595,11 +2611,18 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               selectedZoneId={selectedZoneId}
               currentZoneId={currentZoneId}
               selectedCheckpointId={selectedCheckpointId}
-              showZones={effectiveShowZones}
-              zonesVisualStyle={zonesVisualStyleForBet}
+              showZones={effectiveShowZones || mapHighlightsActive}
+              zonesVisualStyle={
+                mapHighlightsActive && betMapHighlights.zonePulseById
+                  ? "pick_zone"
+                  : zonesVisualStyleForBet
+              }
               showCheckpoints={true}
               turnTarget={viewerTurnTargetForMap}
               stepPin={stepPin}
+              stepPinPulse={betMapHighlights.stepPinPulse}
+              turnPinPulse={betMapHighlights.turnPinPulse}
+              zonePulseById={betMapHighlights.zonePulseById ?? undefined}
               driverPins={viewerOsrmPreviewPins}
               approachLine={approachLine}
               railPhase={viewerRailPhase}

@@ -94,39 +94,110 @@ body {
     margin 280ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-/* Discrete map pulses tied to open bet popups */
+/* Discrete map pulses tied to open bet popups — keep obvious at a glance */
 @keyframes camtokStepPinPulse {
   0%,
   100% {
-    opacity: 1;
-    box-shadow: 0 0 4px rgba(59, 130, 246, 0.35);
+    transform: scale(1);
+    box-shadow: 0 0 6px rgba(59, 130, 246, 0.65), 0 0 0 0 rgba(59, 130, 246, 0.45);
   }
   50% {
-    opacity: 0.82;
-    box-shadow: 0 0 9px rgba(59, 130, 246, 0.55);
+    transform: scale(1.22);
+    box-shadow: 0 0 14px rgba(96, 165, 250, 0.95), 0 0 0 10px rgba(59, 130, 246, 0);
+  }
+}
+
+@keyframes camtokStepPinRing {
+  0%,
+  100% {
+    transform: scale(0.85);
+    opacity: 0.55;
+  }
+  50% {
+    transform: scale(1.45);
+    opacity: 0.15;
   }
 }
 
 .camtok-step-pin-head-pulse {
-  animation: camtokStepPinPulse 2.4s ease-in-out infinite;
+  animation: camtokStepPinPulse 1.35s ease-in-out infinite;
+}
+
+.camtok-step-pin-outer-ring {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 28px;
+  height: 28px;
+  margin: -14px 0 0 -14px;
+  border-radius: 50%;
+  border: 2.5px solid rgba(96, 165, 250, 0.85);
+  pointer-events: none;
+  animation: camtokStepPinRing 1.35s ease-in-out infinite;
 }
 
 @keyframes camtokZoneBorderPulse {
   0%,
   100% {
-    stroke-opacity: 0.42;
+    opacity: 0.72;
+    filter: drop-shadow(0 0 2px var(--zone-pulse-color, rgba(251, 191, 36, 0.45)));
   }
   50% {
-    stroke-opacity: 0.88;
+    opacity: 1;
+    filter: drop-shadow(0 0 10px var(--zone-pulse-color, rgba(251, 191, 36, 0.95)));
   }
 }
 
 .camtok-zone-pulse-current {
-  animation: camtokZoneBorderPulse 2.6s ease-in-out infinite;
+  --zone-pulse-color: rgba(251, 191, 36, 0.95);
+  animation: camtokZoneBorderPulse 1.5s ease-in-out infinite;
 }
 
 .camtok-zone-pulse-neighbor {
-  animation: camtokZoneBorderPulse 2.8s ease-in-out infinite;
+  animation: camtokZoneBorderPulse 1.65s ease-in-out infinite;
+}
+
+.camtok-zone-pulse-neighbor-0 { --zone-pulse-color: rgba(167, 139, 250, 0.95); }
+.camtok-zone-pulse-neighbor-1 { --zone-pulse-color: rgba(52, 211, 153, 0.95); }
+.camtok-zone-pulse-neighbor-2 { --zone-pulse-color: rgba(244, 114, 182, 0.95); }
+.camtok-zone-pulse-neighbor-3 { --zone-pulse-color: rgba(56, 189, 248, 0.95); }
+.camtok-zone-pulse-neighbor-4 { --zone-pulse-color: rgba(251, 146, 60, 0.95); }
+.camtok-zone-pulse-neighbor-5 { --zone-pulse-color: rgba(250, 204, 21, 0.95); }
+.camtok-zone-pulse-neighbor-6 { --zone-pulse-color: rgba(232, 121, 249, 0.95); }
+.camtok-zone-pulse-neighbor-7 { --zone-pulse-color: rgba(45, 212, 191, 0.95); }
+
+@keyframes camtokTurnPinPulse {
+  0%,
+  100% {
+    opacity: 0.85;
+    filter: drop-shadow(0 0 3px rgba(37, 99, 235, 0.5));
+  }
+  50% {
+    opacity: 1;
+    filter: drop-shadow(0 0 12px rgba(59, 130, 246, 0.95));
+  }
+}
+
+@keyframes camtokTurnPinRing {
+  0%,
+  100% {
+    stroke-opacity: 0.35;
+    transform: scale(1);
+  }
+  50% {
+    stroke-opacity: 0.85;
+    transform: scale(1.12);
+  }
+}
+
+.camtok-turn-pin-pulse {
+  animation: camtokTurnPinPulse 1.4s ease-in-out infinite;
+}
+
+.camtok-turn-pin-ring-pulse {
+  animation: camtokTurnPinRing 1.4s ease-in-out infinite;
+  transform-origin: center center;
+  transform-box: fill-box;
 }
 
 /* Mobile viewport fix */
