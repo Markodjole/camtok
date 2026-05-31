@@ -180,6 +180,8 @@ export interface LiveMapProps {
   zonesVisualStyle?: "default" | "muted" | "pick_zone";
   /** Called once when sustained FPS < 30 — parent can disable rotation / reduce work. */
   onPerformanceDegrade?: () => void;
+  /** Extra zoom levels (e.g. +1 for active time-to-pin bet on two-wheeled). */
+  zoomLevelBonus?: number;
 }
 
 const C = {
@@ -218,9 +220,9 @@ export function mapZoomLevelOffset(mode?: string): number {
   return isTwoWheeled(mode) ? TWO_WHEELED_ZOOM_LEVEL_OFFSET : 0;
 }
 
-/** Max Leaflet zoom for a transport mode (tile layer + clamp). */
-export function mapMaxZoom(mode?: string): number {
-  return MAP_BASE_MAX_ZOOM + mapZoomLevelOffset(mode);
+/** Max Leaflet zoom (tile layer + clamp), with optional pin-bet bonus level. */
+export function mapMaxZoom(levelBonus = 0): number {
+  return MAP_BASE_MAX_ZOOM + Math.max(0, levelBonus);
 }
 
 /**
@@ -258,13 +260,12 @@ export function mapProfile(
   // Keep viewer viewpoint identical to driver viewpoint so motion/turning
   // perception matches exactly between roles.
   const bonus = 1;
-  const modeOffset = mapZoomLevelOffset(mode);
   if (m.includes("car") || m.includes("drive")) {
     return { zoom: 16 + bonus, lineWeight: 4, showSpeed: true, speedUnit: "kmh" };
   }
   if (isTwoWheeled(mode)) {
     // Bikes/scooters/motos: closer zoom for alleys, cycleways, and shortcuts.
-    return { zoom: 19 + bonus + modeOffset, lineWeight: 4, showSpeed: true, speedUnit: "kmh" };
+    return { zoom: 19 + bonus, lineWeight: 4, showSpeed: true, speedUnit: "kmh" };
   }
   // walking / default
   return { zoom: 17 + bonus, lineWeight: 3, showSpeed: false, speedUnit: "none" };
@@ -386,6 +387,7 @@ function LiveMapInner({
   layoutViewportWidthPx = null,
   zonesVisualStyle = "default" as "default" | "muted" | "pick_zone",
   onPerformanceDegrade,
+  zoomLevelBonus = 0,
 }: LiveMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<import("leaflet").Map | null>(null);
@@ -556,10 +558,10 @@ function LiveMapInner({
   const smoothMotion = true;
   const col = streamer ? C.streamer : C.viewer;
   const profile = mapProfile(transportMode, streamer ? "streamer" : "viewer");
-  const modeMaxZoom = mapMaxZoom(transportMode);
+  const modeMaxZoom = mapMaxZoom(zoomLevelBonus);
   const viewerFollowProfileZoom = streamer
     ? profile.zoom
-    : profile.zoom + VIEWER_FOLLOW_ZOOM_EXTRA;
+    : profile.zoom + VIEWER_FOLLOW_ZOOM_EXTRA + zoomLevelBonus;
 
   useLayoutEffect(() => {
     const el = containerRef.current;
@@ -715,7 +717,7 @@ function LiveMapInner({
         ? '&copy; <a href="https://www.maptiler.com/copyright/">MapTiler</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
         : '&copy; <a href="https://stadiamaps.com/">Stadia Maps</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
       const t = L.tileLayer(tileUrl, {
-          maxZoom: mapMaxZoom(transportMode),
+          maxZoom: mapMaxZoom(zoomLevelBonus),
           opacity: 1,
           keepBuffer: 1,
           updateWhenIdle: false,
@@ -788,7 +790,7 @@ function LiveMapInner({
       const L = (await import("leaflet")).default;
       const newUrl = `https://api.maptiler.com/maps/${style}/{z}/{x}/{y}.png?key=${maptilerKey}`;
       const newLayer = L.tileLayer(newUrl, {
-        maxZoom: mapMaxZoom(transportMode),
+        maxZoom: mapMaxZoom(zoomLevelBonus),
         opacity: tileOpacity,
         keepBuffer: 1,
         updateWhenIdle: false,
@@ -1910,7 +1912,7 @@ function LiveMapInner({
       m.off("zoomend", onZoomEnd);
     };
   // driverPins intentionally omitted — read via driverPinsRef.current.
-  }, [followMode, streamer, routePoints.length, viewerFollowZoom, viewerFollowLatLngBounds, transportMode]);
+  }, [followMode, streamer, routePoints.length, viewerFollowZoom, viewerFollowLatLngBounds, transportMode, zoomLevelBonus]);
 
   return (
     <div className="relative h-full w-full" style={{ background: "transparent" }}>

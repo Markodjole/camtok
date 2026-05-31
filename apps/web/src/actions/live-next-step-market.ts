@@ -26,7 +26,7 @@ import { BET_OPEN_WINDOW_IDLE_MS, MIN_VIABLE_STEP_BET_DIST_M } from "@/lib/live/
  * • The ETA reference (T seconds) is derived by walking the Google route
  *   polyline from the driver to the step maneuver point and using the
  *   proportional share of the total route duration.
- * • Bets lock after BET_OPEN_WINDOW_IDLE_MS (12 s).
+ * • Bets lock after BET_OPEN_WINDOW_IDLE_MS (14 s).
  * • Settlement: driver comes within NEXT_STEP_APPROACH_M of the maneuver point
  *   and starts moving away, or reveal_at safety cap fires.
  *

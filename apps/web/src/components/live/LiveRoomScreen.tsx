@@ -1,7 +1,7 @@
 "use client";
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
 import {
   type CityGridSpecCompact,
@@ -46,7 +46,6 @@ import type { SkillFeedbackData } from "./SkillFeedbackCard";
 import { ReplaySheet } from "./ReplaySheet";
 import { LiveViewerStakePicker } from "./LiveViewerStakePicker";
 import { TopBar } from "@/components/layout/top-bar";
-import { BottomNav } from "@/components/layout/bottom-nav";
 import { useActiveBetRound } from "@/hooks/useActiveBetRound";
 import { engineBetHeadline } from "@/lib/live/betting/betTypeV2Label";
 import {
@@ -126,6 +125,7 @@ function isBetFeedMarketLocked(market: LiveMarketSlot, nowMs: number): boolean {
 
 export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const pathname = usePathname();
+  const router = useRouter();
   const immersiveLiveRoom = (pathname ?? "").startsWith("/live/rooms/");
 
   const [room, setRoom] = useState<LiveFeedRow>(initialRoom);
@@ -1415,7 +1415,13 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
    */
   const ZOOM_DEFAULT_M = isMobileViewport ? 700 : 900;
   const ZOOM_NEXT_TURN_M = isMobileViewport ? 450 : 600;
-  const zoomLevelOffset = mapZoomLevelOffset(room.transportMode);
+
+  // Extra close zoom only during an active time-to-pin (next_step) bet.
+  const pinBetZoomActive = currentStepMarket?.marketType === "next_step";
+  const pinZoomLevelOffset =
+    pinBetZoomActive && isTwoWheeled(room.transportMode)
+      ? mapZoomLevelOffset(room.transportMode)
+      : 0;
 
   // Zoom tightens when there is an open next_turn market and no bet placed yet.
   // betJustPlaced is declared early enough; viewerHasBetOnCurrentMarket/betWindowClosed
@@ -1425,10 +1431,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
   const targetWidthMeters = nextTurnSheetOpen ? ZOOM_NEXT_TURN_M : ZOOM_DEFAULT_M;
   // Divide by zoomScale so 0.7 → 1/0.7 ≈ 1.43× wider = zoomed out.
-  // Two-wheeled baseline offset halves width per level (same as +1 Leaflet zoom).
   const viewerTargetWidthMeters = zoomWidthForLevelOffset(
     targetWidthMeters / zoomScale,
-    zoomLevelOffset,
+    pinZoomLevelOffset,
   );
 
   const marketTurnPassKey =
@@ -1907,8 +1912,6 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     [betFeedEntries],
   );
 
-  const betFeedVisible = sortedBetFeedEntries.length > 0;
-
   const mapBetSheetOpen =
     currentMarket?.marketType === "city_grid" &&
     sortedBetFeedEntries.some(
@@ -2004,7 +2007,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     const placeBottomLeft = () => {
       const boxW = Math.min(window.innerWidth * 0.34, 180);
       // Flush against the BottomNav (h-16 = 64px) and the left edge — no gap.
-      const top = Math.max(48, window.innerHeight - boxW - 64);
+      const top = Math.max(48, window.innerHeight - boxW - 16);
       setPipPos({ top, left: 0 });
     };
     placeBottomLeft();
@@ -2255,7 +2258,17 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         }}
         leftOffsetPx={nearestCamera ? pipSizePx : 0}
       />
-      {!betFeedVisible ? <BottomNav /> : null}
+      {immersiveLiveRoom ? (
+        <button
+          type="button"
+          onClick={() => router.push("/live")}
+          className="fixed bottom-[max(0.75rem,env(safe-area-inset-bottom))] left-3 z-[210] flex h-10 w-10 items-center justify-center rounded-full border border-white/20 bg-black/80 text-base text-white/90 shadow-md active:bg-black/95"
+          title="Leave room"
+          aria-label="Leave room"
+        >
+          ✕
+        </button>
+      ) : null}
       <LiveEventToasts
         roomId={room.roomId}
         role="viewer"
@@ -2358,7 +2371,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           viewerFollowLatLngBounds={null}
           viewerFollowBoundsMinZoom={null}
           viewerTargetWidthMeters={viewerTargetWidthMeters}
-          viewerZoomRuleKey={`zoom:${Math.round(viewerTargetWidthMeters)}:${currentMarket?.id ?? "nomarket"}`}
+          viewerZoomRuleKey={`zoom:${Math.round(viewerTargetWidthMeters)}:${pinZoomLevelOffset}:${currentMarket?.id ?? "nomarket"}`}
+          zoomLevelBonus={pinZoomLevelOffset}
           layoutViewportWidthPx={layoutViewportW}
           onZoneSelect={handleZoneSelect}
           onCheckpointSelect={handleCheckpointSelect}
@@ -2366,7 +2380,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       </div>
 
       {room.destination ? (
-        <div className="pointer-events-none fixed bottom-[4.75rem] left-2 z-30 max-w-[min(72vw,14rem)]">
+        <div className="pointer-events-none fixed bottom-[3.25rem] left-2 z-30 max-w-[min(72vw,14rem)]">
           <div className="pointer-events-auto flex items-center gap-1 rounded-md border border-white/10 bg-black/70 px-1.5 py-px text-[8px] font-normal leading-tight text-white/55 shadow-none">
             <span className="shrink-0 opacity-70" aria-hidden>
               📍
@@ -3541,7 +3555,7 @@ const BetFeedCard = memo(function BetFeedCard({
 
   const optionBtnClass = (active: boolean, disabled: boolean) =>
     [
-      "flex h-8 min-w-[40px] items-center justify-center rounded-md px-2.5 text-[13px] font-bold leading-none transition active:scale-[0.97]",
+      "flex h-9 min-w-[44px] items-center justify-center rounded-md px-3 text-sm font-bold leading-none transition active:scale-[0.97]",
       active
         ? "bg-white text-black shadow-md ring-2 ring-white/25"
         : disabled
@@ -3597,8 +3611,8 @@ const BetFeedCard = memo(function BetFeedCard({
           transition: "background-color 0.3s ease, border-color 0.3s ease",
         }}
       >
-        <div className="flex items-center gap-1.5 px-2.5 py-1.5">
-          <p className="min-w-0 flex-1 truncate text-[13px] font-bold leading-tight tabular-nums text-white">
+        <div className="flex items-center gap-2 px-3 py-2.5">
+          <p className="min-w-0 flex-1 truncate text-sm font-bold leading-snug tabular-nums text-white">
             {headline}
           </p>
 
@@ -3614,21 +3628,21 @@ const BetFeedCard = memo(function BetFeedCard({
                   type="button"
                   disabled={bettingClosed || !selectedOptionId || isPlacing}
                   onClick={() => void onPlaceBet()}
-                  className="h-8 shrink-0 rounded-md bg-red-500 px-3 text-[11px] font-bold text-white disabled:bg-white/10 disabled:text-white/35"
+                  className="h-9 shrink-0 rounded-md bg-red-500 px-3.5 text-xs font-bold text-white disabled:bg-white/10 disabled:text-white/35"
                 >
                   {isPlacing ? "…" : bettingClosed ? "Closed" : "Bet"}
                 </button>
               ) : null}
             </>
           ) : (
-            <div className="flex shrink-0 items-center gap-1">
+            <div className="flex shrink-0 items-center gap-1.5">
               {renderOptionButtons()}
             </div>
           )}
         </div>
 
         {error ? (
-          <div className="truncate px-2.5 pb-1 text-[11px] leading-tight text-red-300">{error}</div>
+          <div className="truncate px-3 pb-2 text-xs leading-snug text-red-300">{error}</div>
         ) : null}
       </div>
     </div>

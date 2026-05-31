@@ -715,7 +715,7 @@ function freshPriority(t: FreshTrigger): number {
 
 /**
  * Compute the bet window for this open event.
- * Rule: at least BET_OPEN_WINDOW_MS (8 s), up to BET_OPEN_WINDOW_IDLE_MS (12 s)
+ * Rule: at least BET_OPEN_WINDOW_MS (10 s), up to BET_OPEN_WINDOW_IDLE_MS (14 s)
  * when there is nothing else queued.
  */
 function betWindowMs(remainingQueueSize: number): number {
