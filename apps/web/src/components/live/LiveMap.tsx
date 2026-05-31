@@ -1995,7 +1995,7 @@ function LiveMapInner({
         </div>
       )}
       <div
-        className="pointer-events-none absolute right-12 top-11 z-[2000] flex flex-wrap items-start justify-between gap-1.5 sm:right-2 sm:top-2 sm:gap-2"
+        className="pointer-events-none absolute right-2 top-2 z-[2000] flex flex-wrap items-start justify-between gap-1.5 sm:gap-2"
         style={{ left: leftInsetPx + 8 }}
       >
         <div className="flex flex-wrap items-center gap-1">

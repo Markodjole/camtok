@@ -24,6 +24,7 @@ import { isEngineMarketType } from "@/lib/live/betting/engineMarketOptions";
 import {
   BET_OPEN_WINDOW_MS,
   BET_OPEN_WINDOW_IDLE_MS,
+  BET_OPEN_STAGGER_MS,
   NEXT_STEP_FILLER_MAX_ROAD_M,
   NEXT_STEP_FORWARD_PIN_BUCKET_M,
   NEXT_STEP_FORWARD_PIN_ROAD_M,
@@ -118,6 +119,50 @@ export const TICK_LOCK_TTL_MS = 15_000;
 
 /** Queue entries older than this are considered stale and discarded. */
 const QUEUE_EXPIRY_MS = 30_000;
+
+function isQueueItemAlive(t: QueuedTrigger, now: number): boolean {
+  if (now < t.queuedAt) {
+    return t.queuedAt - now < QUEUE_EXPIRY_MS;
+  }
+  return now - t.queuedAt < QUEUE_EXPIRY_MS;
+}
+
+async function msSinceLastBetOpen(
+  service: Awaited<ReturnType<typeof createServiceClient>>,
+  roomId: string,
+): Promise<number | null> {
+  const { data: rows } = await service
+    .from("live_betting_markets")
+    .select("opens_at")
+    .eq("room_id", roomId)
+    .order("opens_at", { ascending: false })
+    .limit(1);
+  const row = rows?.[0] as { opens_at: string } | undefined;
+  if (!row) return null;
+  const openedMs = Date.parse(row.opens_at);
+  return Number.isFinite(openedMs) ? Date.now() - openedMs : null;
+}
+
+function remainingStaggerMs(sinceLastOpen: number | null): number {
+  if (sinceLastOpen == null) return 0;
+  return Math.max(0, BET_OPEN_STAGGER_MS - sinceLastOpen);
+}
+
+/** When zone-exit and time-to-pin fire together, open zone first and defer pin. */
+function partitionFreshForSingleBet(fresh: FreshTrigger[]): {
+  immediate: FreshTrigger[];
+  defer: FreshTrigger[];
+} {
+  const hasZoneExit = fresh.some((t) => t.type === "zone_exit_time");
+  const stepTriggers = fresh.filter((t) => t.type === "next_step");
+  if (hasZoneExit && stepTriggers.length > 0) {
+    return {
+      immediate: fresh.filter((t) => t.type !== "next_step"),
+      defer: stepTriggers,
+    };
+  }
+  return { immediate: fresh, defer: [] };
+}
 
 // ─── Queue types ──────────────────────────────────────────────────────────────
 
@@ -347,8 +392,16 @@ export async function runRoomTick(
   );
 
   if (phaseNow === "market_open") {
-    // Main slot is occupied — queue non-step triggers for later.
-    const updatedQueue = buildUpdatedQueue(currentQueue, freshTriggers);
+    // Main slot occupied — queue triggers; defer pin bets so only one popup shows.
+    const nonStepFresh = freshTriggers.filter((t) => t.type !== "next_step");
+    const stepFresh = freshTriggers.filter((t) => t.type === "next_step");
+    let updatedQueue = buildUpdatedQueue(currentQueue, nonStepFresh);
+    if (stepFresh.length) {
+      updatedQueue = buildUpdatedQueue(updatedQueue, stepFresh, {
+        deferByMs: BET_OPEN_STAGGER_MS,
+        deferTypes: ["next_step"],
+      });
+    }
     if (updatedQueue.length !== currentQueue.length) {
       await service
         .from("live_rooms")
@@ -356,65 +409,80 @@ export async function runRoomTick(
         .eq("id", roomId);
     }
 
-    // Step slot is independent — try to open a pin/camera bet right now even
-    // while the zone/turn bet is running, as long as the step slot is free.
-    const stepSlotFree = !stepMarketIdNow;
-    if (stepSlotFree && NEXT_STEP_BETS_ENABLED) {
-      const stepTrigger = freshTriggers.find((t) => t.type === "next_step");
-      if (stepTrigger) {
-        const res = await openNextStepMarketForRoom(roomId, {
-          windowMs: BET_OPEN_WINDOW_IDLE_MS,
-          stepKey: stepTrigger.stepKey,
-          stepLat: stepTrigger.stepLat,
-          stepLng: stepTrigger.stepLng,
-          maneuverType: stepTrigger.maneuverType,
-          maneuverModifier: stepTrigger.maneuverModifier,
-          stepName: stepTrigger.maneuverType === "camera" ? undefined : stepTrigger.stepName,
-        });
-        if ("marketId" in res && res.marketId) {
-          return { action: "opened_next_step_concurrent", marketId: res.marketId, queued: updatedQueue.length, settled: settleNotes };
-        }
-      }
-      // No fresh step trigger — try filler forward-pin
-      const fillerOpened = await tryFillerNextStep(service, roomId, sessionId, routeCtx, firedKeys);
-      if (fillerOpened) {
-        return { action: fillerOpened.action, ...(fillerOpened.detail ?? {}), queued: updatedQueue.length, settled: settleNotes };
-      }
-    }
-
     return { action: "market_open_queued", queued: updatedQueue.length, settled: settleNotes };
   }
 
   if (phaseNow === "waiting_for_next_market") {
-    const opened = await openFromQueueOrTriggers(service, roomId, currentQueue, freshTriggers);
+    const sinceLastOpen = await msSinceLastBetOpen(service, roomId);
+    const staggerWaitMs = remainingStaggerMs(sinceLastOpen);
+    const { immediate, defer } = partitionFreshForSingleBet(freshTriggers);
 
-    // ── Gap-filler ──────────────────────────────────────────────────────────
-    // When no context-dependent bet is available, immediately try opening a
-    // filler market (next_step with relaxed distance window) so dead-air
-    // between bets is kept to a minimum.
-    if (opened.action === "no_eligible_bet") {
-      const fillerOpened = await tryFillerNextStep(service, roomId, sessionId, routeCtx, firedKeys);
-      if (fillerOpened) {
-        return { action: fillerOpened.action, ...(fillerOpened.detail ?? {}), settled: settleNotes };
-      }
+    let workingQueue = currentQueue;
+    if (defer.length) {
+      workingQueue = buildUpdatedQueue(workingQueue, defer, {
+        deferByMs: BET_OPEN_STAGGER_MS,
+        deferTypes: ["next_step"],
+      });
     }
 
-    // Even after opening a main-slot bet, try opening a concurrent step bet
-    // if the step slot is still free.
-    if (!stepMarketIdNow && NEXT_STEP_BETS_ENABLED) {
-      const stepTrigger = freshTriggers.find((t) => t.type === "next_step");
-      if (stepTrigger && opened.action !== "opened_next_step" && opened.action !== "opened_next_step_filler_fwd") {
-        const res = await openNextStepMarketForRoom(roomId, {
-          windowMs: BET_OPEN_WINDOW_IDLE_MS,
-          stepKey: stepTrigger.stepKey,
-          stepLat: stepTrigger.stepLat,
-          stepLng: stepTrigger.stepLng,
-          maneuverType: stepTrigger.maneuverType,
-          maneuverModifier: stepTrigger.maneuverModifier,
-          stepName: stepTrigger.maneuverType === "camera" ? undefined : stepTrigger.stepName,
-        });
-        if ("marketId" in res && res.marketId) {
-          console.log(`[tick] opened concurrent step bet ${res.marketId} alongside main slot`, { roomId });
+    // Step slot active — queue main-slot triggers until the pin bet clears.
+    if (stepMarketIdNow) {
+      workingQueue = buildUpdatedQueue(workingQueue, immediate);
+      if (workingQueue.length !== currentQueue.length) {
+        await service
+          .from("live_rooms")
+          .update({ queued_triggers: workingQueue })
+          .eq("id", roomId);
+      }
+      return {
+        action: "step_slot_busy_queued",
+        queued: workingQueue.length,
+        settled: settleNotes,
+      };
+    }
+
+    // Too soon after the last open — defer all fresh triggers.
+    if (staggerWaitMs > 0 && immediate.length > 0) {
+      workingQueue = buildUpdatedQueue(workingQueue, immediate, {
+        deferByMs: staggerWaitMs,
+        deferTypes: immediate.map((t) => t.type),
+      });
+      await service
+        .from("live_rooms")
+        .update({ queued_triggers: workingQueue })
+        .eq("id", roomId);
+      return {
+        action: "stagger_wait",
+        deferMs: staggerWaitMs,
+        queued: workingQueue.length,
+        settled: settleNotes,
+      };
+    }
+
+    const opened = await openFromQueueOrTriggers(
+      service,
+      roomId,
+      workingQueue,
+      immediate,
+    );
+
+    // ── Gap-filler ──────────────────────────────────────────────────────────
+    if (opened.action === "no_eligible_bet") {
+      const fillerSince = await msSinceLastBetOpen(service, roomId);
+      if (remainingStaggerMs(fillerSince) === 0) {
+        const fillerOpened = await tryFillerNextStep(
+          service,
+          roomId,
+          sessionId,
+          routeCtx,
+          firedKeys,
+        );
+        if (fillerOpened) {
+          return {
+            action: fillerOpened.action,
+            ...(fillerOpened.detail ?? {}),
+            settled: settleNotes,
+          };
         }
       }
     }
@@ -506,15 +574,20 @@ function freshTriggerKey(t: FreshTrigger): string {
 function buildUpdatedQueue(
   existing: QueuedTrigger[],
   fresh: FreshTrigger[],
+  opts?: { deferByMs?: number; deferTypes?: Array<FreshTrigger["type"]> },
 ): QueuedTrigger[] {
   const now = Date.now();
-  const alive = existing.filter((t) => now - t.queuedAt < QUEUE_EXPIRY_MS);
+  const alive = existing.filter((t) => isQueueItemAlive(t, now));
   const existingKeys = new Set(alive.map(triggerKey));
+  const deferTypes = opts?.deferTypes;
+  const deferByMs = opts?.deferByMs ?? BET_OPEN_STAGGER_MS;
 
   for (const ft of fresh) {
     const key = freshTriggerKey(ft);
     if (existingKeys.has(key)) continue;
     existingKeys.add(key);
+    const queuedAt =
+      deferTypes?.includes(ft.type) ? now + deferByMs : now;
     if (ft.type === "next_turn") {
       alive.push({
         type: "next_turn",
@@ -522,15 +595,15 @@ function buildUpdatedQueue(
         pinId: ft.pinId!,
         pinLat: ft.pinLat!,
         pinLng: ft.pinLng!,
-        queuedAt: now,
+        queuedAt,
       });
     } else if (ft.type === "next_zone") {
-      alive.push({ type: "next_zone", cellKey: ft.cellKey!, queuedAt: now });
+      alive.push({ type: "next_zone", cellKey: ft.cellKey!, queuedAt });
     } else if (ft.type === "straight_streak") {
       alive.push({
         type: "straight_streak",
         streakKey: ft.streakKey!,
-        queuedAt: now,
+        queuedAt,
         expectedStreak: ft.expectedStreak,
         crossroads: ft.crossroads,
       });
@@ -543,7 +616,7 @@ function buildUpdatedQueue(
         maneuverType: ft.maneuverType!,
         maneuverModifier: ft.maneuverModifier,
         stepName: ft.stepName ?? "",
-        queuedAt: now,
+        queuedAt,
       });
     } else {
       // zone_exit_time: only allow ONE phase per cell in the queue at a time.
@@ -562,7 +635,7 @@ function buildUpdatedQueue(
         phase: ft.phase! as ZoneExitPhase,
         cellKey: ft.cellKey!,
         capturedZone: ft.capturedZone ?? null,
-        queuedAt: now,
+        queuedAt,
       });
     }
   }
@@ -593,8 +666,9 @@ async function openFromQueueOrTriggers(
     };
   }
 
-  // Non-expired queue items only.
-  const validQueue = [...queue].filter((t) => now - t.queuedAt < QUEUE_EXPIRY_MS);
+  // Non-expired queue items only; skip triggers not yet eligible (stagger defer).
+  const validQueue = [...queue].filter((t) => isQueueItemAlive(t, now));
+  const eligibleQueue = validQueue.filter((t) => now >= t.queuedAt);
 
   // ── Merge queue + fresh into one priority-ordered list ─────────────────────
   //
@@ -608,7 +682,7 @@ async function openFromQueueOrTriggers(
     | { source: "fresh"; trigger: FreshTrigger; priority: number };
 
   const unified: UnifiedItem[] = [
-    ...validQueue.map((t) => ({ source: "queue" as const, trigger: t, priority: triggerPriority(t) })),
+    ...eligibleQueue.map((t) => ({ source: "queue" as const, trigger: t, priority: triggerPriority(t) })),
     ...fresh.map((t) => ({ source: "fresh" as const, trigger: t, priority: freshPriority(t) })),
   ].sort((a, b) => a.priority - b.priority);
 

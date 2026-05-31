@@ -2422,7 +2422,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       </div>
 
       {room.destination ? (
-        <div className="pointer-events-none fixed bottom-[3.25rem] left-2 z-30 max-w-[min(72vw,14rem)]">
+        <div className="pointer-events-none fixed right-12 top-3 z-[62] max-w-[min(58vw,13rem)]">
           <div className="pointer-events-auto flex items-center gap-1 rounded-md border border-white/10 bg-black/70 px-1.5 py-px text-[8px] font-normal leading-tight text-white/55 shadow-none">
             <span className="shrink-0 opacity-70" aria-hidden>
               📍
@@ -2471,7 +2471,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         📋
       </button>
 
-      <div className="absolute right-4 top-32 z-40 flex flex-col items-end gap-3">
+      <div className="fixed right-3 top-[calc(33dvh+0.5rem)] z-40 flex flex-col items-end gap-3">
         {wallet && !walletLoading ? (
           <BalanceBadge
             balance={liveBalance}
@@ -3237,7 +3237,7 @@ function RouteOverviewMap({
 
   return (
     <div
-      className="pointer-events-none fixed left-3 top-8 z-[61] overflow-hidden rounded-xl border border-white/20 shadow-xl"
+      className="pointer-events-none fixed left-3 top-[calc(33dvh+0.5rem)] z-[61] overflow-hidden rounded-xl border border-white/20 shadow-xl"
       style={{ width: 88, height: 220 }}
     >
       <LiveMap
