@@ -335,9 +335,9 @@ async function refundMarket(marketId: string, reason: string) {
   const service = await createServiceClient();
   const { data: bets } = await service
     .from("live_bets")
-    .select("id, user_id, stake_amount")
+    .select("id, user_id, stake_amount, status")
     .eq("market_id", marketId)
-    .eq("status", "locked");
+    .in("status", ["locked", "active"]);
 
   for (const b of bets ?? []) {
     const userId = b.user_id as string;
@@ -406,6 +406,31 @@ async function refundMarket(marketId: string, reason: string) {
     anomalyFlags: ["refund", reason],
     operatorIntervention: false,
   });
+}
+
+/**
+ * Cancel an open or locked market and refund all active/locked bets.
+ * Used when a live condition (e.g. route deviation) voids the bet before
+ * normal settlement.
+ */
+export async function cancelAndRefundMarket(marketId: string, reason: string) {
+  unstable_noStore();
+  const service = await createServiceClient();
+
+  const { data: market } = await service
+    .from("live_betting_markets")
+    .select("id, status")
+    .eq("id", marketId)
+    .maybeSingle();
+
+  if (!market) return { error: "Market not found" };
+  const status = (market as { status: string }).status;
+  if (status === "cancelled" || status === "settled") {
+    return { status: "already_done" as const };
+  }
+
+  await refundMarket(marketId, reason);
+  return { status: "refund" as const, reason };
 }
 
 async function settleMarketWithWinner(

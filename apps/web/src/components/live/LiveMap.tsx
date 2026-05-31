@@ -202,10 +202,34 @@ function headingDivIcon(
 
 const TWO_WHEELED_MAP_MODES = new Set(["bike", "scooter", "motorcycle", "cycle"]);
 
+/** Extra Leaflet zoom levels applied to two-wheeled baseline (bike/scooter/motorcycle). */
+export const TWO_WHEELED_ZOOM_LEVEL_OFFSET = 1;
+
+const MAP_BASE_MAX_ZOOM = 20;
+
 export function isTwoWheeled(mode?: string): boolean {
   if (!mode) return false;
   const m = mode.toLowerCase();
   return Array.from(TWO_WHEELED_MAP_MODES).some((k) => m.includes(k));
+}
+
+/** Baseline zoom offset for transport mode — bet/situation rules add on top of this. */
+export function mapZoomLevelOffset(mode?: string): number {
+  return isTwoWheeled(mode) ? TWO_WHEELED_ZOOM_LEVEL_OFFSET : 0;
+}
+
+/** Max Leaflet zoom for a transport mode (tile layer + clamp). */
+export function mapMaxZoom(mode?: string): number {
+  return MAP_BASE_MAX_ZOOM + mapZoomLevelOffset(mode);
+}
+
+/**
+ * Scale a visible-width target (m) by the mode baseline offset.
+ * One zoom level ≈ half the width on screen.
+ */
+export function zoomWidthForLevelOffset(baseWidthM: number, levelOffset: number): number {
+  if (levelOffset <= 0) return baseWidthM;
+  return baseWidthM / Math.pow(2, levelOffset);
 }
 
 /** MapTiler style slug to use per vehicle class. */
@@ -234,12 +258,13 @@ export function mapProfile(
   // Keep viewer viewpoint identical to driver viewpoint so motion/turning
   // perception matches exactly between roles.
   const bonus = 1;
+  const modeOffset = mapZoomLevelOffset(mode);
   if (m.includes("car") || m.includes("drive")) {
     return { zoom: 16 + bonus, lineWeight: 4, showSpeed: true, speedUnit: "kmh" };
   }
   if (isTwoWheeled(mode)) {
     // Bikes/scooters/motos: closer zoom for alleys, cycleways, and shortcuts.
-    return { zoom: 19 + bonus, lineWeight: 4, showSpeed: true, speedUnit: "kmh" };
+    return { zoom: 19 + bonus + modeOffset, lineWeight: 4, showSpeed: true, speedUnit: "kmh" };
   }
   // walking / default
   return { zoom: 17 + bonus, lineWeight: 3, showSpeed: false, speedUnit: "none" };
@@ -274,10 +299,11 @@ function zoomForVisibleWidthM(
   lat: number,
   viewportW: number,
   widthM: number,
+  maxZ = MAP_BASE_MAX_ZOOM,
 ): number {
   const cosLat = Math.max(0.01, Math.cos((lat * Math.PI) / 180));
   const z = Math.log2((viewportW * 40075017 * cosLat) / (256 * widthM));
-  return Math.max(12, Math.min(20, z));
+  return Math.max(12, Math.min(maxZ, z));
 }
 
 /** With `viewerFollowLatLngBounds`, never go wider than this (higher = closer). */
@@ -530,6 +556,7 @@ function LiveMapInner({
   const smoothMotion = true;
   const col = streamer ? C.streamer : C.viewer;
   const profile = mapProfile(transportMode, streamer ? "streamer" : "viewer");
+  const modeMaxZoom = mapMaxZoom(transportMode);
   const viewerFollowProfileZoom = streamer
     ? profile.zoom
     : profile.zoom + VIEWER_FOLLOW_ZOOM_EXTRA;
@@ -614,8 +641,8 @@ function LiveMapInner({
       // Tight padding: large fitBounds padding was the main reason viewer follow stayed too wide.
       const padPx =
         spanM < 900 ? 4 : spanM < 1800 ? 8 : heightM < 700 ? 12 : 6;
-      // OSM tiles cap at ~19 — keep target aligned so we actually reach max detail.
-      const maxZ = 19;
+      // OSM tiles cap at ~19 — allow +1 for two-wheeled baseline offset.
+      const maxZ = modeMaxZoom - 1;
       m.invalidateSize(false);
       const padPt = L.point(padPx, padPx);
       let zFit = m.getBoundsZoom(bounds, false, padPt);
@@ -688,7 +715,7 @@ function LiveMapInner({
         ? '&copy; <a href="https://www.maptiler.com/copyright/">MapTiler</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
         : '&copy; <a href="https://stadiamaps.com/">Stadia Maps</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
       const t = L.tileLayer(tileUrl, {
-          maxZoom: 20,
+          maxZoom: mapMaxZoom(transportMode),
           opacity: 1,
           keepBuffer: 1,
           updateWhenIdle: false,
@@ -761,7 +788,7 @@ function LiveMapInner({
       const L = (await import("leaflet")).default;
       const newUrl = `https://api.maptiler.com/maps/${style}/{z}/{x}/{y}.png?key=${maptilerKey}`;
       const newLayer = L.tileLayer(newUrl, {
-        maxZoom: 20,
+        maxZoom: mapMaxZoom(transportMode),
         opacity: tileOpacity,
         keepBuffer: 1,
         updateWhenIdle: false,
@@ -1322,7 +1349,7 @@ function LiveMapInner({
                 (layoutViewportWidthPx * 40075017 * cosLat) /
                   (256 * widthTarget),
               );
-              return Math.max(12, Math.min(20, z));
+              return Math.max(12, Math.min(modeMaxZoom, z));
             })()
           : null;
       const _dp = driverPinsRef.current;
@@ -1785,6 +1812,7 @@ function LiveMapInner({
         nLat,
         viewportW,
         viewerTargetWidthRef.current,
+        modeMaxZoom,
       );
 
       // When viewerFollowLatLngBounds is active, prefer the bounds-fitted zoom so
@@ -1805,7 +1833,7 @@ function LiveMapInner({
         boundsZ == null
       ) {
         viewerZoomAnimQueuedWidthRef.current = null;
-        const toZ = zoomForVisibleWidthM(nLat, viewportW, queuedWidth);
+        const toZ = zoomForVisibleWidthM(nLat, viewportW, queuedWidth, modeMaxZoom);
         const fromZ = mm.getZoom();
         if (Math.abs(toZ - fromZ) > 0.02) {
           viewerZoomAnimRef.current = {
@@ -1882,7 +1910,7 @@ function LiveMapInner({
       m.off("zoomend", onZoomEnd);
     };
   // driverPins intentionally omitted — read via driverPinsRef.current.
-  }, [followMode, streamer, routePoints.length, viewerFollowZoom, viewerFollowLatLngBounds]);
+  }, [followMode, streamer, routePoints.length, viewerFollowZoom, viewerFollowLatLngBounds, transportMode]);
 
   return (
     <div className="relative h-full w-full" style={{ background: "transparent" }}>

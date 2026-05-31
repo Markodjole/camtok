@@ -11,6 +11,7 @@ import {
 } from "@/lib/live/routing/drivingRouteStyle";
 import { computeEqualOdds } from "@/lib/live/betting/marketOdds";
 import { bustPlanningRouteCache } from "@/lib/live/routing/computeDriverRouteInstruction";
+import { buildRouteToPinPolyline } from "@/lib/live/routing/nextStepRoutePath";
 import { BET_OPEN_WINDOW_IDLE_MS, MIN_VIABLE_STEP_BET_DIST_M } from "@/lib/live/betting/betWindowConstants";
 
 /**
@@ -40,6 +41,7 @@ import { BET_OPEN_WINDOW_IDLE_MS, MIN_VIABLE_STEP_BET_DIST_M } from "@/lib/live/
  *   maneuverType:     string;   // "turn", "roundabout", etc.
  *   maneuverModifier: string | undefined; // "left", "right", "straight", etc.
  *   stepName:         string;   // road name at the maneuver
+ *   routeToPin:         Array<{ lat: number; lng: number }>; // path snapshot at open
  * }
  */
 
@@ -52,6 +54,7 @@ export type NextStepSubtitle = {
   maneuverType: string;
   maneuverModifier?: string;
   stepName: string;
+  routeToPin?: Array<{ lat: number; lng: number }>;
 };
 
 export async function openNextStepMarketForRoom(
@@ -244,6 +247,15 @@ export async function openNextStepMarketForRoom(
 
   const odds = computeEqualOdds(options);
 
+  const routeToPin =
+    estimate.planningPolyline != null
+      ? buildRouteToPinPolyline(estimate.planningPolyline, driver, stepTarget)
+      : buildRouteToPinPolyline(
+          [driver, stepTarget],
+          driver,
+          stepTarget,
+        );
+
   const subtitle: NextStepSubtitle = {
     stepKey,
     stepLat,
@@ -253,6 +265,7 @@ export async function openNextStepMarketForRoom(
     maneuverType,
     maneuverModifier,
     stepName,
+    routeToPin,
   };
 
   // ── Timing ────────────────────────────────────────────────────────────────
@@ -348,7 +361,7 @@ async function estimateSecToStep(params: {
   transportMode: string | null;
   drivingRouteStyle: DrivingRouteStyle | null;
   fallbackSpeedMps: number;
-}): Promise<{ sec: number; source: "google_route" | "speed" }> {
+}): Promise<{ sec: number; source: "google_route" | "speed"; planningPolyline?: LatLng[] }> {
   const {
     driver,
     destination,
@@ -372,6 +385,8 @@ async function estimateSecToStep(params: {
   });
   if (!route || route.polyline.length < 2) return speedFallback();
 
+  const planningPolyline: LatLng[] = [driver, ...route.polyline];
+
   // Heading sanity check — make sure the route starts in the driver's direction.
   if (driverHeadingDeg != null) {
     const firstFar = route.polyline.find((p) => metersBetween(driver, p) > 15);
@@ -384,7 +399,7 @@ async function estimateSecToStep(params: {
   }
 
   // Walk the polyline from driver and find the segment closest to stepTarget.
-  const points: LatLng[] = [driver, ...route.polyline];
+  const points: LatLng[] = planningPolyline;
   let travelledM = 0;
   let closestM = Number.POSITIVE_INFINITY;
   let closestTravelledM = 0;
@@ -421,7 +436,7 @@ async function estimateSecToStep(params: {
       ? route.durationSec * (closestTravelledM / route.distanceMeters)
       : closestTravelledM / Math.max(1, fallbackSpeedMps);
 
-  return { sec: roundCleanSec(raw), source: "google_route" };
+  return { sec: roundCleanSec(raw), source: "google_route", planningPolyline };
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

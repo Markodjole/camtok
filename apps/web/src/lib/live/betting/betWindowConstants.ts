@@ -218,6 +218,13 @@ export const NEXT_STEP_APPROACH_M = 150;
  */
 export const NEXT_STEP_DEPARTURE_M = 10;
 
+/**
+ * Perpendicular distance (m) from the stored driver→pin path beyond which the
+ * next_step market is cancelled and all bets refunded. Matches the off-route
+ * tolerance used when trimming the planning polyline for map display.
+ */
+export const NEXT_STEP_ROUTE_DEVIATION_M = 40;
+
 // ─── Minimum viable window guards ────────────────────────────────────────────
 //
 // These thresholds prevent "impossible" bets where the resolution event is so

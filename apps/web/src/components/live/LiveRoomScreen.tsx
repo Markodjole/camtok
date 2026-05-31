@@ -29,6 +29,11 @@ import { liveBetRelaxClient } from "@/lib/live/liveBetRelax";
 import { viewerLiveLog, viewerLiveWarn } from "@/lib/live/viewerLiveConsole";
 import { metersBetween } from "@/lib/live/routing/geometry";
 import {
+  buildRouteToPinPolyline,
+  isDriverOffRouteToPin,
+  type CompactLatLng,
+} from "@/lib/live/routing/nextStepRoutePath";
+import {
   BET_OPEN_WINDOW_MS,
   NEXT_TURN_PIN_MAX_M,
   NEXT_TURN_PIN_MIN_M,
@@ -60,7 +65,7 @@ import { walletLiveBalance } from "@/lib/live/walletBalance";
 import type { TrafficCamera } from "@/app/api/live/traffic-cameras/route";
 import { TrafficCameraPanel } from "./TrafficCameraPanel";
 import { StraightStreakTracker } from "./StraightStreakTracker";
-import { isTwoWheeled } from "./LiveMap";
+import { isTwoWheeled, mapZoomLevelOffset, zoomWidthForLevelOffset } from "./LiveMap";
 
 const LiveMap = dynamic(() => import("./LiveMap").then((m) => m.LiveMap), {
   ssr: false,
@@ -365,6 +370,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     remainingAtBetSec: number;
     stepLat?: number;
     stepLng?: number;
+    routeToPin?: CompactLatLng[];
   } | null>(null);
   const nextStepDismissedRef = useRef<Set<string>>(new Set());
   /** Tracks the last market a step bet was placed on (mirrors lastBetMarketId for step slot). */
@@ -626,6 +632,67 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   // loop starts at the same moment the server is likely to settle.
   const driverLastPos =
     routePoints.length > 0 ? routePoints[routePoints.length - 1]! : null;
+
+  const nextStepRouteToPin = useMemo((): CompactLatLng[] | null => {
+    const fromMeta = routeToPinFromMeta(currentStepMarket?.meta ?? null);
+    if (fromMeta) return fromMeta;
+    if (nextStepPending?.routeToPin && nextStepPending.routeToPin.length >= 2) {
+      return nextStepPending.routeToPin;
+    }
+    if (
+      destinationRoute &&
+      destinationRoute.length >= 2 &&
+      driverLastPos &&
+      currentStepMarket?.turnPointLat != null &&
+      currentStepMarket.turnPointLng != null
+    ) {
+      return buildRouteToPinPolyline(destinationRoute, driverLastPos, {
+        lat: currentStepMarket.turnPointLat,
+        lng: currentStepMarket.turnPointLng,
+      });
+    }
+    return null;
+  }, [
+    currentStepMarket?.meta,
+    currentStepMarket?.turnPointLat,
+    currentStepMarket?.turnPointLng,
+    nextStepPending?.routeToPin,
+    destinationRoute,
+    driverLastPos,
+  ]);
+
+  const nextStepOffRoute = useMemo(() => {
+    if (!driverLastPos || !nextStepRouteToPin) return false;
+    const pinLat =
+      currentStepMarket?.turnPointLat ??
+      nextStepPending?.stepLat ??
+      null;
+    const pinLng =
+      currentStepMarket?.turnPointLng ??
+      nextStepPending?.stepLng ??
+      null;
+    const pin =
+      pinLat != null && pinLng != null ? { lat: pinLat, lng: pinLng } : null;
+    return isDriverOffRouteToPin(driverLastPos, nextStepRouteToPin, pin);
+  }, [
+    driverLastPos,
+    nextStepRouteToPin,
+    currentStepMarket?.turnPointLat,
+    currentStepMarket?.turnPointLng,
+    nextStepPending?.stepLat,
+    nextStepPending?.stepLng,
+  ]);
+
+  useEffect(() => {
+    if (!nextStepOffRoute) return;
+    const marketId = currentStepMarket?.id ?? nextStepPending?.marketId;
+    if (!marketId) return;
+    nextStepDismissedRef.current.add(marketId);
+    setNextStepPending(null);
+    dismissBetFeedEntry(marketId);
+    void syncWalletFromServer();
+  }, [nextStepOffRoute, currentStepMarket?.id, nextStepPending?.marketId, dismissBetFeedEntry, syncWalletFromServer]);
+
   const stepPinNearby = Boolean(
     nextStepPending &&
       nextStepPending.stepLat != null &&
@@ -1063,6 +1130,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           remainingAtBetSec: remaining,
           stepLat: market.turnPointLat ?? undefined,
           stepLng: market.turnPointLng ?? undefined,
+          routeToPin: routeToPinFromMeta(market.meta) ?? undefined,
         });
       }
     }
@@ -1347,6 +1415,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
    */
   const ZOOM_DEFAULT_M = isMobileViewport ? 700 : 900;
   const ZOOM_NEXT_TURN_M = isMobileViewport ? 450 : 600;
+  const zoomLevelOffset = mapZoomLevelOffset(room.transportMode);
 
   // Zoom tightens when there is an open next_turn market and no bet placed yet.
   // betJustPlaced is declared early enough; viewerHasBetOnCurrentMarket/betWindowClosed
@@ -1356,7 +1425,11 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
   const targetWidthMeters = nextTurnSheetOpen ? ZOOM_NEXT_TURN_M : ZOOM_DEFAULT_M;
   // Divide by zoomScale so 0.7 → 1/0.7 ≈ 1.43× wider = zoomed out.
-  const viewerTargetWidthMeters = targetWidthMeters / zoomScale;
+  // Two-wheeled baseline offset halves width per level (same as +1 Leaflet zoom).
+  const viewerTargetWidthMeters = zoomWidthForLevelOffset(
+    targetWidthMeters / zoomScale,
+    zoomLevelOffset,
+  );
 
   const marketTurnPassKey =
     currentMarket != null && currentMarket.marketType !== "city_grid"
@@ -1390,28 +1463,33 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   // Falls back to nextStepPending so the pin stays visible after the market
   // closes until the server confirms resolution for users who placed a bet.
   const stepPin =
-    currentStepMarket?.turnPointLat != null &&
-    currentStepMarket?.turnPointLng != null
-      ? { lat: currentStepMarket.turnPointLat, lng: currentStepMarket.turnPointLng }
-      : nextStepPending?.stepLat != null && nextStepPending?.stepLng != null
-        ? { lat: nextStepPending.stepLat, lng: nextStepPending.stepLng }
-        : null;
+    nextStepOffRoute
+      ? null
+      : currentStepMarket?.turnPointLat != null &&
+          currentStepMarket?.turnPointLng != null
+        ? { lat: currentStepMarket.turnPointLat, lng: currentStepMarket.turnPointLng }
+        : nextStepPending?.stepLat != null && nextStepPending?.stepLng != null
+          ? { lat: nextStepPending.stepLat, lng: nextStepPending.stepLng }
+          : null;
 
   // Countdown props for the pin widget.
   // Priority:
   //   1. Active next_step market open → count from opensAt/estimatedSec (visible to ALL viewers).
   //   2. Market closed but user has a pending bet → count from betPlacedAt (resolving state).
   //   3. Nothing → null (widget hidden).
-  const nextStepCountdown: { betPlacedAtMs: number; remainingAtBetSec: number } | null = (() => {
-    if (currentStepMarket?.marketType === "next_step") {
-      const parsed = parseNextStepMarketMeta(currentStepMarket);
-      if (parsed) return { betPlacedAtMs: parsed.opensAtMs, remainingAtBetSec: parsed.estimatedSec };
-    }
-    if (nextStepPending) {
-      return { betPlacedAtMs: nextStepPending.betPlacedAtMs, remainingAtBetSec: nextStepPending.remainingAtBetSec };
-    }
-    return null;
-  })();
+  const nextStepCountdown: { betPlacedAtMs: number; remainingAtBetSec: number } | null =
+    nextStepOffRoute
+      ? null
+      : (() => {
+          if (currentStepMarket?.marketType === "next_step") {
+            const parsed = parseNextStepMarketMeta(currentStepMarket);
+            if (parsed) return { betPlacedAtMs: parsed.opensAtMs, remainingAtBetSec: parsed.estimatedSec };
+          }
+          if (nextStepPending) {
+            return { betPlacedAtMs: nextStepPending.betPlacedAtMs, remainingAtBetSec: nextStepPending.remainingAtBetSec };
+          }
+          return null;
+        })();
 
   const viewerDecisionLatLng =
     viewerTurnTargetForMap != null
@@ -1652,6 +1730,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       remainingAtBetSec: remaining,
       stepLat: currentStepMarket.turnPointLat ?? undefined,
       stepLng: currentStepMarket.turnPointLng ?? undefined,
+      routeToPin: routeToPinFromMeta(currentStepMarket.meta) ?? undefined,
     });
   }, [
     currentStepMarket,
@@ -2579,7 +2658,6 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
                     : isLive && !!stepPlacingOptionId
                 }
                 error={isUnified && isLive ? mapSheetError : null}
-                opensAt={market.opensAt}
                 locksAt={market.locksAt}
                 onClose={() => {
                   if (isUnified) {
@@ -3148,6 +3226,12 @@ function settlingChipText(marketType: string): string {
   }
 }
 
+function routeToPinFromMeta(meta: Record<string, unknown> | null): CompactLatLng[] | null {
+  const raw = meta?.routeToPin;
+  if (!Array.isArray(raw) || raw.length < 2) return null;
+  return raw as CompactLatLng[];
+}
+
 function parseNextStepMarketMeta(
   market: NonNullable<LiveFeedRow["currentMarket"]>,
 ): { estimatedSec: number; opensAtMs: number } | null {
@@ -3239,29 +3323,47 @@ function zoneTimeOptionLabel(optionId: string, remainingSec: number | null): str
   return null;
 }
 
-/** 0 = start of window (green-grey), 1 = lock (red-grey). */
-/** Returns seconds elapsed since the market opened. */
-function useBetWindowElapsed(opensAt: string): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 250);
-    return () => clearInterval(id);
-  }, []);
-  const openMs = Date.parse(opensAt);
-  if (!Number.isFinite(openMs)) return 0;
-  return Math.max(0, (now - openMs) / 1000);
+/** Seconds before lock when the bet sheet turns red. */
+const BET_URGENCY_RED_SEC = 3;
+/** Seconds before lock when yellow warning starts (between calm and red). */
+const BET_URGENCY_YELLOW_SEC = 5;
+
+type BetSheetUrgencyPhase = "calm" | "warn" | "urgent";
+
+function betSheetUrgencyPhase(secondsLeft: number): BetSheetUrgencyPhase {
+  if (secondsLeft <= 0 || secondsLeft === -1) return "urgent";
+  if (secondsLeft <= BET_URGENCY_RED_SEC) return "urgent";
+  if (secondsLeft <= BET_URGENCY_YELLOW_SEC) return "warn";
+  return "calm";
 }
 
-/**
- * Three distinct phases based on elapsed seconds:
- *   0 – 4 s  → greenish grey  (plenty of time)
- *   4 – 5 s  → yellowish grey (hurry up)
- *   5 + s    → reddish grey   (last call, 3 s left of 8 s window)
- */
-function betSheetUrgencyBackground(elapsedSec: number): string {
-  if (elapsedSec < 4) return "rgba(30, 46, 32, 0.78)";   // green-grey
-  if (elapsedSec < 5) return "rgba(50, 46, 22, 0.78)";   // yellow-grey
-  return "rgba(54, 24, 24, 0.78)";                         // red-grey
+function betSheetUrgencyStyle(secondsLeft: number): {
+  backgroundColor: string;
+  boxShadow: string;
+  borderColor: string;
+} {
+  switch (betSheetUrgencyPhase(secondsLeft)) {
+    case "calm":
+      return {
+        backgroundColor: "rgba(30, 46, 32, 0.78)",
+        boxShadow: "0 -4px 18px rgba(0, 0, 0, 0.32)",
+        borderColor: "rgba(255, 255, 255, 0.15)",
+      };
+    case "warn":
+      return {
+        backgroundColor: "rgba(50, 46, 22, 0.82)",
+        boxShadow:
+          "0 0 18px rgba(245, 158, 11, 0.3), 0 -4px 18px rgba(0, 0, 0, 0.32)",
+        borderColor: "rgba(251, 191, 36, 0.28)",
+      };
+    case "urgent":
+      return {
+        backgroundColor: "rgba(110, 8, 8, 0.94)",
+        boxShadow:
+          "0 0 36px rgba(239, 68, 68, 0.9), 0 -10px 52px rgba(220, 38, 38, 0.75), inset 0 0 0 1px rgba(252, 165, 165, 0.4)",
+        borderColor: "rgba(248, 113, 113, 0.55)",
+      };
+  }
 }
 
 function useLiveReferenceSec(
@@ -3359,7 +3461,7 @@ function shortOptionLabel(
 /** Full-width stacked bet cards — newest on top, older anchored at bottom. */
 function BetFeedStack({ children }: { children: ReactNode }) {
   return (
-    <div className="bet-feed-stack pointer-events-none fixed inset-x-0 bottom-0 z-[200] flex flex-col justify-end gap-1.5 pb-14">
+    <div className="bet-feed-stack pointer-events-none fixed inset-x-0 bottom-0 z-[200] flex flex-col justify-end gap-1 pb-12">
       {children}
     </div>
   );
@@ -3378,7 +3480,6 @@ const BetFeedCard = memo(function BetFeedCard({
   bettingPending = false,
   isPlacing,
   error,
-  opensAt,
   locksAt,
   onClose: _onClose,
   onPlaceBet,
@@ -3398,7 +3499,6 @@ const BetFeedCard = memo(function BetFeedCard({
   bettingPending?: boolean;
   isPlacing: boolean;
   error: string | null;
-  opensAt: string;
   locksAt: string;
   onClose: () => void;
   onPlaceBet: () => Promise<void>;
@@ -3406,8 +3506,8 @@ const BetFeedCard = memo(function BetFeedCard({
   turnMode?: boolean;
   oneTapOptionBet?: boolean;
 }) {
-  const elapsed = useBetWindowElapsed(opensAt);
-  const sheetBg = betSheetUrgencyBackground(elapsed);
+  const { secondsLeft } = useCountdown(locksAt);
+  const sheetStyle = betSheetUrgencyStyle(secondsLeft);
   const refSec = useLiveReferenceSec(referenceCountdown);
   const headline = betFeedHeadline(marketType, refSec, title, referenceStreak);
   const sorted = [...marketOptions].sort((a, b) => a.displayOrder - b.displayOrder);
@@ -3445,7 +3545,7 @@ const BetFeedCard = memo(function BetFeedCard({
 
   const optionBtnClass = (active: boolean, disabled: boolean) =>
     [
-      "flex h-9 min-w-[44px] items-center justify-center rounded-lg px-3 text-sm font-bold leading-none transition active:scale-[0.97]",
+      "flex h-8 min-w-[40px] items-center justify-center rounded-md px-2.5 text-[13px] font-bold leading-none transition active:scale-[0.97]",
       active
         ? "bg-white text-black shadow-md ring-2 ring-white/25"
         : disabled
@@ -3494,24 +3594,24 @@ const BetFeedCard = memo(function BetFeedCard({
   return (
     <div className="bet-feed-enter pointer-events-auto w-full shrink-0">
       <div
-        className="overflow-hidden border-t border-white/15 shadow-xl backdrop-blur-md"
+        className="overflow-hidden border-t backdrop-blur-md"
         style={{
-          backgroundColor: sheetBg,
-          transition: "background-color 0.35s ease",
+          backgroundColor: sheetStyle.backgroundColor,
+          boxShadow: sheetStyle.boxShadow,
+          borderColor: sheetStyle.borderColor,
+          transition: "background-color 0.3s ease, box-shadow 0.3s ease, border-color 0.3s ease",
         }}
       >
-        <div className="flex justify-end px-3 pt-1">
-          <FeedTimer locksAt={locksAt} />
-        </div>
-
-        <div className="flex items-center gap-2 px-3 pb-2.5">
-          <p className="min-w-0 flex-1 truncate text-sm font-bold tabular-nums text-white">
+        <div className="flex items-center gap-1.5 px-2.5 py-1.5">
+          <p className="min-w-0 flex-1 truncate text-[13px] font-bold leading-tight tabular-nums text-white">
             {headline}
           </p>
 
+          <FeedTimer locksAt={locksAt} />
+
           {gridMode ? (
             <>
-              <span className="shrink-0 truncate text-xs text-white/60">
+              <span className="max-w-[28%] shrink truncate text-[11px] text-white/60">
                 {selectionDetail ?? "Tap map"}
               </span>
               {!oneTapOptionBet ? (
@@ -3519,21 +3619,21 @@ const BetFeedCard = memo(function BetFeedCard({
                   type="button"
                   disabled={bettingClosed || !selectedOptionId || isPlacing}
                   onClick={() => void onPlaceBet()}
-                  className="h-9 shrink-0 rounded-lg bg-red-500 px-4 text-xs font-bold text-white disabled:bg-white/10 disabled:text-white/35"
+                  className="h-8 shrink-0 rounded-md bg-red-500 px-3 text-[11px] font-bold text-white disabled:bg-white/10 disabled:text-white/35"
                 >
                   {isPlacing ? "…" : bettingClosed ? "Closed" : "Bet"}
                 </button>
               ) : null}
             </>
           ) : (
-            <div className="flex shrink-0 items-center gap-1.5">
+            <div className="flex shrink-0 items-center gap-1">
               {renderOptionButtons()}
             </div>
           )}
         </div>
 
         {error ? (
-          <div className="truncate px-3 pb-2 text-xs text-red-300">{error}</div>
+          <div className="truncate px-2.5 pb-1 text-[11px] leading-tight text-red-300">{error}</div>
         ) : null}
       </div>
     </div>
@@ -3544,13 +3644,15 @@ const FeedTimer = memo(function FeedTimer({ locksAt }: { locksAt: string }) {
   const { secondsLeft } = useCountdown(locksAt);
   if (secondsLeft === -1) return null;
   const locked = secondsLeft <= 0;
+  const urgent = !locked && secondsLeft <= BET_URGENCY_RED_SEC;
+  const warn = !locked && !urgent && secondsLeft <= BET_URGENCY_YELLOW_SEC;
   return (
     <span
-      className={`shrink-0 rounded px-1.5 py-px text-[10px] font-semibold tabular-nums leading-none ${
-        locked
-          ? "bg-red-500/20 text-red-300"
-          : secondsLeft < 4
-            ? "bg-amber-500/20 text-amber-200"
+      className={`shrink-0 rounded px-1 py-px text-[10px] font-semibold tabular-nums leading-none ${
+        locked || urgent
+          ? "bg-red-600/55 text-red-50 ring-1 ring-red-400/70"
+          : warn
+            ? "bg-amber-500/30 text-amber-100"
             : "text-white/45"
       }`}
       title="Seconds left to place bet"

@@ -19,13 +19,11 @@
 
 import { metersBetween } from "@/lib/live/routing/geometry";
 import {
-  STREAK_CROSSROAD_PROXIMITY_M,
-} from "@/lib/live/betting/betWindowConstants";
-import {
   getResolutionPolicy,
   type ResolutionEvent,
   type HeadingChangeEvent,
   type IntersectionsPassedEvent,
+  type RouteDeviationEvent,
   type TurnPinProximityEvent,
 } from "@/lib/live/betting/resolutionPolicies";
 import {
@@ -34,6 +32,15 @@ import {
 } from "@/lib/live/grid/cityGrid500";
 import type { CityGridSpecCompact } from "@/lib/live/grid/cityGrid500";
 import type { CrossroadBearing } from "@/lib/live/routing/straightStreakAnalyzer";
+import {
+  countStraightStreakProgress,
+  hasCommittedTurn,
+  type GpsSample,
+} from "@/lib/live/routing/straightStreakPassage";
+import {
+  isDriverOffRouteToPin,
+  type CompactLatLng,
+} from "@/lib/live/routing/nextStepRoutePath";
 import type { ServiceClient } from "./types";
 
 // ─── Input type ────────────────────────────────────────────────────────────
@@ -57,8 +64,8 @@ export type MarketSweepRow = {
 // ─── Public API ────────────────────────────────────────────────────────────
 
 export type EvaluationResult =
-  | { shouldSettle: true; firedLabel: string }
-  | { shouldSettle: false; firedLabel: null };
+  | { shouldSettle: true; firedLabel: string; action: "settle" | "refund" }
+  | { shouldSettle: false; firedLabel: null; action: null };
 
 /**
  * Walk the resolution policy for `row.market_type` and return the first
@@ -85,11 +92,12 @@ export async function evaluateResolutionConditions(
   for (const condition of conditions) {
     const fired = await evaluateEvent(service, row, condition.event, nowMs);
     if (fired) {
-      return { shouldSettle: true, firedLabel: condition.label };
+      const action = condition.event.type === "route_deviation" ? "refund" : "settle";
+      return { shouldSettle: true, firedLabel: condition.label, action };
     }
   }
 
-  return { shouldSettle: false, firedLabel: null };
+  return { shouldSettle: false, firedLabel: null, action: null };
 }
 
 // ─── Event dispatcher ─────────────────────────────────────────────────────
@@ -112,6 +120,9 @@ async function evaluateEvent(
 
     case "cell_crossed":
       return checkCellCrossed(service, row);
+
+    case "route_deviation":
+      return checkRouteDeviation(service, row, event);
 
     case "turn_pin_proximity":
       return checkTurnPinProximity(service, row, event);
@@ -164,17 +175,8 @@ async function checkHeadingChange(
 }
 
 /**
- * intersections_passed — fires when the driver has physically passed through
- * at least `event.count` intersections from the market subtitle.
- *
- * An intersection is considered "passed" when at least one GPS snapshot
- * since `opens_at` falls within STREAK_CROSSROAD_PROXIMITY_M of its centroid.
- *
- * The effective threshold is `min(event.count, intersections.length)` so the
- * condition never waits for crossroads the market was never opened with.
- *
- * Iteration stops at the first intersection that hasn't been reached (ordered
- * list → earlier ones must be passed before later ones).
+ * intersections_passed — settles when the driver completes the expected number
+ * of consecutive straight passages, or takes a turn at any reached junction.
  */
 async function checkIntersectionsPassed(
   service: ServiceClient,
@@ -196,16 +198,11 @@ async function checkIntersectionsPassed(
     return false;
   }
 
-  // Use the per-market expected streak as the resolution threshold so the
-  // market fires as soon as the driver has gone straight through exactly N
-  // intersections (the reference number shown in the bet options).
-  // Falls back to the policy-level event.count if the subtitle has no value.
   const effectiveCount = expectedStreak ?? event.count;
-  const resolveAfter = Math.min(effectiveCount, intersections.length);
 
   const { data: snaps } = await service
     .from("live_route_snapshots")
-    .select("normalized_lat, normalized_lng, raw_lat, raw_lng")
+    .select("normalized_lat, normalized_lng, raw_lat, raw_lng, heading_deg")
     .eq("live_session_id", row.live_session_id)
     .gte("recorded_at", row.opens_at)
     .order("recorded_at", { ascending: true })
@@ -213,31 +210,22 @@ async function checkIntersectionsPassed(
 
   if (!snaps || snaps.length === 0) return false;
 
-  const gps = (snaps as Array<{
+  const gps: GpsSample[] = (snaps as Array<{
     normalized_lat: number | null;
     normalized_lng: number | null;
     raw_lat: number;
     raw_lng: number;
+    heading_deg: number | null;
   }>).map((p) => ({
     lat: p.normalized_lat ?? p.raw_lat,
     lng: p.normalized_lng ?? p.raw_lng,
+    heading: p.heading_deg,
   }));
 
-  let passed = 0;
-  for (const intersection of intersections) {
-    const wasNear = gps.some(
-      (p) =>
-        metersBetween({ lat: p.lat, lng: p.lng }, intersection) <=
-        STREAK_CROSSROAD_PROXIMITY_M,
-    );
+  if (hasCommittedTurn(gps)) return true;
 
-    if (!wasNear) break; // Intersections are route-ordered — stop at the first gap.
-
-    passed++;
-    if (passed >= resolveAfter) return true;
-  }
-
-  return false;
+  const progress = countStraightStreakProgress(gps, intersections, effectiveCount);
+  return progress.ended && (progress.endedReason === "complete" || progress.endedReason === "turn");
 }
 
 /**
@@ -290,6 +278,87 @@ async function checkCellCrossed(
   if (!currentCell) return false;
 
   return currentCell !== `grid:r${startRow}:c${startCol}`;
+}
+
+/**
+ * route_deviation — fires when the driver's latest position is farther than
+ * `maxOffRouteM` from the stored driver→pin polyline and they have not yet
+ * entered the pin approach zone.
+ */
+async function checkRouteDeviation(
+  service: ServiceClient,
+  row: MarketSweepRow,
+  event: RouteDeviationEvent,
+): Promise<boolean> {
+  if (row.market_type !== "next_step" || !row.live_session_id) return false;
+
+  let routeToPin: CompactLatLng[] | null = null;
+  let stepLat = row.turn_point_lat;
+  let stepLng = row.turn_point_lng;
+  try {
+    const meta = JSON.parse(row.subtitle ?? "{}") as {
+      routeToPin?: CompactLatLng[];
+      stepLat?: number;
+      stepLng?: number;
+    };
+    if (Array.isArray(meta.routeToPin) && meta.routeToPin.length >= 2) {
+      routeToPin = meta.routeToPin;
+    }
+    if (typeof meta.stepLat === "number") stepLat = meta.stepLat;
+    if (typeof meta.stepLng === "number") stepLng = meta.stepLng;
+  } catch {
+    return false;
+  }
+  if (!routeToPin) {
+    const { data: first } = await service
+      .from("live_route_snapshots")
+      .select("normalized_lat, normalized_lng, raw_lat, raw_lng")
+      .eq("live_session_id", row.live_session_id)
+      .gte("recorded_at", row.opens_at)
+      .order("recorded_at", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (first && stepLat != null && stepLng != null) {
+      const g0 = first as {
+        normalized_lat: number | null;
+        normalized_lng: number | null;
+        raw_lat: number;
+        raw_lng: number;
+      };
+      routeToPin = [
+        { lat: g0.normalized_lat ?? g0.raw_lat, lng: g0.normalized_lng ?? g0.raw_lng },
+        { lat: stepLat, lng: stepLng },
+      ];
+    } else {
+      return false;
+    }
+  }
+
+  const { data: latest } = await service
+    .from("live_route_snapshots")
+    .select("normalized_lat, normalized_lng, raw_lat, raw_lng")
+    .eq("live_session_id", row.live_session_id)
+    .gte("recorded_at", row.opens_at)
+    .order("recorded_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!latest) return false;
+
+  const g = latest as {
+    normalized_lat: number | null;
+    normalized_lng: number | null;
+    raw_lat: number;
+    raw_lng: number;
+  };
+  const driver = {
+    lat: g.normalized_lat ?? g.raw_lat,
+    lng: g.normalized_lng ?? g.raw_lng,
+  };
+  const pin =
+    stepLat != null && stepLng != null ? { lat: stepLat, lng: stepLng } : null;
+
+  return isDriverOffRouteToPin(driver, routeToPin, pin, event.maxOffRouteM);
 }
 
 /**

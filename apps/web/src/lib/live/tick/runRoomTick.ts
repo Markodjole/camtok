@@ -19,7 +19,7 @@ import {
 import { openNextStepMarketForRoom } from "@/actions/live-next-step-market";
 import { openNextTurnMarketForRoom } from "@/actions/live-next-turn-market";
 import { openStraightStreakMarketForRoom } from "@/actions/live-straight-streak-market";
-import { lockAndSettleMarket, lockMarket, revealAndSettleMarket } from "@/actions/live-settlement";
+import { lockAndSettleMarket, lockMarket, revealAndSettleMarket, cancelAndRefundMarket } from "@/actions/live-settlement";
 import { isEngineMarketType } from "@/lib/live/betting/engineMarketOptions";
 import {
   BET_OPEN_WINDOW_MS,
@@ -1811,8 +1811,16 @@ async function sweepPendingSettlements(
           turn_point_lng: (row as { turn_point_lng: number | null }).turn_point_lng,
           city_grid_spec: null,
         };
-        const { shouldSettle: s } = await evaluateResolutionConditions(service, sweepRow, nowMs);
+        const { shouldSettle: s, action } = await evaluateResolutionConditions(service, sweepRow, nowMs);
         shouldSettle = s;
+        if (shouldSettle && action === "refund") {
+          console.log(
+            `[tick:sweep] open-market route deviation — refunding ${mid} (${mType})`,
+            { roomId },
+          );
+          await cancelAndRefundMarket(mid, "route_deviation");
+          continue;
+        }
       }
 
       if (!shouldSettle) continue;
@@ -1895,7 +1903,7 @@ async function sweepPendingSettlements(
           city_grid_spec: (row as { city_grid_spec: import("@/lib/live/grid/cityGrid500").CityGridSpecCompact | null }).city_grid_spec,
         };
 
-        const { shouldSettle, firedLabel } = await evaluateResolutionConditions(
+        const { shouldSettle, firedLabel, action } = await evaluateResolutionConditions(
           service,
           sweepRow,
           nowMs,
@@ -1910,7 +1918,14 @@ async function sweepPendingSettlements(
             : `opensAt=${opensAtStr}`,
         });
 
-        if (shouldSettle) {
+        if (shouldSettle && action === "refund") {
+          console.log(
+            `[tick:sweep] policy condition "${firedLabel}" — refunding ${mid} (${marketType})`,
+          );
+          await cancelAndRefundMarket(mid, firedLabel ?? "route_deviation");
+          settled = true;
+          reason = firedLabel ?? "route_deviation";
+        } else if (shouldSettle) {
           console.log(
             `[tick:sweep] policy condition "${firedLabel}" fired — settling ${mid} (${marketType})`,
           );

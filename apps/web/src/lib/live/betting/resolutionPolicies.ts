@@ -29,6 +29,7 @@
 import {
   NEXT_STEP_APPROACH_M,
   NEXT_STEP_DEPARTURE_M,
+  NEXT_STEP_ROUTE_DEVIATION_M,
   STRAIGHT_STREAK_COMMITTED_TURN_DEG,
   STRAIGHT_STREAK_INTERSECTIONS_TO_RESOLVE,
 } from "./betWindowConstants";
@@ -89,6 +90,18 @@ export type CellCrossedEvent = {
 };
 
 /**
+ * Fires when the driver leaves the planned path to the pin (perpendicular
+ * distance > `maxOffRouteM`) before reaching the pin approach zone.
+ *
+ * Used by `next_step` markets — triggers a refund, not a winner settlement.
+ */
+export type RouteDeviationEvent = {
+  type: "route_deviation";
+  /** Max perpendicular distance (m) from the stored driver→pin polyline. */
+  maxOffRouteM: number;
+};
+
+/**
  * Fires when the driver has:
  *   (a) approached within `approachRadiusM` of the turn pin, AND
  *   (b) the latest GPS point is at least `departureM` further away
@@ -98,7 +111,7 @@ export type CellCrossedEvent = {
  * `headingFallbackDeg` — a separate guard for when the driver turns well
  * before reaching the pin.
  *
- * Used by `next_turn` markets.
+ * Used by `next_turn` and `next_step` markets.
  */
 export type TurnPinProximityEvent = {
   type: "turn_pin_proximity";
@@ -121,6 +134,7 @@ export type ResolutionEvent =
   | IntersectionsPassedEvent
   | RevealTimeoutEvent
   | CellCrossedEvent
+  | RouteDeviationEvent
   | TurnPinProximityEvent;
 
 // ─── Condition & Policy types ──────────────────────────────────────────────
@@ -251,11 +265,18 @@ registerResolutionPolicy({
 registerResolutionPolicy({
   marketType: "next_step",
   description:
-    "Settle when the driver reaches the OSRM step maneuver point: they come " +
-    `within ${NEXT_STEP_APPROACH_M} m AND start moving away (${NEXT_STEP_DEPARTURE_M} m ` +
-    "departure), or the overall heading changes ≥ 50° (early turn before the point). " +
-    "reveal_at is the unconditional safety cap.",
+    "Refund when the driver leaves the planned path to the pin (> " +
+    `${NEXT_STEP_ROUTE_DEVIATION_M} m off-route). Settle when they reach the ` +
+    `maneuver point (within ${NEXT_STEP_APPROACH_M} m AND ${NEXT_STEP_DEPARTURE_M} m ` +
+    "departure), or heading changes ≥ 50°. reveal_at is the safety cap.",
   conditions: [
+    {
+      label: "route_deviation",
+      event: {
+        type: "route_deviation",
+        maxOffRouteM: NEXT_STEP_ROUTE_DEVIATION_M,
+      },
+    },
     {
       label: "step_reached",
       event: {
