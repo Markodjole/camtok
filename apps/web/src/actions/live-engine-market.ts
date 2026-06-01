@@ -539,6 +539,7 @@ async function estimateZoneExitSecFromGoogleRoute(params: {
   const route = await fetchGoogleDirectionsRoute(driver, destination, {
     transportMode: transportMode ?? undefined,
     drivingRouteStyle,
+    includeTraffic: false,
   });
   if (!route || route.polyline.length < 2) return null;
 

@@ -1,6 +1,10 @@
 import type { LatLng } from "./geometry";
 import type { DrivingRouteStyle } from "./drivingRouteStyle";
 import { googleRouteTuningFromDrivingStyle } from "./drivingRouteStyle";
+import {
+  checkGoogleRouteAllowed,
+  recordGoogleRouteCall,
+} from "./googleRouteGuard";
 
 /**
  * Decode a Google encoded polyline (precision 5) to a list of lat/lng.
@@ -100,6 +104,11 @@ export async function fetchGoogleDirectionsRoute(
     signal?: AbortSignal;
     /** When set, adjusts routingPreference + routeModifiers (highways/tolls/ferries). */
     drivingRouteStyle?: DrivingRouteStyle | null;
+    /**
+     * Traffic-aware polylines bill at Routes Pro (~2× Essentials).
+     * Use only for viewer map coloring; server planning should leave this false.
+     */
+    includeTraffic?: boolean;
   } = {},
 ): Promise<{
   polyline: LatLng[];
@@ -116,6 +125,14 @@ export async function fetchGoogleDirectionsRoute(
     return null;
   }
 
+  const guard = checkGoogleRouteAllowed();
+  if (!guard.allowed) {
+    console.warn("[googleDirections] blocked", guard.reason);
+    return null;
+  }
+
+  recordGoogleRouteCall();
+
   const modeKey = (opts.transportMode ?? "drive").toLowerCase();
   const travelMode = ROUTES_TRAVEL_MODE[modeKey] ?? "DRIVE";
 
@@ -126,11 +143,13 @@ export async function fetchGoogleDirectionsRoute(
   const motorRouting =
     travelMode === "DRIVE" || travelMode === "TWO_WHEELER";
 
-  // TRAFFIC_ON_POLYLINE requires TRAFFIC_AWARE (or OPTIMAL) routing preference.
-  // Always use TRAFFIC_AWARE for motor routes regardless of tuning style preference.
-  const routingPreference = motorRouting
+  const includeTraffic = opts.includeTraffic === true && motorRouting;
+
+  const routingPreference = includeTraffic
     ? tuning?.routingPreference ?? "TRAFFIC_AWARE"
-    : undefined;
+    : motorRouting
+      ? "TRAFFIC_UNAWARE"
+      : undefined;
 
   const routeModifiers =
     motorRouting &&
@@ -148,12 +167,11 @@ export async function fetchGoogleDirectionsRoute(
     },
     travelMode,
     // HIGH_QUALITY gives denser polyline points that align with speedReadingInterval indices.
-    polylineQuality: "HIGH_QUALITY",
+    polylineQuality: includeTraffic ? "HIGH_QUALITY" : "OVERVIEW",
     polylineEncoding: "ENCODED_POLYLINE",
     ...(routingPreference ? { routingPreference } : {}),
     ...(routeModifiers ? { routeModifiers } : {}),
-    // Request traffic density data for motor routes.
-    ...(motorRouting ? { extraComputations: ["TRAFFIC_ON_POLYLINE"] } : {}),
+    ...(includeTraffic ? { extraComputations: ["TRAFFIC_ON_POLYLINE"] } : {}),
   };
 
   try {

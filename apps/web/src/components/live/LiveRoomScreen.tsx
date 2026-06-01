@@ -2111,7 +2111,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         if (!r.ok) {
           retryTimer = setTimeout(() => {
             void fetchDest();
-          }, 1000);
+          }, 60_000);
           return;
         }
         const j = (await r.json()) as {
@@ -2144,7 +2144,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         if (!cancelled) {
           const cur = destinationRouteRef.current;
           const delay =
-            cur && cur.length > 1 ? 2000 : 1000;
+            cur && cur.length > 1 ? 60_000 : 45_000;
           retryTimer = setTimeout(() => {
             void fetchDest();
           }, delay);

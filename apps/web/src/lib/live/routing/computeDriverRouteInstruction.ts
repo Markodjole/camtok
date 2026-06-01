@@ -4,7 +4,11 @@ import {
   fetchNearbyCrossroadsDetailed,
   type DetailedCrossroad,
 } from "@/lib/live/routing/findNextCrossroad";
-import { fetchGoogleDirectionsRoute } from "@/lib/live/routing/googleDirections";
+import {
+  bustGoogleRouteCache,
+  getDriverDestinationRoute,
+} from "@/lib/live/routing/googleRouteCache";
+import { googleRoutesDisabled } from "@/lib/live/routing/googleRouteGuard";
 import {
   isHardRejected,
   isMajorOrBetter,
@@ -131,7 +135,7 @@ type PlanningCacheEntry = {
   fetchedAtMs: number;
 };
 const PLANNING_ROUTE_CACHE = new Map<string, PlanningCacheEntry>();
-const PLANNING_ROUTE_TTL_MS = 30_000;
+const PLANNING_ROUTE_TTL_MS = 120_000;
 const PLANNING_DRIVER_BUCKET_DEG = 0.0008; // ~85 m
 
 /**
@@ -142,6 +146,7 @@ const PLANNING_DRIVER_BUCKET_DEG = 0.0008; // ~85 m
  */
 export function bustPlanningRouteCache(roomId: string): void {
   PLANNING_ROUTE_CACHE.delete(roomId);
+  bustGoogleRouteCache(roomId);
 }
 
 function planningBucket(p: LatLng): string {
@@ -458,7 +463,8 @@ async function resolvePlanningPolyline(params: {
     params;
 
   if (destination) {
-    const cached = PLANNING_ROUTE_CACHE.get(roomId);
+    if (!googleRoutesDisabled()) {
+      const cached = PLANNING_ROUTE_CACHE.get(roomId);
     const driverBucket = planningBucket(driver);
 
     // Base cache checks: same destination, same position bucket, not expired.
@@ -491,12 +497,13 @@ async function resolvePlanningPolyline(params: {
 
     let polyline = cacheValid ? cached!.polyline : null;
     if (!polyline) {
-      const google = await fetchGoogleDirectionsRoute(driver, destination, {
+      const shared = await getDriverDestinationRoute(roomId, driver, destination, {
         transportMode,
         drivingRouteStyle,
+        checkOffRoute: false,
       });
-      if (google && google.polyline.length >= 2) {
-        polyline = google.polyline;
+      if (shared && shared.route.polyline.length >= 2) {
+        polyline = shared.route.polyline;
         PLANNING_ROUTE_CACHE.set(roomId, {
           polyline,
           destLat: destination.lat,
@@ -515,6 +522,7 @@ async function resolvePlanningPolyline(params: {
       if (trimmed.length >= 2) {
         return { polyline: trimmed, source: "google" };
       }
+    }
     }
   }
 

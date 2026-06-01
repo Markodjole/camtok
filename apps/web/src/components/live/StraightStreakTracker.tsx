@@ -47,6 +47,8 @@ export function StraightStreakTracker({ marketMeta, marketId, vehiclePosition }:
   const passedRef = useRef<Set<number>>(new Set());
   const tokenCounterRef = useRef(0);
   const gameOverRef = useRef(false);
+  const completeRef = useRef(false);
+  const straightCountRef = useRef(0);
 
   useEffect(() => {
     setPassedCount(0);
@@ -56,10 +58,14 @@ export function StraightStreakTracker({ marketMeta, marketId, vehiclePosition }:
     passedRef.current = new Set();
     tokenCounterRef.current = 0;
     gameOverRef.current = false;
+    completeRef.current = false;
+    straightCountRef.current = 0;
   }, [marketId]);
 
   useEffect(() => {
-    if (!streakData || !vehiclePosition || gameOverRef.current) return;
+    if (!streakData || !vehiclePosition || gameOverRef.current || completeRef.current) return;
+
+    const { expectedStreak } = streakData;
 
     const sample: GpsSample = {
       lat: vehiclePosition.lat,
@@ -87,6 +93,11 @@ export function StraightStreakTracker({ marketMeta, marketId, vehiclePosition }:
     const newTokens: number[] = [];
 
     for (const intersection of streakData.intersections) {
+      if (straightCountRef.current >= expectedStreak) {
+        completeRef.current = true;
+        break;
+      }
+
       const nodeId = intersection.nodeId;
       if (passedRef.current.has(nodeId)) continue;
 
@@ -108,14 +119,18 @@ export function StraightStreakTracker({ marketMeta, marketId, vehiclePosition }:
       }
 
       if (passage === "straight") {
+        straightCountRef.current++;
         newPassed++;
         tokenCounterRef.current++;
         newTokens.push(tokenCounterRef.current);
+        if (straightCountRef.current >= expectedStreak) {
+          completeRef.current = true;
+        }
       }
     }
 
     if (newPassed > 0) {
-      setPassedCount((prev) => prev + newPassed);
+      setPassedCount((prev) => Math.min(expectedStreak, prev + newPassed));
       setFloatTokens((prev) => [...prev, ...newTokens]);
     }
   }, [vehiclePosition, streakData]);
@@ -131,7 +146,8 @@ export function StraightStreakTracker({ marketMeta, marketId, vehiclePosition }:
   if (!streakData) return null;
 
   const { expectedStreak } = streakData;
-  const isDone = !gameOver && passedCount >= expectedStreak;
+  const displayCount = Math.min(passedCount, expectedStreak);
+  const isDone = !gameOver && displayCount >= expectedStreak;
 
   return (
     <div className="pointer-events-none absolute inset-x-0 bottom-28 z-[195] flex flex-col items-center gap-0">
@@ -181,15 +197,15 @@ export function StraightStreakTracker({ marketMeta, marketId, vehiclePosition }:
 
         {gameOver ? (
           <span>
-            Turn — streak over at {passedCount}
+            Turn — streak over at {displayCount}
             <span className="opacity-70"> / {expectedStreak}</span>
           </span>
         ) : (
           <span>
-            {passedCount}
+            {displayCount}
             <span className="opacity-50"> / {expectedStreak}</span>
             <span className="ml-1.5 font-normal opacity-70">
-              {passedCount === 1 ? "straight" : "straights"}
+              {displayCount === 1 ? "straight" : "straights"}
             </span>
           </span>
         )}

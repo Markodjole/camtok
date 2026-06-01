@@ -1421,69 +1421,6 @@ async function findCameraOnRoute(
   return result;
 }
 
-// ─── Dense intersection extraction (for straight_streak) ─────────────────────
-
-/**
- * Extract every real road junction from OSRM step intersection data.
- *
- * Each OSRM step includes an `intersections` array covering ALL road junctions
- * along the step path — not just the final maneuver point.  This gives a dense,
- * accurate list of every crossroad the driver will cross, far more granular than
- * the sparse 3-pin OSM queue used by computeDriverRouteInstruction.
- *
- * Filter: bearings.length ≥ 3 = real side-road junction (T or 4-way).
- *         bearings.length = 2 = simple road continuation (bend, name change).
- *
- * Returns junctions in ascending distance order from the vehicle, limited to
- * the range [minM, maxM].
- */
-function extractDenseIntersections(
-  steps: OsrmStep[],
-  vehicleLat: number,
-  vehicleLng: number,
-  minM = 0,
-  maxM = 1500,
-): import("@/lib/live/routing/straightStreakAnalyzer").CrossroadBearing[] {
-  const vehicle = { lat: vehicleLat, lng: vehicleLng };
-  const seen = new Set<string>();
-  const results: import("@/lib/live/routing/straightStreakAnalyzer").CrossroadBearing[] = [];
-
-  for (const step of steps) {
-    for (const ix of step.intersections) {
-      // Skip trivial continuations — real crossroads have ≥3 road branches.
-      if (ix.bearings.length < 3) continue;
-
-      const { lat, lng } = ix.location;
-      // Deduplicate by snapped coordinate (OSRM can repeat junction positions
-      // across adjacent steps due to micro-rounding).
-      const key = `${lat.toFixed(5)}:${lng.toFixed(5)}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-
-      const distanceMeters = metersBetween(vehicle, { lat, lng });
-      if (distanceMeters < minM || distanceMeters > maxM) continue;
-
-      // Synthetic nodeId from coordinate hash for dedup in the tracker.
-      const nodeId =
-        (Math.round(lat * 1e4) & 0xffff) * 65536 +
-        (Math.round(Math.abs(lng) * 1e4) & 0xffff);
-
-      results.push({
-        nodeId,
-        lat,
-        lng,
-        distanceMeters,
-        // bearingChangeDeg/isStraight are irrelevant here — the resolver
-        // scores each junction from actual GPS headings at settlement time.
-        bearingChangeDeg: 0,
-        isStraight: true,
-      });
-    }
-  }
-
-  return results.sort((a, b) => a.distanceMeters - b.distanceMeters);
-}
-
 // ─── Trigger detection ────────────────────────────────────────────────────────
 
 async function detectEligibleTriggers(
@@ -1627,8 +1564,6 @@ async function detectEligibleTriggers(
               // Carry the analysis so the opener can use it directly without
               // re-running computeDriverRouteInstruction on a potentially
               // different ROOM_STATE snapshot.
-              // NOTE: crossroads will be replaced with denser OSRM junction
-              // data below once osrmStepsCache is populated.
               expectedStreak: analysis.streakLength,
               crossroads: analysis.crossroads,
             });
@@ -1682,24 +1617,9 @@ async function detectEligibleTriggers(
       if (osrmResult) {
         osrmStepsCache = osrmResult.steps;
 
-        // Augment any straight_streak trigger with dense OSRM junction data.
-        // The sparse OSM pin queue (computeDriverRouteInstruction) only keeps
-        // 3 pins at a time, severely limiting how many crossroads the tracker
-        // can count.  OSRM step intersections give us every real junction
-        // (bearings.length ≥ 3) along the full planned route — typically
-        // 10–30+ crossroads — so the tracker can count them all.
-        const streakTrigger = eligible.find((t) => t.type === "straight_streak");
-        if (streakTrigger) {
-          const denseJunctions = extractDenseIntersections(osrmResult.steps, lat, lng);
-          if (denseJunctions.length > 0) {
-            const sparsePinCount = streakTrigger.crossroads?.length ?? 0;
-            streakTrigger.crossroads = denseJunctions;
-            console.log(
-              `[tick:detect] straight_streak: augmented with ${denseJunctions.length} dense OSRM junctions (was ${sparsePinCount} sparse pins)`,
-              { roomId },
-            );
-          }
-        }
+        // straight_streak uses sparse route-analysis crossroads (stored on the
+        // trigger at detection time). Dense OSRM junctions are side-street
+        // granularity and inflate the live counter past expectedStreak (e.g. 6/3).
 
         // OSRM junction step bets — only used when there is NO Google Maps
         // planning polyline.  When a polyline is available, the dynamic

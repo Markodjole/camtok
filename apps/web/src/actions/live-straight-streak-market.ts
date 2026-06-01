@@ -186,9 +186,9 @@ export async function openStraightStreakMarketForRoom(
   const subtitle: StraightStreakSubtitle = {
     expectedStreak,
     streakKey,
-    // Store ALL available crossroads so the client tracker can count every
-    // intersection the driver passes, not just the expected-streak window.
-    intersections: crossroads,
+    // Straight crossroads from route analysis (+ the first turn ahead for
+    // resolver/tracker turn detection). Never store dense OSRM side streets.
+    intersections: crossroads.filter((c) => c.isStraight).slice(0, expectedStreak + 1),
   };
 
   // ── Timing ────────────────────────────────────────────────────────────────
