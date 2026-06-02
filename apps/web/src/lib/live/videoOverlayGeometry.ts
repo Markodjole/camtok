@@ -74,20 +74,20 @@ const PIN_SCALE = [
   [0, 1.6],
 ] as const;
 
-const ZONE_Y = [
-  [150, 18],
-  [100, 28],
-  [50, 42],
-  [20, 58],
-  [0, 68],
-] as const;
+/** Only visible within this distance of the cell border. */
+export const ZONE_SIGN_MAX_DISTANCE_M = 100;
+/** Hide immediately once the border is this close / crossed. */
+export const ZONE_SIGN_PASS_HIDE_M = 6;
+/** Fixed Y — sign hangs from the top edge, never moves down. */
+export const ZONE_SIGN_TOP_Y_PCT = 4;
 
-const ZONE_SCALE = [
-  [150, 0.4],
-  [100, 0.62],
-  [50, 0.9],
-  [20, 1.25],
-  [0, 1.55],
+const ZONE_SIGN_SCALE = [
+  [100, 0.28],
+  [70, 0.38],
+  [45, 0.52],
+  [25, 0.72],
+  [12, 0.95],
+  [6, 1.15],
 ] as const;
 
 export function pinOverlayLayout(
@@ -116,37 +116,28 @@ export function pinOverlayLayout(
   };
 }
 
-export function zoneGateOverlayLayout(
+export function zoneSignOverlayLayout(
   distanceM: number,
   relativeAngle: number,
 ): OverlayElementLayout {
-  if (distanceM > 150) {
+  if (
+    distanceM > ZONE_SIGN_MAX_DISTANCE_M ||
+    distanceM < ZONE_SIGN_PASS_HIDE_M
+  ) {
     return {
-      xPct: 50,
-      yPct: 18,
-      scale: 0.35,
+      xPct: horizontalPositionPct(relativeAngle),
+      yPct: ZONE_SIGN_TOP_Y_PCT,
+      scale: 0,
       opacity: 0,
       visible: false,
       distanceM,
     };
   }
 
-  if (distanceM < 5) {
-    const opacity = Math.max(0, distanceM / 5);
-    return {
-      xPct: horizontalPositionPct(relativeAngle),
-      yPct: lerpPiecewise(distanceM, ZONE_Y),
-      scale: lerpPiecewise(distanceM, ZONE_SCALE),
-      opacity,
-      visible: opacity > 0.04,
-      distanceM,
-    };
-  }
-
   return {
     xPct: horizontalPositionPct(relativeAngle),
-    yPct: lerpPiecewise(distanceM, ZONE_Y),
-    scale: lerpPiecewise(distanceM, ZONE_SCALE),
+    yPct: ZONE_SIGN_TOP_Y_PCT,
+    scale: lerpPiecewise(distanceM, ZONE_SIGN_SCALE),
     opacity: 1,
     visible: true,
     distanceM,
@@ -217,19 +208,23 @@ export function computeZoneGateOverlay(
   driver: LatLng & { heading?: number },
   spec: CityGridSpecCompact,
   fallbackLabel?: string | null,
-): (OverlayElementLayout & { enterLabel: string }) | null {
+): (OverlayElementLayout & { zoneName: string; cellKey: string }) | null {
   const edge = nearestCellEdgePoint(spec, driver.lat, driver.lng);
-  if (!edge || edge.distanceM > 150) return null;
+  if (!edge || edge.distanceM > ZONE_SIGN_MAX_DISTANCE_M) return null;
+  if (edge.distanceM < ZONE_SIGN_PASS_HIDE_M) return null;
 
   const heading = driver.heading ?? 0;
   const bearing = bearingDegrees(driver, edge);
   const rel = relativeAngleDeg(bearing, heading);
-  const layout = zoneGateOverlayLayout(edge.distanceM, rel);
+  const layout = zoneSignOverlayLayout(edge.distanceM, rel);
   if (!layout.visible) return null;
+
+  const cellKey = cellIdForPosition(spec, driver.lat, driver.lng) ?? "unknown";
 
   return {
     ...layout,
-    enterLabel: nextZoneEnterLabel(spec, driver, heading, fallbackLabel),
+    zoneName: nextZoneEnterLabel(spec, driver, heading, fallbackLabel),
+    cellKey,
   };
 }
 

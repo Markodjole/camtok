@@ -26,9 +26,13 @@ type SmoothedOverlay = SmoothFields & {
   visible: boolean;
   distanceM?: number;
   label?: string;
-  enterLabel?: string;
+  zoneName?: string;
   /** Stable id so forward-only distance resets when the target changes. */
   targetKey?: string;
+  /** Zone sign: Y locked to top edge — only scale grows, never moves down. */
+  lockVertical?: boolean;
+  /** Zone sign: vanish immediately when hidden (border crossed). */
+  instantHide?: boolean;
 };
 
 const SMOOTH_MS = 250;
@@ -63,7 +67,7 @@ function useSmoothedOverlay(
     scale: 0.5,
     opacity: 0,
   });
-  const metaRef = useRef<{ label?: string; enterLabel?: string; distanceM?: number }>(
+  const metaRef = useRef<{ label?: string; zoneName?: string; distanceM?: number }>(
     {},
   );
   const forwardRef = useRef<{ targetKey: string; minDistanceM: number | null }>({
@@ -91,7 +95,7 @@ function useSmoothedOverlay(
           };
           smoothRef.current = {
             xPct: t.xPct,
-            yPct: Math.min(t.yPct, 22),
+            yPct: t.lockVertical ? t.yPct : Math.min(t.yPct, 22),
             scale: Math.min(t.scale, 0.45),
             opacity: 0,
           };
@@ -109,23 +113,25 @@ function useSmoothedOverlay(
           t.distanceM != null && minDist != null
             ? Math.max(0, t.distanceM - minDist)
             : 0;
-        const recedeFade =
-          recedeM <= RECEDE_FADE_START_M
+        const recedeFade = t.lockVertical
+          ? 1
+          : recedeM <= RECEDE_FADE_START_M
             ? 1
             : Math.max(
                 0,
                 1 - (recedeM - RECEDE_FADE_START_M) / RECEDE_FADE_RANGE_M,
               );
-        const receding = recedeM > RECEDE_FADE_START_M;
+        const receding = !t.lockVertical && recedeM > RECEDE_FADE_START_M;
 
         metaRef.current = {
           label: t.label,
-          enterLabel: t.enterLabel,
+          zoneName: t.zoneName,
           distanceM: t.distanceM,
         };
+        const lockY = t.lockVertical === true;
         smoothRef.current = {
           xPct: receding ? s.xPct : lerp(s.xPct, t.xPct, alpha),
-          yPct: lerpForwardDepth(s.yPct, t.yPct, alpha),
+          yPct: lockY ? t.yPct : lerpForwardDepth(s.yPct, t.yPct, alpha),
           scale: lerpForwardDepth(s.scale, t.scale, alpha),
           opacity: lerp(s.opacity, t.opacity * recedeFade, alpha),
         };
@@ -136,7 +142,8 @@ function useSmoothedOverlay(
         });
       } else {
         const s = smoothRef.current;
-        if (s.opacity > 0.03) {
+        const instantHide = targetRef.current?.instantHide === true;
+        if (!instantHide && s.opacity > 0.03) {
           smoothRef.current = {
             ...s,
             opacity: lerp(s.opacity, 0, alpha),
@@ -148,6 +155,7 @@ function useSmoothedOverlay(
           });
         } else {
           forwardRef.current = { targetKey: "", minDistanceM: null };
+          smoothRef.current = { ...s, opacity: 0 };
           setRender(null);
         }
       }
@@ -190,11 +198,13 @@ export function VideoStreamOverlay({
     if (!driver || !zoneGridSpec) return null;
     const layout = computeZoneGateOverlay(driver, zoneGridSpec, zoneLabel);
     if (!layout) return null;
-    const { enterLabel, ...rest } = layout;
+    const { zoneName, cellKey, ...rest } = layout;
     return {
       ...rest,
-      enterLabel,
-      targetKey: `zone:${enterLabel}`,
+      zoneName,
+      targetKey: `zone:${cellKey}:${zoneName}`,
+      lockVertical: true,
+      instantHide: true,
     };
   }, [driver, zoneGridSpec, zoneLabel]);
 
@@ -207,25 +217,29 @@ export function VideoStreamOverlay({
     <div className="pointer-events-none absolute inset-0 z-20 overflow-hidden">
       {zone ? (
         <div
-          className="absolute whitespace-nowrap text-center"
+          className="absolute text-center"
           style={{
             left: `${zone.xPct}%`,
             top: `${zone.yPct}%`,
-            transform: `translate(-50%, -50%) scale(${zone.scale})`,
+            transform: `translate(-50%, 0) scale(${zone.scale})`,
+            transformOrigin: "top center",
             opacity: zone.opacity,
           }}
         >
-          <div
-            className="mx-auto h-[2px] w-[min(72vw,240px)] rounded-full bg-gradient-to-r from-transparent via-cyan-300/90 to-transparent shadow-[0_0_12px_rgba(34,211,238,0.75)]"
-            aria-hidden
-          />
-          <div className="mt-1 rounded-md bg-black/55 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-cyan-100 [text-shadow:0_0_6px_#000] backdrop-blur-[2px] sm:text-xs">
-            Entering {zone.enterLabel ?? "Zone"}
+          <div className="flex flex-col items-center">
+            <div
+              className="h-2 w-0.5 bg-neutral-600 shadow-sm"
+              aria-hidden
+            />
+            <div className="mt-0.5 min-w-[88px] border-2 border-neutral-900 bg-[#f4f4f0] px-2.5 py-1.5 shadow-[0_2px_6px_rgba(0,0,0,0.35)]">
+              <div className="text-[8px] font-bold uppercase leading-tight tracking-[0.12em] text-neutral-700 sm:text-[9px]">
+                Next zone
+              </div>
+              <div className="mt-0.5 border-t border-neutral-400/80 pt-0.5 text-[10px] font-semibold uppercase leading-tight tracking-wide text-neutral-900 sm:text-[11px]">
+                {zone.zoneName ?? "—"}
+              </div>
+            </div>
           </div>
-          <div
-            className="mx-auto mt-1 h-[2px] w-[min(72vw,240px)] rounded-full bg-gradient-to-r from-transparent via-cyan-300/90 to-transparent shadow-[0_0_12px_rgba(34,211,238,0.75)]"
-            aria-hidden
-          />
         </div>
       ) : null}
 
