@@ -10,6 +10,10 @@ import { LiveVideoPlayer } from "./LiveVideoPlayer";
 import { startBroadcasterP2p } from "./liveP2pBroadcast";
 import { TransportModeIcon } from "./TransportModeIcon";
 import { StreamGuidanceOverlay } from "./StreamGuidanceOverlay";
+import {
+  VideoStreamOverlay,
+  resolveVideoOverlayPin,
+} from "./VideoStreamOverlay";
 import { TurnBlinkOverlay, type TurnDirection } from "./TurnBlinkOverlay";
 import { LiveDecisionStatusRibbon } from "./LiveDecisionStatusRibbon";
 import { computeStreamGuidance } from "@/lib/live/streamGuidance";
@@ -774,7 +778,21 @@ export function OwnerLiveControlPanel({
         </div>
 
         {!mapExpanded && routePoints.length > 0 ? (
-          <StreamGuidanceOverlay points={routePoints} />
+          <>
+            <VideoStreamOverlay
+              routePoints={routePoints}
+              pinTarget={resolveVideoOverlayPin({
+                driver: routePoints[routePoints.length - 1]!,
+                stepPin: null,
+                driverPin: driverPins?.[0],
+                turnTarget: turnTarget
+                  ? { lat: turnTarget.lat, lng: turnTarget.lng }
+                  : null,
+              })}
+              zoneGridSpec={null}
+            />
+            <StreamGuidanceOverlay points={routePoints} />
+          </>
         ) : null}
 
         <TurnBlinkOverlay

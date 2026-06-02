@@ -41,6 +41,10 @@ import {
   NEXT_TURN_PIN_MIN_M,
 } from "@/lib/live/betting/betWindowConstants";
 import { LiveVideoPlayer } from "./LiveVideoPlayer";
+import {
+  VideoStreamOverlay,
+  resolveVideoOverlayPin,
+} from "./VideoStreamOverlay";
 import { LiveDecisionStatusRibbon } from "./LiveDecisionStatusRibbon";
 import { useCountdown } from "./useCountdown";
 import { LiveEventToasts } from "./LiveEventToasts";
@@ -1554,6 +1558,17 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         ? { lat: stickyViewerPin.lat, lng: stickyViewerPin.lng }
         : null;
 
+  const videoOverlayPin = useMemo(
+    () =>
+      resolveVideoOverlayPin({
+        driver: routePoints.length > 0 ? routePoints[routePoints.length - 1]! : null,
+        stepPin,
+        driverPin: driverPins?.[0],
+        turnTarget: viewerTurnTargetForMap,
+      }),
+    [routePoints, stepPin, driverPins, viewerTurnTargetForMap],
+  );
+
   // Per-bet lock rules (client-side mirror of server rules):
   // - next_turn: lock at <= 70m to next pin (looser, keeps market open longer)
   // - next_turn: lock at <= 70m to next pin
@@ -2448,6 +2463,12 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           className="h-full w-full"
           objectFit={isMobileViewport ? "cover" : "contain"}
           objectPosition={isMobileViewport ? "top" : "center"}
+        />
+        <VideoStreamOverlay
+          routePoints={routePoints}
+          pinTarget={videoOverlayPin}
+          zoneGridSpec={zonesSpec}
+          zoneLabel={room.regionLabel}
         />
       </div>
 
