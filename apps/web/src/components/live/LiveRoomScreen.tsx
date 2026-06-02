@@ -2144,7 +2144,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         if (!cancelled) {
           const cur = destinationRouteRef.current;
           const delay =
-            cur && cur.length > 1 ? 60_000 : 45_000;
+            cur && cur.length > 1 ? 90_000 : 60_000;
           retryTimer = setTimeout(() => {
             void fetchDest();
           }, delay);

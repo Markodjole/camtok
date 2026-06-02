@@ -26,8 +26,21 @@ type CacheEntry = CachedDriverDestinationRoute & {
 /** Shared in-process cache — one Google fetch per room per TTL window. */
 const ROUTE_CACHE = new Map<string, CacheEntry>();
 
-/** Google route refresh interval — map line + ETA; not tied to 2.5s polls. */
-export const GOOGLE_ROUTE_CACHE_MAX_AGE_MS = 180_000;
+/** Google route refresh interval — traffic map uses Pro SKU; keep fetches rare. */
+export const GOOGLE_ROUTE_CACHE_MAX_AGE_MS = readCacheTtlMs();
+
+function readCacheTtlMs(): number {
+  const raw = process.env.GOOGLE_ROUTE_CACHE_TTL_SEC;
+  if (raw == null || raw === "") return 300_000; // 5 min default
+  const sec = Number(raw);
+  return Number.isFinite(sec) && sec > 0 ? Math.floor(sec * 1000) : 300_000;
+}
+
+/** Min cache age before an off-route driver position may trigger a refetch. */
+const OFF_ROUTE_REFETCH_MIN_AGE_MS = Math.min(
+  GOOGLE_ROUTE_CACHE_MAX_AGE_MS / 2,
+  120_000,
+);
 
 const OFF_ROUTE_THRESHOLD_M = 12;
 
@@ -95,9 +108,12 @@ export async function getDriverDestinationRoute(
     Date.now() - cached.fetchedAtMs > GOOGLE_ROUTE_CACHE_MAX_AGE_MS;
 
   if (!needsRefetch && cached && opts.checkOffRoute) {
-    const proj = projectOntoPolyline(cached.polyline, driver);
-    if (!proj || proj.distanceMeters > OFF_ROUTE_THRESHOLD_M) {
-      needsRefetch = true;
+    const cacheAge = Date.now() - cached.fetchedAtMs;
+    if (cacheAge >= OFF_ROUTE_REFETCH_MIN_AGE_MS) {
+      const proj = projectOntoPolyline(cached.polyline, driver);
+      if (!proj || proj.distanceMeters > OFF_ROUTE_THRESHOLD_M) {
+        needsRefetch = true;
+      }
     }
   }
 
@@ -116,7 +132,8 @@ export async function getDriverDestinationRoute(
   const fresh = await fetchGoogleDirectionsRoute(driver, destination, {
     transportMode: opts.transportMode,
     drivingRouteStyle: opts.drivingRouteStyle,
-    includeTraffic: false,
+    // Pro SKU — traffic colors; only fetched on slow-lane cache miss (~5 min).
+    includeTraffic: true,
   });
   if (!fresh) {
     if (!cached) return null;

@@ -50,7 +50,8 @@ export async function GET(
   const out = await getDriverDestinationRoute(roomId, driver, dest, {
     transportMode: room.transportMode,
     drivingRouteStyle: room.drivingRouteStyle,
-    checkOffRoute: true,
+    // Viewers read cache only — tick refreshes Google in the slow lane.
+    checkOffRoute: false,
   });
 
   const route = out?.route ?? null;
