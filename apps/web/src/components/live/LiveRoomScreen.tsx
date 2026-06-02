@@ -76,6 +76,11 @@ const LiveMap = dynamic(() => import("./LiveMap").then((m) => m.LiveMap), {
   ssr: false,
 });
 
+/** Temporary: YouTube dashcam instead of WebRTC — overlay pins/gates still render on top. */
+const DASHCAM_YOUTUBE_TEST = true;
+const DASHCAM_YOUTUBE_EMBED =
+  "https://www.youtube.com/embed/8G1MiDfIDig?start=7&autoplay=1&mute=1&controls=0&loop=1&playlist=8G1MiDfIDig&modestbranding=1&rel=0";
+
 type MapZone = {
   id: string;
   slug: string;
@@ -2431,39 +2436,35 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       )}
 
       {/* ── Split layout: dashcam (top 1/3) + map (bottom 2/3) ── */}
-      {/* EXPERIMENT: YouTube dashcam — restore when needed:
-      <div className="absolute inset-x-0 top-0 z-0 overflow-hidden bg-black" style={{ height: "33dvh" }}>
-        <iframe
-          src="https://www.youtube.com/embed/8G1MiDfIDig?start=7&autoplay=1&mute=1&controls=0&loop=1&playlist=8G1MiDfIDig&modestbranding=1&rel=0"
-          style={{
-            position: "absolute",
-            top: "50%",
-            left: "50%",
-            transform: "translate(-50%, -50%)",
-            width: "177.78vh",
-            minWidth: "100%",
-            height: "56.25vw",
-            minHeight: "100%",
-            border: "none",
-          }}
-          allow="autoplay; encrypted-media"
-          allowFullScreen
-          title="Dashcam feed"
-        />
-      </div>
-      */}
-
-      {/* WebRTC dashcam panel — top 33%, native aspect (no crop) */}
       <div
         className="absolute inset-x-0 top-0 z-[8] flex items-center justify-center overflow-hidden bg-black"
         style={{ height: "33dvh", minHeight: "33dvh" }}
       >
-        <LiveVideoPlayer
-          liveSessionId={room.liveSessionId}
-          className="h-full w-full"
-          objectFit={isMobileViewport ? "cover" : "contain"}
-          objectPosition={isMobileViewport ? "top" : "center"}
-        />
+        {DASHCAM_YOUTUBE_TEST ? (
+          <iframe
+            src={DASHCAM_YOUTUBE_EMBED}
+            className="absolute inset-0 h-full w-full border-0"
+            style={{
+              top: "50%",
+              left: "50%",
+              transform: "translate(-50%, -50%)",
+              width: "177.78vh",
+              minWidth: "100%",
+              height: "56.25vw",
+              minHeight: "100%",
+            }}
+            allow="autoplay; encrypted-media"
+            allowFullScreen
+            title="Dashcam feed"
+          />
+        ) : (
+          <LiveVideoPlayer
+            liveSessionId={room.liveSessionId}
+            className="h-full w-full"
+            objectFit={isMobileViewport ? "cover" : "contain"}
+            objectPosition={isMobileViewport ? "top" : "center"}
+          />
+        )}
         <VideoStreamOverlay
           routePoints={routePoints}
           pinTarget={videoOverlayPin}

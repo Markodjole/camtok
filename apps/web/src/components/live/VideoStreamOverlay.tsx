@@ -27,12 +27,27 @@ type SmoothedOverlay = SmoothFields & {
   distanceM?: number;
   label?: string;
   enterLabel?: string;
+  /** Stable id so forward-only distance resets when the target changes. */
+  targetKey?: string;
 };
 
 const SMOOTH_MS = 250;
+/** Beyond this many meters farther than the closest approach, fade the sign out. */
+const RECEDE_FADE_START_M = 10;
+const RECEDE_FADE_RANGE_M = 30;
 
 function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
+}
+
+/** Only interpolate toward closer / larger values — never move back toward horizon. */
+function lerpForwardDepth(
+  current: number,
+  target: number,
+  alpha: number,
+): number {
+  if (target >= current) return lerp(current, target, alpha);
+  return current;
 }
 
 function useSmoothedOverlay(
@@ -51,6 +66,10 @@ function useSmoothedOverlay(
   const metaRef = useRef<{ label?: string; enterLabel?: string; distanceM?: number }>(
     {},
   );
+  const forwardRef = useRef<{ targetKey: string; minDistanceM: number | null }>({
+    targetKey: "",
+    minDistanceM: null,
+  });
   const [render, setRender] = useState<SmoothedOverlay | null>(null);
 
   useEffect(() => {
@@ -62,37 +81,75 @@ function useSmoothedOverlay(
       last = now;
       const alpha = Math.min(1, dt / durationMs);
       const t = targetRef.current;
-      const s = smoothRef.current;
 
       if (t?.visible) {
+        const key = t.targetKey ?? "";
+        if (key !== forwardRef.current.targetKey) {
+          forwardRef.current = {
+            targetKey: key,
+            minDistanceM: t.distanceM ?? null,
+          };
+          smoothRef.current = {
+            xPct: t.xPct,
+            yPct: Math.min(t.yPct, 22),
+            scale: Math.min(t.scale, 0.45),
+            opacity: 0,
+          };
+        } else if (
+          t.distanceM != null &&
+          (forwardRef.current.minDistanceM == null ||
+            t.distanceM < forwardRef.current.minDistanceM)
+        ) {
+          forwardRef.current.minDistanceM = t.distanceM;
+        }
+
+        const s = smoothRef.current;
+        const minDist = forwardRef.current.minDistanceM;
+        const recedeM =
+          t.distanceM != null && minDist != null
+            ? Math.max(0, t.distanceM - minDist)
+            : 0;
+        const recedeFade =
+          recedeM <= RECEDE_FADE_START_M
+            ? 1
+            : Math.max(
+                0,
+                1 - (recedeM - RECEDE_FADE_START_M) / RECEDE_FADE_RANGE_M,
+              );
+        const receding = recedeM > RECEDE_FADE_START_M;
+
         metaRef.current = {
           label: t.label,
           enterLabel: t.enterLabel,
           distanceM: t.distanceM,
         };
         smoothRef.current = {
-          xPct: lerp(s.xPct, t.xPct, alpha),
-          yPct: lerp(s.yPct, t.yPct, alpha),
-          scale: lerp(s.scale, t.scale, alpha),
-          opacity: lerp(s.opacity, t.opacity, alpha),
+          xPct: receding ? s.xPct : lerp(s.xPct, t.xPct, alpha),
+          yPct: lerpForwardDepth(s.yPct, t.yPct, alpha),
+          scale: lerpForwardDepth(s.scale, t.scale, alpha),
+          opacity: lerp(s.opacity, t.opacity * recedeFade, alpha),
         };
         setRender({
           ...smoothRef.current,
-          visible: true,
-          ...metaRef.current,
-        });
-      } else if (s.opacity > 0.03) {
-        smoothRef.current = {
-          ...s,
-          opacity: lerp(s.opacity, 0, alpha),
-        };
-        setRender({
-          ...smoothRef.current,
-          visible: true,
+          visible: smoothRef.current.opacity > 0.04,
           ...metaRef.current,
         });
       } else {
-        setRender(null);
+        const s = smoothRef.current;
+        if (s.opacity > 0.03) {
+          smoothRef.current = {
+            ...s,
+            opacity: lerp(s.opacity, 0, alpha),
+          };
+          setRender({
+            ...smoothRef.current,
+            visible: true,
+            ...metaRef.current,
+          });
+        } else {
+          forwardRef.current = { targetKey: "", minDistanceM: null };
+          setRender(null);
+        }
       }
 
       raf = requestAnimationFrame(tick);
@@ -125,6 +182,7 @@ export function VideoStreamOverlay({
     return {
       ...layout,
       label: pinTarget.label ?? "NEXT PIN",
+      targetKey: `pin:${pinTarget.lat.toFixed(5)},${pinTarget.lng.toFixed(5)}`,
     };
   }, [driver, pinTarget]);
 
@@ -133,7 +191,11 @@ export function VideoStreamOverlay({
     const layout = computeZoneGateOverlay(driver, zoneGridSpec, zoneLabel);
     if (!layout) return null;
     const { enterLabel, ...rest } = layout;
-    return { ...rest, enterLabel };
+    return {
+      ...rest,
+      enterLabel,
+      targetKey: `zone:${enterLabel}`,
+    };
   }, [driver, zoneGridSpec, zoneLabel]);
 
   const pin = useSmoothedOverlay(pinLayoutTarget);
