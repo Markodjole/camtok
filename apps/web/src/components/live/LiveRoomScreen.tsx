@@ -29,6 +29,7 @@ import {
 import { liveBetRelaxClient } from "@/lib/live/liveBetRelax";
 import { viewerLiveLog, viewerLiveWarn } from "@/lib/live/viewerLiveConsole";
 import { metersBetween } from "@/lib/live/routing/geometry";
+import { isDriverOffGoogleDestinationRoute } from "@/lib/live/routing/destinationRouteDisplay";
 import {
   buildRouteToPinPolyline,
   isDriverOffRouteToPin,
@@ -249,6 +250,23 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [destinationRouteTraffic, setDestinationRouteTraffic] = useState<
     Array<{ startIndex: number; endIndex: number; speed: "NORMAL" | "SLOW" | "TRAFFIC_JAM" }> | null
   >(null);
+  /** Hide stale Google path after a turn until a fresh route is refetched. */
+  const [googleRouteHidden, setGoogleRouteHidden] = useState(false);
+  const googleRouteHiddenRef = useRef(false);
+  const offRouteRefetchAtRef = useRef(0);
+  const fetchDestRouteRef = useRef<(offRoute?: boolean) => Promise<void>>(
+    async () => {},
+  );
+  const mapDestinationRoute = useMemo(() => {
+    if (googleRouteHidden || !destinationRoute || destinationRoute.length < 2) {
+      return null;
+    }
+    return destinationRoute;
+  }, [googleRouteHidden, destinationRoute]);
+  const mapDestinationTraffic = useMemo(() => {
+    if (!mapDestinationRoute) return null;
+    return destinationRouteTraffic;
+  }, [mapDestinationRoute, destinationRouteTraffic]);
   const [destinationEtaSec, setDestinationEtaSec] = useState<number | null>(null);
   const [destinationDistanceM, setDestinationDistanceM] = useState<number | null>(null);
   const [trafficCameras, setTrafficCameras] = useState<TrafficCamera[]>([]);
@@ -2101,16 +2119,16 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   useEffect(() => {
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
-    const fetchDest = async (): Promise<void> => {
+    const fetchDest = async (offRoute = false): Promise<void> => {
       if (cancelled) return;
       try {
-        const r = await fetch(
-          `/api/live/rooms/${room.roomId}/destination-route`,
-          { cache: "no-store" },
-        );
+        const url = offRoute
+          ? `/api/live/rooms/${room.roomId}/destination-route?offRoute=1`
+          : `/api/live/rooms/${room.roomId}/destination-route`;
+        const r = await fetch(url, { cache: "no-store" });
         if (!r.ok) {
           retryTimer = setTimeout(() => {
-            void fetchDest();
+            void fetchDest(false);
           }, 60_000);
           return;
         }
@@ -2122,17 +2140,22 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             trafficSegments?: Array<{ startIndex: number; endIndex: number; speed: "NORMAL" | "SLOW" | "TRAFFIC_JAM" }>;
           } | null;
           distanceToDestinationMeters?: number;
+          refetched?: boolean;
           reason?: "no_room" | "no_destination" | "no_position" | "arrived";
         };
         if (cancelled) return;
-        // Only update when we have an actual Google road polyline.
-        // Keep last valid route on transient misses; retry until Google returns again.
         if (j.route?.polyline && j.route.polyline.length > 1) {
           setDestinationRoute(j.route.polyline);
           setDestinationRouteTraffic(j.route.trafficSegments ?? null);
+          if (j.refetched) {
+            googleRouteHiddenRef.current = false;
+            setGoogleRouteHidden(false);
+          }
         } else if (j.reason === "no_destination" || j.reason === "arrived") {
           setDestinationRoute(null);
           setDestinationRouteTraffic(null);
+          googleRouteHiddenRef.current = false;
+          setGoogleRouteHidden(false);
         }
         setDestinationDistanceM(
           j.route?.distanceMeters ?? j.distanceToDestinationMeters ?? null,
@@ -2146,17 +2169,36 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           const delay =
             cur && cur.length > 1 ? 90_000 : 60_000;
           retryTimer = setTimeout(() => {
-            void fetchDest();
+            void fetchDest(false);
           }, delay);
         }
       }
     };
-    void fetchDest();
+    fetchDestRouteRef.current = fetchDest;
+    void fetchDest(false);
     return () => {
       cancelled = true;
       if (retryTimer) clearTimeout(retryTimer);
     };
   }, [room.roomId]);
+
+  useEffect(() => {
+    const route = destinationRouteRef.current;
+    const last = routePoints[routePoints.length - 1];
+    if (!route || route.length < 2 || !last) return;
+
+    if (!isDriverOffGoogleDestinationRoute(last, route)) return;
+
+    if (!googleRouteHiddenRef.current) {
+      googleRouteHiddenRef.current = true;
+      setGoogleRouteHidden(true);
+    }
+
+    const now = Date.now();
+    if (now - offRouteRefetchAtRef.current < 45_000) return;
+    offRouteRefetchAtRef.current = now;
+    void fetchDestRouteRef.current(true);
+  }, [routePoints]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2450,8 +2492,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           approachLine={approachLine}
           railPhase={viewerRailPhase}
           destination={room.destination}
-          destinationRoute={destinationRoute}
-          destinationRouteTraffic={destinationRouteTraffic}
+          destinationRoute={mapDestinationRoute}
+          destinationRouteTraffic={mapDestinationTraffic}
           destinationRouteLabel="Google suggested route"
           driverRouteBadges={driverRouteBadges}
           trafficCameras={trafficCameras}
@@ -2490,7 +2532,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         <RouteOverviewMap
           routePoints={routePoints}
           destination={room.destination}
-          destinationRoute={destinationRoute}
+          destinationRoute={mapDestinationRoute}
         />
       ) : null}
 
@@ -2658,8 +2700,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               approachLine={approachLine}
               railPhase={viewerRailPhase}
               destination={room.destination}
-              destinationRoute={destinationRoute}
-              destinationRouteTraffic={destinationRouteTraffic}
+              destinationRoute={mapDestinationRoute}
+              destinationRouteTraffic={mapDestinationTraffic}
               destinationRouteLabel="Google suggested route"
               driverRouteBadges={driverRouteBadges}
               trafficCameras={trafficCameras}

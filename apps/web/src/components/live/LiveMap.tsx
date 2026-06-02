@@ -1102,7 +1102,7 @@ function LiveMapInner({
           L.polyline(pts, {
             color: "rgba(255,255,255,0.92)",
             weight: weight + 2,
-            opacity: 0.45,
+            opacity: 0.2,
             dashArray: "10 8",
             lineCap: "round",
             lineJoin: "round",
@@ -1110,7 +1110,7 @@ function LiveMapInner({
           L.polyline(pts, {
             color,
             weight,
-            opacity: 0.72,
+            opacity: 0.34,
             dashArray: "10 8",
             lineCap: "round",
             lineJoin: "round",

@@ -44,6 +44,9 @@ const OFF_ROUTE_REFETCH_MIN_AGE_MS = Math.min(
 
 const OFF_ROUTE_THRESHOLD_M = 12;
 
+/** Perpendicular distance beyond which the map hides the stale Google path. */
+export const GOOGLE_ROUTE_OFF_PATH_DISPLAY_M = 22;
+
 export function bustGoogleRouteCache(roomId: string): void {
   ROUTE_CACHE.delete(roomId);
 }
@@ -89,6 +92,8 @@ export async function getDriverDestinationRoute(
     drivingRouteStyle?: DrivingRouteStyle | null;
     /** When true, refetch if the driver has drifted off the cached polyline. */
     checkOffRoute?: boolean;
+    /** Bypass TTL — used when the client detected a turn off the cached path. */
+    forceRefetch?: boolean;
   } = {},
 ): Promise<{ route: CachedDriverDestinationRoute; refetched: boolean } | null> {
   if (googleRoutesDisabled()) {
@@ -103,6 +108,7 @@ export async function getDriverDestinationRoute(
       Math.abs(cached.destinationLng - destination.lng) > 1e-6);
 
   let needsRefetch =
+    opts.forceRefetch === true ||
     !cached ||
     destinationChanged ||
     Date.now() - cached.fetchedAtMs > GOOGLE_ROUTE_CACHE_MAX_AGE_MS;

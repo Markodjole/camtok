@@ -12,10 +12,11 @@ export const dynamic = "force-dynamic";
 const DESTINATION_REACHED_M = 25;
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   ctx: { params: Promise<{ roomId: string }> },
 ) {
   const { roomId } = await ctx.params;
+  const forceRefetch = req.nextUrl.searchParams.get("offRoute") === "1";
   const res = await getLiveRoomDetail(roomId);
   const room = res.room;
   if (!room) {
@@ -50,8 +51,8 @@ export async function GET(
   const out = await getDriverDestinationRoute(roomId, driver, dest, {
     transportMode: room.transportMode,
     drivingRouteStyle: room.drivingRouteStyle,
-    // Viewers read cache only — tick refreshes Google in the slow lane.
-    checkOffRoute: false,
+    checkOffRoute: forceRefetch,
+    forceRefetch,
   });
 
   const route = out?.route ?? null;
