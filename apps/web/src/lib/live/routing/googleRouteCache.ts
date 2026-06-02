@@ -2,6 +2,7 @@ import {
   fetchGoogleDirectionsRoute,
   type TrafficSegment,
 } from "@/lib/live/routing/googleDirections";
+import { googleRoutesDisabled } from "@/lib/live/routing/googleRouteGuard";
 import type { DrivingRouteStyle } from "@/lib/live/routing/drivingRouteStyle";
 import {
   metersBetween,
@@ -19,33 +20,52 @@ export type CachedDriverDestinationRoute = {
 type CacheEntry = CachedDriverDestinationRoute & {
   destinationLat: number;
   destinationLng: number;
-  driverBucket: string;
   fetchedAtMs: number;
 };
 
 /** Shared in-process cache — one Google fetch per room per TTL window. */
 const ROUTE_CACHE = new Map<string, CacheEntry>();
 
-/** Keep Google calls low; route shape does not change second-to-second. */
+/** Google route refresh interval — map line + ETA; not tied to 2.5s polls. */
 export const GOOGLE_ROUTE_CACHE_MAX_AGE_MS = 180_000;
 
 const OFF_ROUTE_THRESHOLD_M = 12;
-const DRIVER_BUCKET_DEG = 0.0008;
-
-function bucketForDriver(p: LatLng): string {
-  const lat = Math.round(p.lat / DRIVER_BUCKET_DEG);
-  const lng = Math.round(p.lng / DRIVER_BUCKET_DEG);
-  return `${lat}|${lng}`;
-}
 
 export function bustGoogleRouteCache(roomId: string): void {
   ROUTE_CACHE.delete(roomId);
 }
 
+/** Read cached Google route without fetching (safe for fast-lane polls). */
+export function peekCachedDriverDestinationRoute(
+  roomId: string,
+  destination?: LatLng | null,
+): CachedDriverDestinationRoute | null {
+  const cached = ROUTE_CACHE.get(roomId);
+  if (!cached) return null;
+  if (destination) {
+    if (
+      Math.abs(cached.destinationLat - destination.lat) > 1e-6 ||
+      Math.abs(cached.destinationLng - destination.lng) > 1e-6
+    ) {
+      return null;
+    }
+  }
+  if (Date.now() - cached.fetchedAtMs > GOOGLE_ROUTE_CACHE_MAX_AGE_MS) {
+    return null;
+  }
+  return {
+    polyline: cached.polyline,
+    distanceMeters: cached.distanceMeters,
+    durationSec: cached.durationSec,
+    trafficSegments: cached.trafficSegments,
+  };
+}
+
 /**
  * Fetch (or reuse) the driver→destination Google route for a live room.
- * Used by destination-route polling and driver-route planning so they do
- * not each spam computeRoutes independently.
+ *
+ * **Slow lane only** — call from destination-route polling or the server tick
+ * refresher. Never from active-round / computeDriverRouteInstruction.
  */
 export async function getDriverDestinationRoute(
   roomId: string,
@@ -58,8 +78,12 @@ export async function getDriverDestinationRoute(
     checkOffRoute?: boolean;
   } = {},
 ): Promise<{ route: CachedDriverDestinationRoute; refetched: boolean } | null> {
+  if (googleRoutesDisabled()) {
+    const peek = peekCachedDriverDestinationRoute(roomId, destination);
+    return peek ? { route: peek, refetched: false } : null;
+  }
+
   const cached = ROUTE_CACHE.get(roomId);
-  const driverBucket = bucketForDriver(driver);
   const destinationChanged =
     cached != null &&
     (Math.abs(cached.destinationLat - destination.lat) > 1e-6 ||
@@ -68,8 +92,7 @@ export async function getDriverDestinationRoute(
   let needsRefetch =
     !cached ||
     destinationChanged ||
-    Date.now() - cached.fetchedAtMs > GOOGLE_ROUTE_CACHE_MAX_AGE_MS ||
-    cached.driverBucket !== driverBucket;
+    Date.now() - cached.fetchedAtMs > GOOGLE_ROUTE_CACHE_MAX_AGE_MS;
 
   if (!needsRefetch && cached && opts.checkOffRoute) {
     const proj = projectOntoPolyline(cached.polyline, driver);
@@ -93,7 +116,6 @@ export async function getDriverDestinationRoute(
   const fresh = await fetchGoogleDirectionsRoute(driver, destination, {
     transportMode: opts.transportMode,
     drivingRouteStyle: opts.drivingRouteStyle,
-    // Essentials SKU — traffic colors are not worth 2× Routes Pro cost.
     includeTraffic: false,
   });
   if (!fresh) {
@@ -116,7 +138,6 @@ export async function getDriverDestinationRoute(
     trafficSegments: fresh.trafficSegments,
     destinationLat: destination.lat,
     destinationLng: destination.lng,
-    driverBucket,
     fetchedAtMs: Date.now(),
   };
   ROUTE_CACHE.set(roomId, entry);

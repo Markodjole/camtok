@@ -7,6 +7,12 @@ import {
 } from "@/lib/live/grid/cityGrid500";
 import { fetchCityViewportFromGoogle } from "@/lib/live/grid/googleCityViewport";
 
+/** In-process grid built before the first zone market persists spec to DB. */
+const GRID_SPEC_MEMORY = new Map<
+  string,
+  { spec: CityGridSpecCompact; builtAtMs: number }
+>();
+
 /**
  * Reuse-or-build the 500 m city grid spec for a room.
  *
@@ -48,6 +54,9 @@ export async function getOrBuildGridSpecForRoom(
       ?.city_grid_spec ?? null;
   if (reused) return { ok: true, spec: reused, source: "reused" };
 
+  const mem = GRID_SPEC_MEMORY.get(roomId);
+  if (mem) return { ok: true, spec: mem.spec, source: "built" };
+
   const { data: latestGps } = await service
     .from("live_route_snapshots")
     .select("normalized_lat,normalized_lng,raw_lat,raw_lng")
@@ -83,5 +92,6 @@ export async function getOrBuildGridSpecForRoom(
     12000,
   );
   if ("error" in built) return { ok: false, error: `grid_spec: ${built.error}` };
+  GRID_SPEC_MEMORY.set(roomId, { spec: built.spec, builtAtMs: Date.now() });
   return { ok: true, spec: built.spec, source: "built" };
 }

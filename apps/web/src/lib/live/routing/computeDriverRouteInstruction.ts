@@ -6,9 +6,8 @@ import {
 } from "@/lib/live/routing/findNextCrossroad";
 import {
   bustGoogleRouteCache,
-  getDriverDestinationRoute,
+  peekCachedDriverDestinationRoute,
 } from "@/lib/live/routing/googleRouteCache";
-import { googleRoutesDisabled } from "@/lib/live/routing/googleRouteGuard";
 import {
   isHardRejected,
   isMajorOrBetter,
@@ -35,20 +34,15 @@ import {
  * Extracted from the HTTP route so server actions and betting adapters can share
  * the same ROOM_STATE / planning caches.
  *
- * Strategy:
+ * Strategy (fast lane — no Google API calls):
  *   1. Derive a stable motion bearing from recent GPS points.
- *   2. Ask OSRM for a long road-snapped route from the current vehicle
- *      position to a point ~1.5 km ahead in the heading direction. The
- *      returned polyline is the actual road the driver is on (and the
- *      first sensible continuation OSRM picks at each fork).
- *   3. Pull every drivable OSM crossroad in a generous bounding radius
- *      and project each onto the OSRM polyline. Anything farther than a
- *      lane width from the polyline is discarded — that's not on the
- *      driver's road. What remains is the ordered set of intersections
- *      the driver will physically pass.
+ *   2. Ask OSRM for a road-snapped route (toward destination or ~1.5 km ahead).
+ *   3. Pull OSM crossroads and project onto the polyline for pin placement.
  *   4. Keep a per-room queue of three active pins (200–400 m road spacing).
- *   5. When a pin is passed, top up the queue from the far end.
- *   6. Approach line spans ~50 m before the pin + ~20 m after.
+ *
+ * Google Routes (slow lane) is only for the map line — see googleRouteCache.ts
+ * and refreshGoogleRouteForRoom.ts. If that cache is warm, pins may align to
+ * the cached Google polyline via a read-only peek.
  *
  * Persistence lives in `ROOM_STATE` (in-process Map).
  */
@@ -121,38 +115,9 @@ type PlanningRoute = {
   source: "google" | "osrm";
 };
 
-/**
- * Per-room cache for the driver→destination Google polyline used to plan
- * blue-pin placement. Keeps the shared driver-route handler from spamming
- * the Google Routes endpoint on every viewer poll while still recomputing
- * when the driver drifts off the planned road.
- */
-type PlanningCacheEntry = {
-  polyline: LatLng[];
-  destLat: number;
-  destLng: number;
-  driverBucket: string;
-  fetchedAtMs: number;
-};
-const PLANNING_ROUTE_CACHE = new Map<string, PlanningCacheEntry>();
-const PLANNING_ROUTE_TTL_MS = 120_000;
-const PLANNING_DRIVER_BUCKET_DEG = 0.0008; // ~85 m
-
-/**
- * Force-expire the planning route cache for a room so the next call to
- * `computeDriverRouteInstruction` (or a zone-exit estimate) fetches a
- * completely fresh polyline from Google.  Call this immediately before
- * triggering a zone_exit_time market.
- */
+/** Invalidate cached Google map route (slow lane). Pin planning stays on OSRM. */
 export function bustPlanningRouteCache(roomId: string): void {
-  PLANNING_ROUTE_CACHE.delete(roomId);
   bustGoogleRouteCache(roomId);
-}
-
-function planningBucket(p: LatLng): string {
-  const lat = Math.round(p.lat / PLANNING_DRIVER_BUCKET_DEG);
-  const lng = Math.round(p.lng / PLANNING_DRIVER_BUCKET_DEG);
-  return `${lat}|${lng}`;
 }
 
 function spacingWindowForSpeed(speedMps: number | null | undefined): {
@@ -442,87 +407,44 @@ function topUpQueue(
 }
 
 /**
- * Resolve a planning polyline to use for blue-pin selection.
+ * Fast-lane planning polyline for blue-pin selection and bet triggers.
  *
- *  1. If the room has a destination, ask Google Routes for a road-snapped
- *     polyline driver→destination, then trim it to the next
- *     PLANNING_LOOKAHEAD_M meters. We cache per-room and re-fetch when the
- *     driver drifts off-route or the destination changes.
- *  2. Otherwise (no destination, or Google returned nothing), fall back to
- *     the existing OSRM forward probe in the heading direction.
+ * Never calls Google — uses OSRM + OSM crossroads. If the slow-lane Google
+ * map cache is already warm, pins may align to that polyline (read-only peek).
  */
 async function resolvePlanningPolyline(params: {
   roomId: string;
   driver: LatLng;
   heading: number;
   destination: { lat: number; lng: number } | null;
-  transportMode?: string;
-  drivingRouteStyle: DrivingRouteStyle;
 }): Promise<PlanningRoute | null> {
-  const { roomId, driver, heading, destination, transportMode, drivingRouteStyle } =
-    params;
+  const { roomId, driver, heading, destination } = params;
+
+  const trimPlanningPolyline = (polyline: LatLng[]): LatLng[] | null => {
+    if (polyline.length < 2) return null;
+    const total = polylineLengthMeters(polyline);
+    const trimmed =
+      total > PLANNING_LOOKAHEAD_M
+        ? slicePolylineByDistance(polyline, 0, PLANNING_LOOKAHEAD_M)
+        : polyline;
+    return trimmed.length >= 2 ? trimmed : null;
+  };
 
   if (destination) {
-    if (!googleRoutesDisabled()) {
-      const cached = PLANNING_ROUTE_CACHE.get(roomId);
-    const driverBucket = planningBucket(driver);
-
-    // Base cache checks: same destination, same position bucket, not expired.
-    let cacheValid =
-      cached != null &&
-      Math.abs(cached.destLat - destination.lat) < 1e-6 &&
-      Math.abs(cached.destLng - destination.lng) < 1e-6 &&
-      cached.driverBucket === driverBucket &&
-      Date.now() - cached.fetchedAtMs < PLANNING_ROUTE_TTL_MS;
-
-    // Heading check: if the driver has turned significantly away from the
-    // cached route's direction at their position, bust the cache immediately
-    // so pins re-appear on the road the driver is actually travelling.
-    if (cacheValid && cached) {
-      const proj = projectOntoPolyline(cached.polyline, driver);
-      if (proj) {
-        const seg = cached.polyline[proj.segmentIndex];
-        const segNext = cached.polyline[proj.segmentIndex + 1];
-        if (seg && segNext) {
-          const routeBearing = bearingDegrees(seg, segNext);
-          const diff = Math.abs(((heading - routeBearing + 540) % 360) - 180);
-          // > 50° off the cached route = driver has turned, force re-fetch
-          if (diff > 50) {
-            PLANNING_ROUTE_CACHE.delete(roomId);
-            cacheValid = false;
-          }
-        }
-      }
-    }
-
-    let polyline = cacheValid ? cached!.polyline : null;
-    if (!polyline) {
-      const shared = await getDriverDestinationRoute(roomId, driver, destination, {
-        transportMode,
-        drivingRouteStyle,
-        checkOffRoute: false,
-      });
-      if (shared && shared.route.polyline.length >= 2) {
-        polyline = shared.route.polyline;
-        PLANNING_ROUTE_CACHE.set(roomId, {
-          polyline,
-          destLat: destination.lat,
-          destLng: destination.lng,
-          driverBucket,
-          fetchedAtMs: Date.now(),
-        });
-      }
-    }
-    if (polyline && polyline.length >= 2) {
-      const total = polylineLengthMeters(polyline);
-      const trimmed =
-        total > PLANNING_LOOKAHEAD_M
-          ? slicePolylineByDistance(polyline, 0, PLANNING_LOOKAHEAD_M)
-          : polyline;
-      if (trimmed.length >= 2) {
+    const peeked = peekCachedDriverDestinationRoute(roomId, destination);
+    if (peeked) {
+      const trimmed = trimPlanningPolyline(peeked.polyline);
+      if (trimmed) {
         return { polyline: trimmed, source: "google" };
       }
     }
+
+    const toDest = await fetchOsrmDrivingRoute(driver, destination);
+    if (toDest && toDest.polyline.length >= 2) {
+      const trimmed = trimPlanningPolyline(toDest.polyline);
+      if (trimmed) {
+        return { polyline: trimmed, source: "osrm" };
+      }
     }
   }
 
@@ -580,8 +502,6 @@ export async function computeDriverRouteInstruction(
       driver: position,
       heading,
       destination,
-      transportMode: room.transportMode,
-      drivingRouteStyle,
     }),
     fetchNearbyCrossroadsDetailed(
       position.lat,
