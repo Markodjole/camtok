@@ -1787,19 +1787,31 @@ async function loadFiredKeysSnapshot(
   // limit(100) is generous: typical sessions have <20 markets per type.
   const { data } = await service
     .from("live_betting_markets")
-    .select("market_type, subtitle")
+    .select("id, market_type, subtitle")
     .eq("live_session_id", sessionId)
     .in("market_type", ["city_grid", "next_turn", "straight_streak", "next_step", "zone_exit_time"])
     .order("opens_at", { ascending: false })
     .limit(100);
 
+  const marketIds = (data ?? []).map((row) => (row as { id: string }).id);
+  const marketsWithBets = new Set<string>();
+  if (marketIds.length > 0) {
+    const { data: betRows } = await service
+      .from("live_bets")
+      .select("market_id")
+      .in("market_id", marketIds);
+    for (const b of betRows ?? []) {
+      marketsWithBets.add((b as { market_id: string }).market_id);
+    }
+  }
+
   for (const row of data ?? []) {
-    const r = row as { market_type: string; subtitle: string | null };
+    const r = row as { id: string; market_type: string; subtitle: string | null };
     try {
       const meta = JSON.parse(r.subtitle ?? "{}") as Record<string, string | undefined>;
       switch (r.market_type) {
         case "city_grid":
-          if (meta.cellKey) snap.cityGrid.add(meta.cellKey);
+          if (meta.cellKey && marketsWithBets.has(r.id)) snap.cityGrid.add(meta.cellKey);
           break;
         case "next_turn":
           if (meta.pinKey) snap.nextTurn.add(meta.pinKey);

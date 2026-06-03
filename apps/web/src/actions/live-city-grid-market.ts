@@ -91,19 +91,32 @@ export async function openCityGridMarketForRoom(
 
   const cellKey = `cell:r${parsed.row}:c${parsed.col}`;
 
-  // Once-per-cell-per-session dupe guard.
+  // Once-per-cell-per-session dupe guard — only if someone actually bet last time.
   const { data: prior } = await service
     .from("live_betting_markets")
-    .select("subtitle")
+    .select("id, subtitle")
     .eq("live_session_id", sessionId)
     .eq("market_type", "city_grid")
     .order("opens_at", { ascending: false })
     .limit(30);
+
+  const priorIds = (prior ?? []).map((row) => (row as { id: string }).id);
+  const marketsWithBets = new Set<string>();
+  if (priorIds.length > 0) {
+    const { data: betRows } = await service
+      .from("live_bets")
+      .select("market_id")
+      .in("market_id", priorIds);
+    for (const b of betRows ?? []) {
+      marketsWithBets.add((b as { market_id: string }).market_id);
+    }
+  }
+
   const alreadyFired = (prior ?? []).some((row) => {
+    const r = row as { id: string; subtitle: string | null };
+    if (!marketsWithBets.has(r.id)) return false;
     try {
-      const meta = JSON.parse(
-        (row as { subtitle: string | null }).subtitle ?? "{}",
-      ) as { cellKey?: string };
+      const meta = JSON.parse(r.subtitle ?? "{}") as { cellKey?: string };
       return meta.cellKey === cellKey;
     } catch {
       return false;

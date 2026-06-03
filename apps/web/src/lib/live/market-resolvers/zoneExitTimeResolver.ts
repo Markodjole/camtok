@@ -3,6 +3,7 @@ import {
   parseGridOptionId,
   type CityGridSpecCompact,
 } from "@/lib/live/grid/cityGrid500";
+import { classifyEstimatedTimeOption } from "./classifyEstimatedTimeOption";
 import type { MarketForResolution, MarketResolution, ServiceClient } from "./types";
 
 interface ZoneExitMeta {
@@ -31,13 +32,12 @@ function parseZoneExitMeta(subtitle: string | null): ZoneExitMeta | null {
 /**
  * Resolve a `zone_exit_time` market.
  *
- * Rules:
- * - Driver still in start cell  → `exit_over` (countdown clearly elapsed)
- * - Driver left within < 80% T  → `exit_under`
- * - Driver left within 80–120% T → `exit_at`
- * - Driver left after > 120% T  → `exit_over`
- *
- * The ±20% window accounts for GPS polling latency and normalizer lag.
+ * Rules (match option labels "< T", "= T", "> T"):
+ * - Driver still in start cell after countdown → `exit_over`
+ * - Driver still in start cell before countdown → refund (premature settle)
+ * - Driver left before T sec → `exit_under`
+ * - Driver left at ~T sec → `exit_at`
+ * - Driver left after T sec → `exit_over`
  */
 export async function zoneExitTimeResolver(
   market: MarketForResolution,
@@ -92,11 +92,13 @@ export async function zoneExitTimeResolver(
     countdownElapsed,
   };
 
-  // Still in start cell — driver took too long or timer expired while they were inside.
+  // Still in start cell — timer expired while inside, or premature settle (GPS flicker).
   if (!currentCellKey || currentCellKey === startCellKey) {
-    const reason = countdownElapsed
-      ? `zone_exit_countdown_elapsed_est${estimatedSec}s`
-      : `zone_exit_reveal_at_still_in_zone_est${estimatedSec}s`;
+    if (!countdownElapsed) {
+      console.log(`[zoneExitResolver] refund (still in zone, timer running)`, logCtx);
+      return { outcome: "refund", reason: "zone_exit_still_in_zone_premature" };
+    }
+    const reason = `zone_exit_countdown_elapsed_est${estimatedSec}s`;
     console.log(`[zoneExitResolver] exit_over (still in zone)`, { ...logCtx, reason });
     return { outcome: "win", optionId: "exit_over", reason };
   }
@@ -107,13 +109,9 @@ export async function zoneExitTimeResolver(
       ? Math.max(0, (exitAtMs - opensAtMs) / 1000)
       : Number.POSITIVE_INFINITY;
 
-  // ±20% tolerance window around the estimate.
-  const lo = estimatedSec * 0.8;
-  const hi = estimatedSec * 1.2;
-  const optionId =
-    elapsedSec < lo ? "exit_under" : elapsedSec <= hi ? "exit_at" : "exit_over";
+  const optionId = classifyEstimatedTimeOption(elapsedSec, estimatedSec, "exit");
   const reason = `zone_exit_${Math.round(elapsedSec)}s_est${estimatedSec}s`;
 
-  console.log(`[zoneExitResolver] ${optionId}`, { ...logCtx, elapsedSec, lo, hi, reason });
+  console.log(`[zoneExitResolver] ${optionId}`, { ...logCtx, elapsedSec, reason });
   return { outcome: "win", optionId, reason };
 }

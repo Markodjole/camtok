@@ -402,8 +402,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   /** Active zone_exit_time bet waiting for countdown / zone exit / settlement. */
   const [zoneExitPending, setZoneExitPending] = useState<{
     marketId: string;
-    betPlacedAtMs: number;
-    remainingAtBetSec: number;
+    opensAtMs: number;
+    estimatedSec: number;
     startCellKey: string;
   } | null>(null);
   /** Market IDs whose countdown already finished — prevents sync effect from restoring them. */
@@ -658,7 +658,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
 
   // Deadline-based: fires a single setTimeout at the exact moment instead of polling.
   const zoneExitDeadlineMs = zoneExitPending
-    ? zoneExitPending.betPlacedAtMs + Math.round(zoneExitPending.remainingAtBetSec) * 1000
+    ? zoneExitPending.opensAtMs + Math.round(zoneExitPending.estimatedSec) * 1000
     : null;
   const zoneExitCountdownElapsed = useDeadlinePassed(zoneExitDeadlineMs);
 
@@ -930,28 +930,6 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     }
   }, [effectiveEngineType, viewerEnginePillType]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  /** After a zone-once bet is shown this long, allow the next type in the zone queue. */
-  useEffect(() => {
-    if (!clientInZone || viewerEnginePillType != null) return;
-    const t = stableDisplayBetType;
-    if (!t || !ZONE_BET_ONCE_SET.has(t)) return;
-    if (zoneConsumedBetTypes.has(t)) return;
-    const id = setTimeout(() => {
-      setZoneConsumedBetTypes((prev) => {
-        if (prev.has(t)) return prev;
-        const next = new Set(prev);
-        next.add(t);
-        return next;
-      });
-    }, BET_MIN_DISPLAY_MS);
-    return () => clearTimeout(id);
-  }, [
-    stableDisplayBetType,
-    clientInZone,
-    viewerEnginePillType,
-    zoneConsumedBetTypes,
-  ]);
-
   useEffect(() => {
     setJoyPortalReady(true);
   }, []);
@@ -1162,20 +1140,29 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       const parsed = parseZoneExitMarketMeta(market);
       const startCellKey = parsed?.startCellKey ?? currentZoneCellKey;
       if (parsed && startCellKey) {
-        const now = Date.now();
-        const elapsedSinceOpen = Math.max(0, (now - parsed.opensAtMs) / 1000);
-        const remaining = Math.max(1, parsed.estimatedSec - elapsedSinceOpen);
         zoneExitDismissedRef.current.delete(market.id);
         setZoneExitPending({
           marketId: market.id,
-          betPlacedAtMs: now,
-          remainingAtBetSec: remaining,
+          opensAtMs: parsed.opensAtMs,
+          estimatedSec: parsed.estimatedSec,
           startCellKey,
         });
       }
     }
     if (market.marketType === "city_grid" && currentZoneCellKey) {
       setCityGridBetPending({ marketId: market.id, startCellKey: currentZoneCellKey });
+      setZoneConsumedBetTypes((prev) => {
+        const next = new Set(prev);
+        next.add("next_zone");
+        return next;
+      });
+    }
+    if (market.marketType === "zone_exit_time") {
+      setZoneConsumedBetTypes((prev) => {
+        const next = new Set(prev);
+        next.add("zone_exit_time");
+        return next;
+      });
     }
     if (market.marketType === "next_step") {
       const parsed = parseNextStepMarketMeta(market);
@@ -1766,13 +1753,10 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     if (!parsed) return;
     const startCellKey = parsed.startCellKey ?? currentZoneCellKey;
     if (!startCellKey) return;
-    const now = Date.now();
-    const elapsedSinceOpen = Math.max(0, (now - parsed.opensAtMs) / 1000);
-    const remaining = Math.max(1, parsed.estimatedSec - elapsedSinceOpen);
     setZoneExitPending({
       marketId: currentMarket.id,
-      betPlacedAtMs: now,
-      remainingAtBetSec: remaining,
+      opensAtMs: parsed.opensAtMs,
+      estimatedSec: parsed.estimatedSec,
       startCellKey,
     });
   }, [
@@ -2626,8 +2610,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         ) : null}
         {zoneExitPending ? (
           <ZoneExitCountdownWidget
-            betPlacedAtMs={zoneExitPending.betPlacedAtMs}
-            remainingAtBetSec={zoneExitPending.remainingAtBetSec}
+            deadlineMs={zoneExitDeadlineMs!}
             resolving={zoneExitResolving}
           />
         ) : null}
@@ -2880,10 +2863,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         </BetFeedStack>
       ) : null}
 
-      {/* ── Straight streak passage tracker ──────────────────── */}
-      {/* Shown to everyone (not just betters) so the counter provides context
-          for deciding what to bet: < N / = N / > N. */}
-      {currentMarket?.marketType === "straight_streak" ? (
+      {/* ── Straight streak passage tracker — only for viewers who bet ── */}
+      {currentMarket?.marketType === "straight_streak" &&
+      viewerHasBetOnCurrentMarket ? (
         <StraightStreakTracker
           marketMeta={currentMarket.meta}
           marketId={currentMarket.id}
@@ -3061,16 +3043,14 @@ function ViewerCenterMoneyFlash({
 
 /**
  * Square button countdown for zone_exit_time bets.
- * Counts down from `remainingAtBetSec` seconds, shows 0 when elapsed, stays
+ * Counts down to market open + estimated seconds, shows 0 when elapsed, stays
  * visible until `handleSettlement` clears it (or 45 s safety fires).
  */
 const ZoneExitCountdownWidget = memo(function ZoneExitCountdownWidget({
-  betPlacedAtMs,
-  remainingAtBetSec,
+  deadlineMs,
   resolving = false,
 }: {
-  betPlacedAtMs: number;
-  remainingAtBetSec: number;
+  deadlineMs: number;
   resolving?: boolean;
 }) {
   const [now, setNow] = useState(() => Date.now());
@@ -3078,10 +3058,7 @@ const ZoneExitCountdownWidget = memo(function ZoneExitCountdownWidget({
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, []);
-  const remainingSec = Math.max(
-    0,
-    Math.round(remainingAtBetSec) - Math.floor((now - betPlacedAtMs) / 1000),
-  );
+  const remainingSec = Math.max(0, Math.ceil((deadlineMs - now) / 1000));
   const urgent = !resolving && remainingSec <= 5;
   return (
     <div

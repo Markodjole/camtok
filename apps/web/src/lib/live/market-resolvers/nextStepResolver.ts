@@ -1,5 +1,6 @@
 import { metersBetween } from "@/lib/live/routing/geometry";
 import { NEXT_STEP_APPROACH_M } from "@/lib/live/betting/betWindowConstants";
+import { classifyEstimatedTimeOption } from "./classifyEstimatedTimeOption";
 import type { MarketForResolution, MarketResolution, ServiceClient } from "./types";
 
 // ─── Subtitle parsing ─────────────────────────────────────────────────────────
@@ -109,10 +110,7 @@ export async function nextStepResolver(
     ? Math.max(0, (arrivalMs - opensAtMs) / 1000)
     : Number.POSITIVE_INFINITY;
 
-  const lo = estimatedSec * 0.8;
-  const hi = estimatedSec * 1.2;
-  const optionId =
-    elapsedSec < lo ? "step_under" : elapsedSec <= hi ? "step_at" : "step_over";
+  const optionId = classifyEstimatedTimeOption(elapsedSec, estimatedSec, "step");
 
   const reason = `next_step_${Math.round(elapsedSec)}s_est${estimatedSec}s`;
 
@@ -120,8 +118,6 @@ export async function nextStepResolver(
     marketId: market.id,
     elapsedSec,
     estimatedSec,
-    lo,
-    hi,
     reason,
   });
 

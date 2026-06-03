@@ -374,45 +374,63 @@ export async function shouldSettleEngineMarket(
     }
   }
 
-  const { data: latestGps } = await service
+  const { data: recentGps } = await service
     .from("live_route_snapshots")
     .select("normalized_lat,normalized_lng,raw_lat,raw_lng,recorded_at")
     .eq("live_session_id", liveSessionId)
     .order("recorded_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (!latestGps) return false;
+    .limit(3);
+  if (!recentGps?.length) return false;
 
-  const g = latestGps as {
+  const cellKeyForGps = (row: {
     normalized_lat: number | null;
     normalized_lng: number | null;
     raw_lat: number;
     raw_lng: number;
-    recorded_at: string;
+  }): string | null => {
+    const cellId = cellIdForPosition(
+      gridSpec,
+      row.normalized_lat ?? row.raw_lat,
+      row.normalized_lng ?? row.raw_lng,
+    );
+    if (!cellId) return null;
+    const parsed = parseGridOptionId(cellId);
+    return parsed != null ? `cell:r${parsed.row}:c${parsed.col}` : null;
   };
-  const currentCell = cellIdForPosition(
-    gridSpec,
-    g.normalized_lat ?? g.raw_lat,
-    g.normalized_lng ?? g.raw_lng,
-  );
-  if (!currentCell) return false;
-  const parsed = parseGridOptionId(currentCell);
-  if (!parsed) return false;
 
-  const currentCellKey = `cell:r${parsed.row}:c${parsed.col}`;
-  const leftZone = currentCellKey !== startCellKey;
-  if (leftZone) {
+  const recentCellKeys = recentGps
+    .map((row) =>
+      cellKeyForGps(
+        row as {
+          normalized_lat: number | null;
+          normalized_lng: number | null;
+          raw_lat: number;
+          raw_lng: number;
+        },
+      ),
+    )
+    .filter((key): key is string => key != null);
+  if (recentCellKeys.length === 0) return false;
+
+  const latestCellKey = recentCellKeys[0]!;
+  if (latestCellKey === startCellKey) return false;
+
+  // Require two consecutive outside readings so a single boundary flicker
+  // does not settle while the driver is still inside the zone.
+  const confirmedExit =
+    recentCellKeys.length >= 2 && recentCellKeys[1] !== startCellKey;
+  if (confirmedExit) {
     console.log(`[shouldSettleEngineMarket] driver left zone`, {
       marketId,
       startCellKey,
-      currentCellKey,
+      currentCellKey: latestCellKey,
       elapsedSec: Number.isFinite(opensAtMs)
         ? Math.round((Date.now() - opensAtMs) / 1000)
         : null,
-      gpsAt: g.recorded_at,
+      gpsAt: (recentGps[0] as { recorded_at: string }).recorded_at,
     });
   }
-  return leftZone;
+  return confirmedExit;
 }
 
 // ─── Grid center helper ───────────────────────────────────────────────────────

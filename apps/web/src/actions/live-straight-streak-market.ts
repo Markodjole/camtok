@@ -186,9 +186,8 @@ export async function openStraightStreakMarketForRoom(
   const subtitle: StraightStreakSubtitle = {
     expectedStreak,
     streakKey,
-    // Straight crossroads from route analysis (+ the first turn ahead for
-    // resolver/tracker turn detection). Never store dense OSRM side streets.
-    intersections: crossroads.filter((c) => c.isStraight).slice(0, expectedStreak + 1),
+    // Every route crossroad in order — tracker/resolver count passages sequentially.
+    intersections: crossroads,
   };
 
   // ── Timing ────────────────────────────────────────────────────────────────

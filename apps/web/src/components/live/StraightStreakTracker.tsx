@@ -19,9 +19,9 @@ type Props = {
   vehiclePosition: { lat: number; lng: number; heading?: number } | null;
 };
 
-const IN_RANGE_M = STREAK_CROSSROAD_PROXIMITY_M + 35;
-const EXITED_M = STREAK_CROSSROAD_PROXIMITY_M + 45;
-const HISTORY_SIZE = 40;
+const IN_RANGE_M = STREAK_CROSSROAD_PROXIMITY_M + 25;
+const EXITED_M = STREAK_CROSSROAD_PROXIMITY_M + 35;
+const HISTORY_SIZE = 60;
 
 export function StraightStreakTracker({ marketMeta, marketId, vehiclePosition }: Props) {
   const streakData = useMemo<StraightStreakSubtitle | null>(() => {
@@ -63,9 +63,9 @@ export function StraightStreakTracker({ marketMeta, marketId, vehiclePosition }:
   }, [marketId]);
 
   useEffect(() => {
-    if (!streakData || !vehiclePosition || gameOverRef.current || completeRef.current) return;
+    if (!streakData || !vehiclePosition || gameOverRef.current) return;
 
-    const { expectedStreak } = streakData;
+    const { expectedStreak, intersections } = streakData;
 
     const sample: GpsSample = {
       lat: vehiclePosition.lat,
@@ -89,49 +89,37 @@ export function StraightStreakTracker({ marketMeta, marketId, vehiclePosition }:
       return;
     }
 
-    let newPassed = 0;
-    const newTokens: number[] = [];
+    // Count crossroads in route order — one at a time — so none are skipped.
+    const nextIntersection = intersections.find(
+      (i) => !passedRef.current.has(i.nodeId),
+    );
+    if (!nextIntersection) return;
 
-    for (const intersection of streakData.intersections) {
-      if (straightCountRef.current >= expectedStreak) {
-        completeRef.current = true;
-        break;
-      }
+    const nodeId = nextIntersection.nodeId;
+    const currentDist = metersBetween(vehiclePosition, nextIntersection);
+    const wasNear = history.some(
+      (p) => metersBetween(p, nextIntersection) <= IN_RANGE_M,
+    );
 
-      const nodeId = intersection.nodeId;
-      if (passedRef.current.has(nodeId)) continue;
+    if (!wasNear || currentDist < EXITED_M) return;
 
-      const currentDist = metersBetween(vehiclePosition, intersection);
-      const wasNear = history.some(
-        (p) => metersBetween(p, intersection) <= IN_RANGE_M,
-      );
+    const passage = scoreIntersectionPassage(history, nextIntersection, IN_RANGE_M);
+    passedRef.current.add(nodeId);
 
-      if (!wasNear || currentDist < EXITED_M) continue;
-
-      const passage = scoreIntersectionPassage(history, intersection, IN_RANGE_M);
-
-      passedRef.current.add(nodeId);
-
-      if (passage === "turn") {
-        gameOverRef.current = true;
-        setGameOver(true);
-        return;
-      }
-
-      if (passage === "straight") {
-        straightCountRef.current++;
-        newPassed++;
-        tokenCounterRef.current++;
-        newTokens.push(tokenCounterRef.current);
-        if (straightCountRef.current >= expectedStreak) {
-          completeRef.current = true;
-        }
-      }
+    if (passage === "turn") {
+      gameOverRef.current = true;
+      setGameOver(true);
+      return;
     }
 
-    if (newPassed > 0) {
-      setPassedCount((prev) => Math.min(expectedStreak, prev + newPassed));
-      setFloatTokens((prev) => [...prev, ...newTokens]);
+    if (passage === "straight") {
+      straightCountRef.current++;
+      tokenCounterRef.current++;
+      setPassedCount(straightCountRef.current);
+      setFloatTokens((prev) => [...prev, tokenCounterRef.current]);
+      if (straightCountRef.current >= expectedStreak) {
+        completeRef.current = true;
+      }
     }
   }, [vehiclePosition, streakData]);
 
@@ -146,7 +134,7 @@ export function StraightStreakTracker({ marketMeta, marketId, vehiclePosition }:
   if (!streakData) return null;
 
   const { expectedStreak } = streakData;
-  const displayCount = Math.min(passedCount, expectedStreak);
+  const displayCount = passedCount;
   const isDone = !gameOver && displayCount >= expectedStreak;
 
   return (
