@@ -63,7 +63,7 @@ export function TopBar() {
 
   return (
     <header className="fixed left-0 right-0 top-0 z-50 flex h-12 items-center justify-between bg-background/80 px-4 backdrop-blur-lg">
-      <BrandLogo height={28} />
+      <BrandLogo height={32} />
       <div className="flex items-center gap-2">
         <div className="relative" ref={pickerRef}>
           <button

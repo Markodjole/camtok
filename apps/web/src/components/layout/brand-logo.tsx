@@ -21,9 +21,12 @@ export function BrandLogo({
       src="/crosstown-logo.png"
       alt="Crosstown"
       width={1024}
-      height={384}
+      height={269}
       priority={priority}
-      className={cn("block h-auto w-auto max-w-[min(58vw,210px)] object-contain object-left", className)}
+      className={cn(
+        "block h-auto w-auto max-w-[min(62vw,240px)] object-contain object-left",
+        className,
+      )}
       style={{ height }}
     />
   );
