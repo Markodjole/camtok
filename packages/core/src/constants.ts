@@ -1,5 +1,5 @@
-export const APP_NAME = "BetTok";
-export const APP_DESCRIPTION = "Watch. Predict. Win.";
+export const APP_NAME = "Crosstown";
+export const APP_DESCRIPTION = "Watch the drive. Call the next move.";
 
 export const DEMO_WALLET_INITIAL_BALANCE = 1000;
 

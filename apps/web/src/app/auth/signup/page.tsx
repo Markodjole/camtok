@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { BrandLogo } from "@/components/layout/brand-logo";
 import { createBrowserClient } from "@/lib/supabase/client";
 import { getAuthCallbackUrl } from "@/lib/auth/redirect";
 import { Button } from "@/components/ui/button";
@@ -58,7 +59,7 @@ export default function SignupPage() {
     }
 
     toast({
-      title: "Welcome to BetTok!",
+      title: "Welcome to Crosstown!",
       description: "Your account has been created with $1,000 demo balance.",
       variant: "success",
     });
@@ -117,11 +118,14 @@ export default function SignupPage() {
   return (
     <div className="flex min-h-[100dvh] flex-col items-center justify-center px-4">
       <div className="mb-8 text-center">
-        <h1 className="text-4xl font-bold tracking-tight">
-          <span className="text-primary">Bet</span>Tok
-        </h1>
-        <p className="mt-2 text-sm text-muted-foreground">
-          Join the prediction game
+        <BrandLogo
+          href={null}
+          height={44}
+          priority
+          className="mx-auto max-w-[min(88vw,320px)]"
+        />
+        <p className="mt-3 text-sm text-muted-foreground">
+          Join the live city prediction game
         </p>
       </div>
 

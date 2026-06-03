@@ -10,18 +10,18 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "BetTok — Watch. Predict. Win.",
+  title: "Crosstown — Watch the drive. Call the next move.",
   description:
-    "A mobile-first short-video prediction betting platform. Watch clips, predict what happens next, and win.",
+    "Live dashcam prediction game. Watch real city drives, bet on the next turn, zone, and route.",
   manifest: "/manifest.json",
   icons: {
-    icon: "/icon-192.png",
+    icon: "/crosstown-logo.png",
     apple: "/icon-192.png",
   },
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
-    title: "BetTok",
+    title: "Crosstown",
   },
 };
 

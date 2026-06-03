@@ -98,7 +98,7 @@ export default function EditProfilePage() {
 
           <Card className="mb-4">
             <CardHeader>
-              <CardTitle>BetTok character</CardTitle>
+              <CardTitle>Crosstown character</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
               <p className="text-sm text-muted-foreground">

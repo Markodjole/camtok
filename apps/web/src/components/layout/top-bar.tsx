@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { BrandLogo } from "@/components/layout/brand-logo";
 import { useUserStore } from "@/stores/user-store";
 import { walletLiveBalance } from "@/lib/live/walletBalance";
 import { useViewerChromeStore } from "@/stores/viewer-chrome-store";
@@ -62,10 +63,7 @@ export function TopBar() {
 
   return (
     <header className="fixed left-0 right-0 top-0 z-50 flex h-12 items-center justify-between bg-background/80 px-4 backdrop-blur-lg">
-      <Link href="/live" className="text-lg font-bold tracking-tight">
-        <span className="text-primary">Bet</span>
-        <span className="text-foreground">Tok</span>
-      </Link>
+      <BrandLogo height={28} />
       <div className="flex items-center gap-2">
         <div className="relative" ref={pickerRef}>
           <button
