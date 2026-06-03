@@ -1,12 +1,14 @@
 import type { Metadata, Viewport } from "next";
-import { Inter } from "next/font/google";
+import { Exo_2 } from "next/font/google";
 import { Providers } from "@/components/providers";
 import "./globals.css";
 
-const inter = Inter({
+const exo2 = Exo_2({
   subsets: ["latin"],
   display: "swap",
   preload: false,
+  variable: "--font-exo2",
+  weight: ["400", "500"],
 });
 
 export const metadata: Metadata = {
@@ -41,8 +43,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className="dark" data-scroll-behavior="smooth">
-      <body className={inter.className}>
+    <html lang="en" className={`dark ${exo2.variable}`} data-scroll-behavior="smooth">
+      <body className={`${exo2.className} font-sans`}>
         <div id="app-root">
           <Providers>{children}</Providers>
         </div>

@@ -10,6 +10,9 @@ const config: Config = {
       screens: { "2xl": "430px" },
     },
     extend: {
+      fontFamily: {
+        sans: ["var(--font-exo2)", "system-ui", "sans-serif"],
+      },
       colors: {
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",
