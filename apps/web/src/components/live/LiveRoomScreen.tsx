@@ -2468,7 +2468,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           <LiveVideoPlayer
             liveSessionId={room.liveSessionId}
             className="h-full w-full"
-            objectFit={isMobileViewport ? "cover" : "contain"}
+            objectFit="cover"
             objectPosition={isMobileViewport ? "top" : "center"}
           />
         )}
