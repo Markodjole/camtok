@@ -1,3 +1,5 @@
+import { assertApiAllowed } from "@/lib/usage/apiUsage";
+
 /**
  * Single reverse-geocode call to obtain a city-scale viewport (no POIs,
  * no Voronoi). Used only to bound the 500 m grid.
@@ -19,6 +21,15 @@ export async function fetchCityViewportFromGoogle(
   | { ok: true; viewport: CityViewport }
   | { ok: false; status: string; message: string | null }
 > {
+  const guard = assertApiAllowed("google_geocode");
+  if (!guard.allowed) {
+    return {
+      ok: false,
+      status: "RATE_LIMITED",
+      message: guard.reason,
+    };
+  }
+
   const revUrl =
     `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}` +
     `&key=${key}&language=en`;

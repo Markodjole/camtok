@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { assertApiAllowed } from "@/lib/usage/apiUsage";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -48,6 +49,14 @@ export async function GET(req: NextRequest) {
     url.searchParams.set("radius", "30000");
   }
   if (sessionToken) url.searchParams.set("sessiontoken", sessionToken);
+
+  const guard = assertApiAllowed("google_places_autocomplete");
+  if (!guard.allowed) {
+    return NextResponse.json(
+      { suggestions: [], reason: guard.reason },
+      { status: 200 },
+    );
+  }
 
   try {
     const res = await fetch(url.toString(), { cache: "no-store" });

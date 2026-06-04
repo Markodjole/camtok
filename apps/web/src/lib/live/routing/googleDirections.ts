@@ -1,10 +1,7 @@
 import type { LatLng } from "./geometry";
 import type { DrivingRouteStyle } from "./drivingRouteStyle";
 import { googleRouteTuningFromDrivingStyle } from "./drivingRouteStyle";
-import {
-  checkGoogleRouteAllowed,
-  recordGoogleRouteCall,
-} from "./googleRouteGuard";
+import { guardGoogleRouteCall } from "./googleRouteGuard";
 
 /**
  * Decode a Google encoded polyline (precision 5) to a list of lat/lng.
@@ -125,13 +122,11 @@ export async function fetchGoogleDirectionsRoute(
     return null;
   }
 
-  const guard = checkGoogleRouteAllowed();
+  const guard = guardGoogleRouteCall();
   if (!guard.allowed) {
     console.warn("[googleDirections] blocked", guard.reason);
     return null;
   }
-
-  recordGoogleRouteCall();
 
   const modeKey = (opts.transportMode ?? "drive").toLowerCase();
   const travelMode = ROUTES_TRAVEL_MODE[modeKey] ?? "DRIVE";

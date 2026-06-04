@@ -48,6 +48,12 @@ async function analyzeClipFrames(
     return { analysis: null, spokenDialogue: null };
   }
 
+  const { assertApiAllowed } = await import("@/lib/usage/apiUsage");
+  const llmGuard = assertApiAllowed("openai");
+  if (!llmGuard.allowed) {
+    return { analysis: null, spokenDialogue: null };
+  }
+
   const { default: OpenAI } = await import("openai");
   const client = new OpenAI({ apiKey });
 
@@ -210,6 +216,12 @@ export async function generateAiClipFromBlueprint(input: {
   } = await supabase.auth.getUser();
   if (!user) return { error: "Not authenticated" };
   if (!process.env.FAL_KEY) return { error: "Missing FAL_KEY on server" };
+
+  const { assertApiAllowed } = await import("@/lib/usage/apiUsage");
+  const falGuard = assertApiAllowed("fal");
+  if (!falGuard.allowed) {
+    return { error: `fal.ai capped (${falGuard.reason})` };
+  }
 
   const inFlightStatuses = ["queued", "generating_first_frame", "generating_end_frame", "generating_video"];
   const inFlightTtlMs = 5 * 60 * 1000;

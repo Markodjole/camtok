@@ -1,4 +1,5 @@
 import type { LatLng } from "./geometry";
+import { assertApiAllowed } from "@/lib/usage/apiUsage";
 
 /**
  * Query the public OSRM demo server for a driving route between two points.
@@ -22,6 +23,9 @@ export async function fetchOsrmDrivingRoute(
     "https://router.project-osrm.org";
   const coords = `${from.lng.toFixed(6)},${from.lat.toFixed(6)};${to.lng.toFixed(6)},${to.lat.toFixed(6)}`;
   const url = `${base}/route/v1/driving/${coords}?overview=full&geometries=geojson&steps=false&alternatives=false`;
+
+  const guard = assertApiAllowed("osrm");
+  if (!guard.allowed) return null;
 
   try {
     const res = await fetch(url, {

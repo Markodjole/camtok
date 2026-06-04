@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { assertApiAllowed } from "@/lib/usage/apiUsage";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -34,6 +35,14 @@ export async function GET(req: NextRequest) {
     url.searchParams.set("language", "en");
     url.searchParams.set("fields", "name,formatted_address,geometry/location");
     if (sessionToken) url.searchParams.set("sessiontoken", sessionToken);
+
+    const guard = assertApiAllowed("google_places_details");
+    if (!guard.allowed) {
+      return NextResponse.json(
+        { destination: null, reason: guard.reason },
+        { status: 200 },
+      );
+    }
 
     try {
       const res = await fetch(url.toString(), { cache: "no-store" });
@@ -100,6 +109,14 @@ export async function GET(req: NextRequest) {
       reason: "missing_api_key",
     });
   }
+  const geoGuard = assertApiAllowed("google_geocode");
+  if (!geoGuard.allowed) {
+    return NextResponse.json({
+      destination: { lat, lng, label: `${lat.toFixed(5)}, ${lng.toFixed(5)}`, placeId: null },
+      reason: geoGuard.reason,
+    });
+  }
+
   try {
     const url = new URL("https://maps.googleapis.com/maps/api/geocode/json");
     url.searchParams.set("latlng", `${lat},${lng}`);

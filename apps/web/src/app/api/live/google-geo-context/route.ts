@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { assertApiAllowed } from "@/lib/usage/apiUsage";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -141,7 +142,27 @@ export async function GET(req: NextRequest) {
   const zones: Zone[] = [];
   const checkpoints: Checkpoint[] = [];
 
+  const requestGuard = assertApiAllowed("google_geo_context");
+  if (!requestGuard.allowed) {
+    return NextResponse.json({
+      zones: [],
+      checkpoints: [],
+      source: "google",
+      reason: requestGuard.reason,
+    });
+  }
+
   // 1) Reverse geocode to discover nearby admin/neighborhood labels and city viewport.
+  const revGuard = assertApiAllowed("google_geocode");
+  if (!revGuard.allowed) {
+    return NextResponse.json({
+      zones: [],
+      checkpoints: [],
+      source: "google",
+      reason: revGuard.reason,
+    });
+  }
+
   const revUrl =
     `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${key}&language=en`;
   const rev = await fetch(revUrl, { cache: "no-store" }).then((r) => r.json()).catch(() => null) as
@@ -208,6 +229,9 @@ export async function GET(req: NextRequest) {
 
   // 2) Geocode each area name to create "administrative rectangles" (raw Google geometry).
   for (const c of uniqueAreaNames) {
+    const areaGuard = assertApiAllowed("google_geocode");
+    if (!areaGuard.allowed) break;
+
     const name = c.long_name!;
     const t = (c.types ?? [])[0] ?? "administrative_area_level_2";
     const url =
@@ -260,6 +284,9 @@ export async function GET(req: NextRequest) {
   ];
   const anchorSeeds: Array<{ id: string; name: string; lat: number; lng: number; type: string }> = [];
   for (const t of placeTypes) {
+    const nearbyGuard = assertApiAllowed("google_places_nearby");
+    if (!nearbyGuard.allowed) break;
+
     const nearbyUrl =
       `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${lat},${lng}` +
       `&radius=3000&type=${encodeURIComponent(t)}&key=${key}`;
