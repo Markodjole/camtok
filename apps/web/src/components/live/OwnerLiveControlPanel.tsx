@@ -434,7 +434,13 @@ export function OwnerLiveControlPanel({
     let active = true;
     const startDelay = setTimeout(() => {
       if (!active) return;
-      void startBroadcasterP2p(sessionId, stream).then((fn) => {
+      void startBroadcasterP2p(
+        sessionId,
+        stream,
+        process.env.NODE_ENV === "development"
+          ? (line) => console.log("[WebRTC broadcaster]", line)
+          : undefined,
+      ).then((fn) => {
         if (active) {
           p2pCleanupRef.current = fn;
         } else {

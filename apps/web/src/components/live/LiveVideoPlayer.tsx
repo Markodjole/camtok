@@ -7,6 +7,15 @@ import { startViewerP2p } from "./liveP2pBroadcast";
 const CONNECT_TIMEOUT_MS = 20_000;
 const IS_DEV = process.env.NODE_ENV === "development";
 
+function webrtcDebugEnabled(): boolean {
+  if (IS_DEV) return true;
+  try {
+    return localStorage.getItem("camtok_webrtc_debug") === "1";
+  } catch {
+    return false;
+  }
+}
+
 function hasLiveVideoTrack(stream: MediaStream | null): boolean {
   return (
     stream?.getVideoTracks().some((t) => t.readyState !== "ended") ?? false
@@ -102,7 +111,9 @@ export function LiveVideoPlayer({
           }
         },
         (msg) => { if (!cancelled) setSignalError(msg); },
-        IS_DEV ? (line) => console.log("[WebRTC viewer]", line) : undefined,
+        webrtcDebugEnabled()
+          ? (line) => console.log("[WebRTC viewer]", line)
+          : undefined,
       ).then((cleanup) => {
         if (cancelled) cleanup();
         else cleanupRef.fn = cleanup;

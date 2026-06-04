@@ -3,6 +3,14 @@ import { createBrowserClient } from "@/lib/supabase/client";
 
 const EVENT = "webrtc";
 
+function hasTurnCredentials(): boolean {
+  return !!(
+    process.env.NEXT_PUBLIC_TURN_URL &&
+    process.env.NEXT_PUBLIC_TURN_USERNAME &&
+    process.env.NEXT_PUBLIC_TURN_CREDENTIAL
+  );
+}
+
 function buildIceServers(): RTCIceServer[] {
   const servers: RTCIceServer[] = [
     { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] },
@@ -30,10 +38,10 @@ function isLocalHostnameRuntime(): boolean {
 }
 
 function buildIceConfig(): RTCConfiguration {
-  // Relay-only via env flag, but NEVER force relay on localhost/LAN: if TURN
-  // isn't reachable there the peer gathers zero candidates and stalls forever.
+  // Relay-only only when TURN creds exist — relay without TURN gathers zero candidates.
   const envRelay = process.env.NEXT_PUBLIC_ICE_RELAY_ONLY === "1";
-  const relay = envRelay && !isLocalHostnameRuntime();
+  const relay =
+    envRelay && !isLocalHostnameRuntime() && hasTurnCredentials();
   return {
     iceServers: buildIceServers(),
     bundlePolicy: "max-bundle",
@@ -55,13 +63,27 @@ type BcPayload = Record<string, unknown> & {
 };
 
 function parseRawPayload(raw: unknown): BcPayload | null {
-  if (raw == null || typeof raw !== "object") return null;
-  const o = raw as Record<string, unknown>;
-  const inner = o.payload;
-  if (inner && typeof inner === "object" && "type" in inner) {
-    return inner as BcPayload;
+  if (raw == null) return null;
+  if (typeof raw === "string") {
+    try {
+      return parseRawPayload(JSON.parse(raw) as unknown);
+    } catch {
+      return null;
+    }
   }
-  if ("type" in o) return o as BcPayload;
+  if (typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  const candidates: unknown[] = [o.payload, o];
+  const nested = o.payload;
+  if (nested && typeof nested === "object") {
+    const p = nested as Record<string, unknown>;
+    candidates.push(p.payload);
+  }
+  for (const c of candidates) {
+    if (c && typeof c === "object" && "type" in c) {
+      return c as BcPayload;
+    }
+  }
   return null;
 }
 
@@ -484,6 +506,9 @@ export async function startViewerP2p(
     p.onconnectionstatechange = () => {
       if (cleaned) return;
       debug(`pc=${p.connectionState}`);
+      if (p.connectionState === "connected" || p.connectionState === "connecting") {
+        clearStuck();
+      }
       if (p.connectionState === "failed" && p === pc) fail("Connection failed.");
     };
     p.onicecandidateerror = (e) => {
@@ -676,24 +701,36 @@ export async function startViewerP2p(
     startReadyRetry();
   }
 
-  // Stuck-recovery: every 6s if still not connected, blow everything away and
-  // resend viewer-ready. Broadcaster will rebuild its PC and send a fresh offer.
+  // Stuck-recovery: only reset when ICE failed or we never got an offer.
+  // Do NOT reset while ice=checking — that was preventing connections from completing.
   stuckTimer = setInterval(() => {
     if (cleaned) { clearStuck(); return; }
-    const s = pc?.iceConnectionState;
-    if (s === "connected" || s === "completed") {
+    const ice = pc?.iceConnectionState;
+    const conn = pc?.connectionState;
+    if (ice === "connected" || ice === "completed") {
       clearStuck();
       return;
     }
-    debug(`viewer-ready retry (stuck, ice=${s ?? "none"})`);
-    seenUfrags.clear();
-    processingUfrag = null;
-    offerEverReceived = false;
-    bcBuf.clear();
-    closeViewerPc();
-    sendReady();
-    startReadyRetry();
-  }, 6000);
+    if (ice === "checking" || ice === "new" || conn === "connecting") {
+      return;
+    }
+    if (!offerEverReceived) {
+      debug("stuck: no offer yet → viewer-ready");
+      sendReady();
+      startReadyRetry();
+      return;
+    }
+    if (ice === "failed" || ice === "disconnected" || conn === "failed") {
+      debug(`stuck: reset (ice=${ice ?? "none"} conn=${conn ?? "none"})`);
+      seenUfrags.clear();
+      processingUfrag = null;
+      offerEverReceived = false;
+      bcBuf.clear();
+      closeViewerPc();
+      sendReady();
+      startReadyRetry();
+    }
+  }, 10_000);
 
   return () => {
     cleaned = true;
