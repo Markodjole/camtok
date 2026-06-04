@@ -104,7 +104,7 @@ function LiveDecisionStatusRibbonInner({
 
   return (
     <div
-      className="pointer-events-none fixed top-[calc(33dvh+0.5rem)] z-[60] w-full max-w-[min(94vw,20rem)] px-2 transition-all duration-200"
+      className="pointer-events-none fixed top-14 z-[60] w-full max-w-[min(94vw,20rem)] px-2 transition-all duration-200"
       style={{ left: `calc(50% + ${leftOffsetPx / 2}px)`, transform: "translateX(-50%)" }}
     >
       <div className="flex flex-col items-center gap-1.5">
