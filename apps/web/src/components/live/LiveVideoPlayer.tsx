@@ -7,35 +7,6 @@ import { startViewerP2p } from "./liveP2pBroadcast";
 const CONNECT_TIMEOUT_MS = 20_000;
 const IS_DEV = process.env.NODE_ENV === "development";
 
-function webrtcDebugEnabled(): boolean {
-  if (IS_DEV) return true;
-  try {
-    return localStorage.getItem("camtok_webrtc_debug") === "1";
-  } catch {
-    return false;
-  }
-}
-
-async function attachAndPlay(
-  el: HTMLVideoElement,
-  stream: MediaStream | null,
-  muted: boolean,
-): Promise<void> {
-  if (stream && el.srcObject !== stream) {
-    el.srcObject = stream;
-  }
-  if (!stream) {
-    el.srcObject = null;
-    return;
-  }
-  el.muted = muted;
-  try {
-    await el.play();
-  } catch {
-    /* autoplay policy — retry on loadedmetadata */
-  }
-}
-
 /**
  * Broadcaster: pass `localStream` from getUserMedia.
  * Viewer: pass `liveSessionId` (no localStream) — connects via WebRTC + Supabase Realtime signaling.
@@ -70,8 +41,14 @@ export function LiveVideoPlayer({
 
   useEffect(() => {
     const el = ref.current;
-    if (!el || !localStream) return;
-    void attachAndPlay(el, localStream, true);
+    if (!el) return;
+    if (localStream) {
+      el.srcObject = localStream;
+      el.muted = true;
+      void el.play().catch(() => undefined);
+      return;
+    }
+    el.srcObject = null;
   }, [localStream]);
 
   useEffect(() => {
@@ -86,10 +63,12 @@ export function LiveVideoPlayer({
     let cancelled = false;
     const cleanupRef = { fn: undefined as (() => void) | undefined };
 
+    // Show "timed out" if we haven't got a stream after CONNECT_TIMEOUT_MS.
     const timeoutHandle = setTimeout(() => {
       if (!cancelled) setTimedOut(true);
     }, CONNECT_TIMEOUT_MS);
 
+    // Defer the actual subscription by a tick to avoid Strict Mode zombie channels.
     const startDelay = setTimeout(() => {
       if (cancelled) return;
       startViewerP2p(
@@ -103,9 +82,7 @@ export function LiveVideoPlayer({
           }
         },
         (msg) => { if (!cancelled) setSignalError(msg); },
-        webrtcDebugEnabled()
-          ? (line) => console.log("[WebRTC viewer]", line)
-          : undefined,
+        IS_DEV ? (line) => console.log("[WebRTC viewer]", line) : undefined,
       ).then((cleanup) => {
         if (cancelled) cleanup();
         else cleanupRef.fn = cleanup;
@@ -130,34 +107,14 @@ export function LiveVideoPlayer({
   useEffect(() => {
     const el = ref.current;
     if (!el || localStream) return;
-
-    const sync = () => void attachAndPlay(el, remoteStream, !soundOn);
-    void sync();
-
-    if (!remoteStream) return;
-
-    el.addEventListener("loadedmetadata", sync);
-    remoteStream.addEventListener("addtrack", sync);
-    for (const track of remoteStream.getVideoTracks()) {
-      track.addEventListener("unmute", sync);
-    }
-    return () => {
-      el.removeEventListener("loadedmetadata", sync);
-      remoteStream.removeEventListener("addtrack", sync);
-      for (const track of remoteStream.getVideoTracks()) {
-        track.removeEventListener("unmute", sync);
-      }
-    };
+    el.srcObject = remoteStream;
+    // Safari autoplay: start muted so video can render; user can enable sound.
+    el.muted = !soundOn;
+    void el.play().catch(() => undefined);
   }, [remoteStream, localStream, soundOn]);
 
-  const viewerConnecting =
-    !localStream && !!liveSessionId && !remoteStream && !signalError && !timedOut;
+  const viewerConnecting = !localStream && liveSessionId && !remoteStream && !signalError && !timedOut;
   const showError = (signalError || timedOut) && !remoteStream;
-
-  const videoClass =
-    objectFit === "contain"
-      ? "relative z-0 max-h-full max-w-full object-contain"
-      : `relative z-0 h-full w-full object-cover${objectPosition === "top" ? " object-top" : ""}`;
 
   return (
     <div
@@ -167,16 +124,19 @@ export function LiveVideoPlayer({
         ref={ref}
         playsInline
         autoPlay
-        muted
-        className={videoClass}
+        className={
+          objectFit === "contain"
+            ? "max-h-full max-w-full object-contain"
+            : `h-full w-full object-cover${objectPosition === "top" ? " object-top" : ""}`
+        }
       />
       {viewerConnecting ? (
-        <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/60 text-xs text-muted-foreground">
+        <div className="absolute inset-0 flex items-center justify-center bg-black/60 text-xs text-muted-foreground">
           Connecting to live stream…
         </div>
       ) : null}
       {showError ? (
-        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-black/80 p-4 text-center">
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/80 p-4 text-center">
           <p className="text-xs text-red-300">
             {timedOut && !signalError ? "Could not connect to stream." : signalError}
           </p>
@@ -194,7 +154,7 @@ export function LiveVideoPlayer({
         <button
           type="button"
           onClick={() => setSoundOn((prev) => !prev)}
-          className="absolute bottom-2 right-2 z-20 flex h-8 w-8 items-center justify-center rounded-full border border-white/15 bg-black/50 text-white/90 shadow-md backdrop-blur-sm active:bg-black/70"
+          className="absolute bottom-2 right-2 z-10 flex h-8 w-8 items-center justify-center rounded-full border border-white/15 bg-black/50 text-white/90 shadow-md backdrop-blur-sm active:bg-black/70"
           title={soundOn ? "Mute" : "Sound on"}
           aria-label={soundOn ? "Mute stream" : "Unmute stream"}
         >
@@ -206,7 +166,7 @@ export function LiveVideoPlayer({
         </button>
       ) : null}
       {!localStream && !liveSessionId ? (
-        <div className="absolute inset-0 z-10 flex items-center justify-center text-xs text-muted-foreground">
+        <div className="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">
           No stream
         </div>
       ) : null}
