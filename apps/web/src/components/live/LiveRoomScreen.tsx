@@ -204,7 +204,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     CityGridSpecCompact | null
   >(null);
   /** When true: map is full-screen, camera feed is in the corner pip */
-  const [mapExpanded, setMapExpanded] = useState(false);
+  const [mapExpanded, setMapExpanded] = useState(true);
   const [selectedZoneId, setSelectedZoneId] = useState<string | null>(null);
   const [selectedCheckpointId, setSelectedCheckpointId] = useState<string | null>(null);
   const [selectedMapOptionId, setSelectedMapOptionId] = useState<string | null>(null);
@@ -2442,62 +2442,12 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         />
       )}
 
-      {/* ── Primary stage: live stream (default) or map fullscreen ── */}
-      <div className="absolute inset-0 z-[5] overflow-hidden bg-black">
-        {mapExpanded ? (
-          <LiveMap
-            routePoints={routePoints}
-            className="h-full w-full"
-            interactive={true}
-            audienceRole="viewer"
-            showCourseArrow={true}
-            transportMode={room.transportMode}
-            rotateWithHeading={true}
-            followMode={mapFollow}
-            onUserInteract={handleMapUserInteract}
-            onPerformanceDegrade={handleMapPerfDegrade}
-            tileOpacity={1}
-            mapCaption={
-              viewerCurrentBetHeadline ?? currentMarket?.title ?? undefined
-            }
-            zones={zones}
-            checkpoints={checkpoints}
-            selectedZoneId={selectedZoneId}
-            currentZoneId={currentZoneId}
-            selectedCheckpointId={selectedCheckpointId}
-            showZones={effectiveShowZones || mapHighlightsActive}
-            zonesVisualStyle={
-              mapHighlightsActive && betMapHighlights.zonePulseById
-                ? "pick_zone"
-                : zonesVisualStyleForBet
-            }
-            showCheckpoints={true}
-            turnTarget={viewerTurnTargetForMap}
-            stepPin={stepPin}
-            stepPinPulse={betMapHighlights.stepPinPulse}
-            turnPinPulse={betMapHighlights.turnPinPulse}
-            zonePulseById={betMapHighlights.zonePulseById ?? undefined}
-            driverPins={viewerOsrmPreviewPins}
-            approachLine={approachLine}
-            railPhase={viewerRailPhase}
-            destination={room.destination}
-            destinationRoute={mapDestinationRoute}
-            destinationRouteTraffic={mapDestinationTraffic}
-            destinationRouteLabel="Google suggested route"
-            driverRouteBadges={driverRouteBadges}
-            trafficCameras={trafficCameras}
-            activeCameraId={nearestCamera?.id ?? null}
-            leftInsetPx={nearestCamera ? pipSizePx : 0}
-            viewerFollowLatLngBounds={null}
-            viewerFollowBoundsMinZoom={null}
-            viewerTargetWidthMeters={viewerTargetWidthMeters}
-            viewerZoomRuleKey={`zoom:${Math.round(viewerTargetWidthMeters)}:${pinZoomLevelOffset}:${currentMarket?.id ?? "nomarket"}`}
-            zoomLevelBonus={pinZoomLevelOffset}
-            layoutViewportWidthPx={layoutViewportW}
-            onZoneSelect={handleZoneSelect}
-            onCheckpointSelect={handleCheckpointSelect}
-          />
-        ) : useYoutubeDashcam ? (
+      {/* ── Split layout: dashcam (top 1/3) + map (bottom 2/3) ── */}
+      <div
+        className="absolute inset-x-0 top-0 z-[8] flex items-center justify-center overflow-hidden bg-black"
+        style={{ height: "33dvh", minHeight: "33dvh" }}
+      >
+        {useYoutubeDashcam ? (
           <iframe
             src={DASHCAM_YOUTUBE_EMBED}
             className="absolute inset-0 h-full w-full border-0"
@@ -2515,21 +2465,80 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             title="Dashcam feed"
           />
         ) : (
-          <>
-            <LiveVideoPlayer
-              liveSessionId={room.liveSessionId}
-              className="absolute inset-0 h-full w-full"
-              objectFit="cover"
-              objectPosition={isMobileViewport ? "top" : "center"}
-            />
-            <VideoStreamOverlay
-              routePoints={routePoints}
-              pinTarget={videoOverlayPin}
-              zoneGridSpec={zonesSpec}
-              zoneLabel={room.regionLabel}
-            />
-          </>
+          <LiveVideoPlayer
+            liveSessionId={room.liveSessionId}
+            className="h-full w-full"
+            objectFit={isMobileViewport ? "cover" : "contain"}
+            objectPosition={isMobileViewport ? "top" : "center"}
+          />
         )}
+        {!useYoutubeDashcam ? (
+          <VideoStreamOverlay
+            routePoints={routePoints}
+            pinTarget={videoOverlayPin}
+            zoneGridSpec={zonesSpec}
+            zoneLabel={room.regionLabel}
+          />
+        ) : null}
+      </div>
+
+      {/* Map panel — bottom 67% of screen; clip rotated map bleed */}
+      <div
+        className="absolute inset-x-0 bottom-0 z-0 overflow-hidden"
+        style={{ top: "33dvh" }}
+      >
+        <LiveMap
+          routePoints={routePoints}
+          className="h-full w-full"
+          interactive={true}
+          audienceRole="viewer"
+          showCourseArrow={true}
+          transportMode={room.transportMode}
+          rotateWithHeading={true}
+          followMode={mapFollow}
+          onUserInteract={handleMapUserInteract}
+          onPerformanceDegrade={handleMapPerfDegrade}
+          tileOpacity={1}
+          mapCaption={
+            viewerCurrentBetHeadline ?? currentMarket?.title ?? undefined
+          }
+          zones={zones}
+          checkpoints={checkpoints}
+          selectedZoneId={selectedZoneId}
+          currentZoneId={currentZoneId}
+          selectedCheckpointId={selectedCheckpointId}
+          showZones={effectiveShowZones || mapHighlightsActive}
+          zonesVisualStyle={
+            mapHighlightsActive && betMapHighlights.zonePulseById
+              ? "pick_zone"
+              : zonesVisualStyleForBet
+          }
+          showCheckpoints={true}
+          turnTarget={viewerTurnTargetForMap}
+          stepPin={stepPin}
+          stepPinPulse={betMapHighlights.stepPinPulse}
+          turnPinPulse={betMapHighlights.turnPinPulse}
+          zonePulseById={betMapHighlights.zonePulseById ?? undefined}
+          driverPins={viewerOsrmPreviewPins}
+          approachLine={approachLine}
+          railPhase={viewerRailPhase}
+          destination={room.destination}
+          destinationRoute={mapDestinationRoute}
+          destinationRouteTraffic={mapDestinationTraffic}
+          destinationRouteLabel="Google suggested route"
+          driverRouteBadges={driverRouteBadges}
+          trafficCameras={trafficCameras}
+          activeCameraId={nearestCamera?.id ?? null}
+          leftInsetPx={nearestCamera ? pipSizePx : 0}
+          viewerFollowLatLngBounds={null}
+          viewerFollowBoundsMinZoom={null}
+          viewerTargetWidthMeters={viewerTargetWidthMeters}
+          viewerZoomRuleKey={`zoom:${Math.round(viewerTargetWidthMeters)}:${pinZoomLevelOffset}:${currentMarket?.id ?? "nomarket"}`}
+          zoomLevelBonus={pinZoomLevelOffset}
+          layoutViewportWidthPx={layoutViewportW}
+          onZoneSelect={handleZoneSelect}
+          onCheckpointSelect={handleCheckpointSelect}
+        />
       </div>
 
       {room.destination ? (
@@ -2582,7 +2591,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         📋
       </button>
 
-      <div className="fixed right-3 top-20 z-40 flex flex-col items-end gap-3">
+      <div className="fixed right-3 top-[calc(33dvh+0.5rem)] z-40 flex flex-col items-end gap-3">
         {wallet && !walletLoading ? (
           <BalanceBadge
             balance={liveBalance}
@@ -2590,7 +2599,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             onSplashDone={() => setBalanceChangeSplash(null)}
           />
         ) : null}
-        <div className="flex flex-col items-center gap-5">
+        {mapExpanded ? (
+          <div className="flex flex-col items-center gap-5">
           <IconRailButton
             active={effectiveShowZones}
             onClick={() => setShowZones((v) => !v)}
@@ -2604,17 +2614,6 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           >
             <IconLayers />
           </IconRailButton>
-          <IconRailButton
-            active={useYoutubeDashcam}
-            onClick={toggleYoutubeDashcam}
-            title={
-              useYoutubeDashcam
-                ? "YouTube test feed — tap for live camera"
-                : "Live camera — tap for YouTube test feed"
-            }
-          >
-            <IconSparkle />
-          </IconRailButton>
           <IconRailButton active onClick={() => undefined} title="Live bets">
             <IconCoin />
           </IconRailButton>
@@ -2625,7 +2624,19 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           >
             <IconZoomScale scale={zoomScale} />
           </IconRailButton>
-        </div>
+          </div>
+        ) : null}
+        <IconRailButton
+          active={useYoutubeDashcam}
+          onClick={toggleYoutubeDashcam}
+          title={
+            useYoutubeDashcam
+              ? "YouTube test feed — tap for live stream"
+              : "Live stream — tap for YouTube test feed"
+          }
+        >
+          <IconSparkle />
+        </IconRailButton>
         {zoneExitPending ? (
           <ZoneExitCountdownWidget
             deadlineMs={zoneExitDeadlineMs!}
@@ -2646,7 +2657,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         <button
           type="button"
           onClick={() => setMapFollow(true)}
-          className="fixed bottom-48 right-4 z-50 flex items-center gap-1.5 rounded-full border border-amber-300/50 bg-amber-600/70 px-3 py-1.5 text-[11px] font-semibold text-amber-50 shadow-lg active:bg-amber-600/90"
+          className="absolute bottom-48 right-4 z-50 flex items-center gap-1.5 rounded-full border border-amber-300/50 bg-amber-600/70 px-3 py-1.5 text-[11px] font-semibold text-amber-50 shadow-lg active:bg-amber-600/90"
           title="Recenter on streamer"
         >
           <span className="text-base leading-none">◎</span>
@@ -2660,10 +2671,10 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         </div>
       ) : null}
 
-      {/* ── PiP corner: map when stream is primary, stream when map is primary ── */}
-      {!useYoutubeDashcam ? (
-      <div
-        className="absolute z-30 overflow-hidden rounded-2xl border border-white/20 shadow-2xl"
+      {/* ── PiP corner: swapped view + expand toggle ── */}
+      {/* EXPERIMENT: dashcam PiP hidden while YouTube feed is active — restore together with LiveVideoPlayer */}
+      {false && <div
+        className="absolute z-30 overflow-hidden border-y border-l border-white/15 shadow-2xl"
         style={{
           top: pipPos.top,
           left: pipPos.left,
@@ -2681,29 +2692,27 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         onPointerCancel={onPipPointerUp}
       >
         {mapExpanded ? (
+          /* PiP shows the camera stream when map is fullscreen */
           <LiveVideoPlayer
             liveSessionId={room.liveSessionId}
             className="h-full w-full"
-            objectFit="cover"
-            objectPosition={isMobileViewport ? "top" : "center"}
           />
         ) : (
+          /* PiP shows the map when video is fullscreen */
           <>
             <LiveMap
               routePoints={routePoints}
               className="h-full w-full"
-              interactive={true}
+              interactive={false}
               audienceRole="viewer"
               showCourseArrow={true}
               transportMode={room.transportMode}
               rotateWithHeading={true}
-              followMode={mapFollow}
-              onUserInteract={handleMapUserInteract}
               onPerformanceDegrade={handleMapPerfDegrade}
-              tileOpacity={0.85}
+              tileOpacity={0.65}
               mapCaption={
-                viewerCurrentBetHeadline ?? currentMarket?.title ?? undefined
-              }
+              viewerCurrentBetHeadline ?? currentMarket?.title ?? undefined
+            }
               zones={zones}
               checkpoints={checkpoints}
               selectedZoneId={selectedZoneId}
@@ -2734,17 +2743,14 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               viewerFollowLatLngBounds={null}
               viewerFollowBoundsMinZoom={null}
               viewerTargetWidthMeters={viewerTargetWidthMeters}
-              viewerZoomRuleKey={`zoom:${Math.round(viewerTargetWidthMeters)}:${pinZoomLevelOffset}:${currentMarket?.id ?? "nomarket"}`}
-              zoomLevelBonus={pinZoomLevelOffset}
+              viewerZoomRuleKey={`zoom:${Math.round(viewerTargetWidthMeters)}:${currentMarket?.id ?? "nomarket"}`}
               layoutViewportWidthPx={layoutViewportW}
-              onZoneSelect={handleZoneSelect}
-              onCheckpointSelect={handleCheckpointSelect}
             />
-            {routePoints.length === 0 ? (
-              <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/30 text-[9px] text-white/70">
+            {routePoints.length === 0 && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/30 text-[9px] text-white/70">
                 Waiting for GPS…
               </div>
-            ) : null}
+            )}
           </>
         )}
 
@@ -2765,8 +2771,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             <path d="M3 7V3h4a1 1 0 110 2H5v2a1 1 0 11-2 0zm10-4h4v4a1 1 0 11-2 0V5h-2a1 1 0 110-2zM3 13a1 1 0 011 1v2h2a1 1 0 110 2H2v-4a1 1 0 011-1zm14 0a1 1 0 011 1v4h-4a1 1 0 110-2h2v-2a1 1 0 011-1z" />
           </svg>
         </button>
-      </div>
-      ) : null}
+      </div>}
+      {/* END EXPERIMENT PiP hide */}
 
       {/* ── Bottom gradient scrim ────────────────────────── */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-44 bg-gradient-to-t from-black/70 to-transparent" />
@@ -3365,7 +3371,7 @@ function RouteOverviewMap({
 
   return (
     <div
-      className="pointer-events-none fixed left-3 top-20 z-[61] overflow-hidden rounded-xl border border-white/20 shadow-xl"
+      className="pointer-events-none fixed left-3 top-[calc(33dvh+0.5rem)] z-[61] overflow-hidden rounded-xl border border-white/20 shadow-xl"
       style={{ width: 88, height: 220 }}
     >
       <LiveMap

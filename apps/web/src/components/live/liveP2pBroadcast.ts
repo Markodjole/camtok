@@ -434,35 +434,23 @@ export async function startViewerP2p(
     if (readyRetryTimer) { clearInterval(readyRetryTimer); readyRetryTimer = null; }
   };
 
-  const remoteMedia = new MediaStream();
-
-  const clearRemoteMedia = () => {
-    for (const t of [...remoteMedia.getTracks()]) {
-      remoteMedia.removeTrack(t);
-    }
-  };
-
   const closeViewerPc = () => {
     clearAnswerRetry();
     if (pc && pc.signalingState !== "closed") pc.close();
     pc = null;
-    clearRemoteMedia();
   };
 
   const wire = (p: RTCPeerConnection, offerUfrag: string) => {
     p.ontrack = (e) => {
       debug(`ontrack kind=${e.track.kind}`);
-      const stream = e.streams[0];
-      if (stream) {
-        for (const track of stream.getTracks()) {
-          if (!remoteMedia.getTracks().some((t) => t.id === track.id)) {
-            remoteMedia.addTrack(track);
-          }
-        }
-      } else if (e.track && !remoteMedia.getTracks().some((t) => t.id === e.track.id)) {
-        remoteMedia.addTrack(e.track);
-      }
-      if (remoteMedia.getTracks().length > 0) onRemoteStream(remoteMedia);
+      const s =
+        e.streams[0] ??
+        (() => {
+          const m = new MediaStream();
+          if (e.track) m.addTrack(e.track);
+          return m;
+        })();
+      onRemoteStream(s);
     };
     p.onicegatheringstatechange = () => debug(`gather=${p.iceGatheringState}`);
     p.oniceconnectionstatechange = () => {
