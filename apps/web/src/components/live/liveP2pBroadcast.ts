@@ -260,8 +260,8 @@ export async function startBroadcasterP2p(
         // recently (so one is actually out there), rebuild with a fresh ufrag —
         // the viewer may have the previous ufrag cached as "already seen".
         const viewerRecent = Date.now() - lastViewerReadyAt < 15000;
-        if (n === 4 && viewerRecent) {
-          debug("no answer after 4 resends + recent viewer → rebuild with fresh ufrag");
+        if (n === 2 && viewerRecent) {
+          debug("no answer after 2 resends + recent viewer → rebuild with fresh ufrag");
           clearOfferResend();
           void sendOffer();
           return;
@@ -440,6 +440,8 @@ export async function startViewerP2p(
   let answerRetryTimer: ReturnType<typeof setInterval> | null = null;
   let readyRetryTimer: ReturnType<typeof setInterval> | null = null;
   let offerEverReceived = false;
+  let negotiationStartedAt = 0;
+  let gotRemoteTrack = false;
   // Buffer bc-candidates that arrive before we finish setRemoteDescription(offer)
   const bcBuf = new Map<string, RTCIceCandidateInit[]>();
 
@@ -459,9 +461,7 @@ export async function startViewerP2p(
   const remoteMedia = new MediaStream();
 
   const clearRemoteMedia = () => {
-    for (const t of [...remoteMedia.getTracks()]) {
-      remoteMedia.removeTrack(t);
-    }
+    for (const t of [...remoteMedia.getTracks()]) remoteMedia.removeTrack(t);
   };
 
   const closeViewerPc = () => {
@@ -469,11 +469,12 @@ export async function startViewerP2p(
     if (pc && pc.signalingState !== "closed") pc.close();
     pc = null;
     clearRemoteMedia();
+    gotRemoteTrack = false;
   };
 
-  /** Fresh MediaStream reference so React re-attaches when video arrives after audio. */
   const emitRemoteStream = () => {
     if (remoteMedia.getTracks().length === 0) return;
+    gotRemoteTrack = true;
     onRemoteStream(new MediaStream(remoteMedia.getTracks()));
   };
 
@@ -528,7 +529,9 @@ export async function startViewerP2p(
           debug(
             "no local ICE candidates — check TURN/STUN reachability (set NEXT_PUBLIC_ICE_RELAY_ONLY=0 for local dev)",
           );
-          fail("No local ICE candidates. TURN/STUN blocked or unreachable.");
+          if (iceConfig.iceTransportPolicy === "relay") {
+            fail("No local ICE candidates. TURN unreachable or blocked.");
+          }
         }
         return;
       }
@@ -559,11 +562,35 @@ export async function startViewerP2p(
     // An offer arrived — stop pestering the broadcaster with viewer-ready retries.
     offerEverReceived = true;
     clearReadyRetry();
-    if (seenUfrags.has(ufrag) || processingUfrag === ufrag) {
-      debug(`dup offer ufrag=${ufrag.slice(0, 6)} — ignore`);
+    if (processingUfrag === ufrag) {
+      debug(`dup offer ufrag=${ufrag.slice(0, 6)} — still processing`);
       return;
     }
+    if (seenUfrags.has(ufrag)) {
+      const cur = pc;
+      const ice = cur?.iceConnectionState;
+      const stalled =
+        !gotRemoteTrack &&
+        negotiationStartedAt > 0 &&
+        Date.now() - negotiationStartedAt > 18_000;
+      const canRetry =
+        !cur ||
+        cur.signalingState === "closed" ||
+        ice === "failed" ||
+        ice === "disconnected" ||
+        stalled;
+      if (!canRetry) {
+        debug(`dup offer ufrag=${ufrag.slice(0, 6)} — ignore`);
+        return;
+      }
+      debug(
+        `re-offer ufrag=${ufrag.slice(0, 6)} (ice=${ice ?? "none"} stalled=${stalled})`,
+      );
+      seenUfrags.delete(ufrag);
+    }
     processingUfrag = ufrag;
+    negotiationStartedAt = Date.now();
+    gotRemoteTrack = false;
     const g = ++negotiateId;
     closeViewerPc();
     if (cleaned) { processingUfrag = null; return; }
@@ -701,8 +728,21 @@ export async function startViewerP2p(
     startReadyRetry();
   }
 
-  // Stuck-recovery: only reset when ICE failed or we never got an offer.
-  // Do NOT reset while ice=checking — that was preventing connections from completing.
+  const resetNegotiation = (reason: string) => {
+    debug(`stuck: reset (${reason})`);
+    seenUfrags.clear();
+    processingUfrag = null;
+    negotiationStartedAt = 0;
+    gotRemoteTrack = false;
+    offerEverReceived = false;
+    bcBuf.clear();
+    closeViewerPc();
+    sendReady();
+    startReadyRetry();
+  };
+
+  // Stuck-recovery: do not interrupt ice=checking for the first ~18s, but reset if
+  // negotiation never produces tracks or ICE ends in a bad state.
   stuckTimer = setInterval(() => {
     if (cleaned) { clearStuck(); return; }
     const ice = pc?.iceConnectionState;
@@ -711,26 +751,28 @@ export async function startViewerP2p(
       clearStuck();
       return;
     }
-    if (ice === "checking" || ice === "new" || conn === "connecting") {
-      return;
-    }
     if (!offerEverReceived) {
       debug("stuck: no offer yet → viewer-ready");
       sendReady();
       startReadyRetry();
       return;
     }
-    if (ice === "failed" || ice === "disconnected" || conn === "failed") {
-      debug(`stuck: reset (ice=${ice ?? "none"} conn=${conn ?? "none"})`);
-      seenUfrags.clear();
-      processingUfrag = null;
-      offerEverReceived = false;
-      bcBuf.clear();
-      closeViewerPc();
-      sendReady();
-      startReadyRetry();
+    const checkingTooLong =
+      (ice === "checking" || ice === "new" || conn === "connecting") &&
+      negotiationStartedAt > 0 &&
+      Date.now() - negotiationStartedAt > 18_000 &&
+      !gotRemoteTrack;
+    if (checkingTooLong) {
+      resetNegotiation(`ice=${ice ?? "none"} no tracks 18s+`);
+      return;
     }
-  }, 10_000);
+    if (ice === "checking" || ice === "new" || conn === "connecting") {
+      return;
+    }
+    if (ice === "failed" || ice === "disconnected" || conn === "failed") {
+      resetNegotiation(`ice=${ice ?? "none"} conn=${conn ?? "none"}`);
+    }
+  }, 8_000);
 
   return () => {
     cleaned = true;

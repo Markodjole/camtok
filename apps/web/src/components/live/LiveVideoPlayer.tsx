@@ -16,12 +16,6 @@ function webrtcDebugEnabled(): boolean {
   }
 }
 
-function hasLiveVideoTrack(stream: MediaStream | null): boolean {
-  return (
-    stream?.getVideoTracks().some((t) => t.readyState !== "ended") ?? false
-  );
-}
-
 async function attachAndPlay(
   el: HTMLVideoElement,
   stream: MediaStream | null,
@@ -102,12 +96,10 @@ export function LiveVideoPlayer({
         liveSessionId,
         (stream) => {
           if (!cancelled) {
+            clearTimeout(timeoutHandle);
             setRemoteStream(stream);
             setSignalError(null);
-            if (hasLiveVideoTrack(stream)) {
-              clearTimeout(timeoutHandle);
-              setTimedOut(false);
-            }
+            setTimedOut(false);
           }
         },
         (msg) => { if (!cancelled) setSignalError(msg); },
@@ -158,12 +150,9 @@ export function LiveVideoPlayer({
     };
   }, [remoteStream, localStream, soundOn]);
 
-  const hasVideo = localStream
-    ? hasLiveVideoTrack(localStream)
-    : hasLiveVideoTrack(remoteStream);
   const viewerConnecting =
-    !localStream && !!liveSessionId && !hasVideo && !signalError && !timedOut;
-  const showError = (signalError || timedOut) && !hasVideo;
+    !localStream && !!liveSessionId && !remoteStream && !signalError && !timedOut;
+  const showError = (signalError || timedOut) && !remoteStream;
 
   const videoClass =
     objectFit === "contain"
@@ -201,7 +190,7 @@ export function LiveVideoPlayer({
           </button>
         </div>
       ) : null}
-      {!localStream && liveSessionId && hasVideo ? (
+      {!localStream && liveSessionId && remoteStream ? (
         <button
           type="button"
           onClick={() => setSoundOn((prev) => !prev)}
