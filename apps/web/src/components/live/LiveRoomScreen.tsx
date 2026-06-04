@@ -2457,7 +2457,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             allowFullScreen
             title="Dashcam feed (dev test)"
           />
-        ) : (
+        ) : room.liveSessionId ? (
           <LiveVideoPlayer
             key={room.liveSessionId}
             liveSessionId={room.liveSessionId}
@@ -2465,13 +2465,19 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             objectFit={isMobileViewport ? "cover" : "contain"}
             objectPosition={isMobileViewport ? "top" : "center"}
           />
+        ) : (
+          <div className="flex h-full w-full items-center justify-center text-xs text-muted-foreground">
+            Waiting for live session…
+          </div>
         )}
+        {!showYoutubeDashcam ? (
         <VideoStreamOverlay
           routePoints={routePoints}
           pinTarget={videoOverlayPin}
           zoneGridSpec={zonesSpec}
           zoneLabel={room.regionLabel}
         />
+        ) : null}
       </div>
 
       {/* Map panel — bottom 67% of screen; clip rotated map bleed */}

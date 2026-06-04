@@ -3,6 +3,14 @@ import { createBrowserClient } from "@/lib/supabase/client";
 
 const EVENT = "webrtc";
 
+function hasTurnCredentials(): boolean {
+  return !!(
+    process.env.NEXT_PUBLIC_TURN_URL &&
+    process.env.NEXT_PUBLIC_TURN_USERNAME &&
+    process.env.NEXT_PUBLIC_TURN_CREDENTIAL
+  );
+}
+
 function buildIceServers(): RTCIceServer[] {
   const servers: RTCIceServer[] = [
     { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] },
@@ -30,10 +38,9 @@ function isLocalHostnameRuntime(): boolean {
 }
 
 function buildIceConfig(): RTCConfiguration {
-  // Relay-only via env flag, but NEVER force relay on localhost/LAN: if TURN
-  // isn't reachable there the peer gathers zero candidates and stalls forever.
   const envRelay = process.env.NEXT_PUBLIC_ICE_RELAY_ONLY === "1";
-  const relay = envRelay && !isLocalHostnameRuntime();
+  const relay =
+    envRelay && !isLocalHostnameRuntime() && hasTurnCredentials();
   return {
     iceServers: buildIceServers(),
     bundlePolicy: "max-bundle",
@@ -55,14 +62,36 @@ type BcPayload = Record<string, unknown> & {
 };
 
 function parseRawPayload(raw: unknown): BcPayload | null {
-  if (raw == null || typeof raw !== "object") return null;
-  const o = raw as Record<string, unknown>;
-  const inner = o.payload;
-  if (inner && typeof inner === "object" && "type" in inner) {
-    return inner as BcPayload;
+  if (raw == null) return null;
+  if (typeof raw === "string") {
+    try {
+      return parseRawPayload(JSON.parse(raw) as unknown);
+    } catch {
+      return null;
+    }
   }
-  if ("type" in o) return o as BcPayload;
+  if (typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  const candidates: unknown[] = [o.payload, o];
+  const nested = o.payload;
+  if (nested && typeof nested === "object") {
+    const p = nested as Record<string, unknown>;
+    candidates.push(p.payload);
+  }
+  for (const c of candidates) {
+    if (c && typeof c === "object" && "type" in c) {
+      return c as BcPayload;
+    }
+  }
   return null;
+}
+
+function teardownChannel(
+  supabase: ReturnType<typeof createBrowserClient>,
+  ch: RealtimeChannel,
+) {
+  void ch.unsubscribe();
+  supabase.removeChannel(ch);
 }
 
 function waitSubscribed(ch: RealtimeChannel) {
@@ -281,7 +310,9 @@ export async function startBroadcasterP2p(
           debug(`viewer-ready → resend existing offer ufrag=${lastOfferUfrag.slice(0, 6)}`);
           send({ type: "offer", sdp: lastOffer, offerUfrag: lastOfferUfrag });
         } else if (alive && (iceState === "connected" || iceState === "completed")) {
-          debug(`viewer-ready → already connected (ice=${iceState}), ignoring`);
+          // A new viewer joined (or reconnected) while we were tied to a previous peer.
+          debug(`viewer-ready → rebuild for joining viewer (ice=${iceState})`);
+          await sendOffer();
         } else {
           await sendOffer();
         }
@@ -376,7 +407,7 @@ export async function startBroadcasterP2p(
   return () => {
     clearOfferResend();
     clearInterval(watchdog);
-    void ch.unsubscribe();
+    teardownChannel(supabase, ch);
     closePc();
     vcBuf.clear();
     lastOfferUfrag = null;
@@ -389,7 +420,7 @@ export async function startBroadcasterP2p(
  * - Streams local ICE candidates via "vc-candidate" broadcast events.
  * - Buffers & applies remote ICE candidates from "bc-candidate" events.
  * - Retries answer every 2s until ICE connects (broadcaster-side answer loss protection).
- * - 6s stuck recovery: full reset of negotiation state and resend viewer-ready.
+ * - Stuck recovery: reset only when ICE failed or checking stalls 20s+ with no tracks.
  */
 export async function startViewerP2p(
   liveSessionId: string,
@@ -418,6 +449,8 @@ export async function startViewerP2p(
   let answerRetryTimer: ReturnType<typeof setInterval> | null = null;
   let readyRetryTimer: ReturnType<typeof setInterval> | null = null;
   let offerEverReceived = false;
+  let negotiationStartedAt = 0;
+  let gotRemoteTrack = false;
   // Buffer bc-candidates that arrive before we finish setRemoteDescription(offer)
   const bcBuf = new Map<string, RTCIceCandidateInit[]>();
 
@@ -434,23 +467,40 @@ export async function startViewerP2p(
     if (readyRetryTimer) { clearInterval(readyRetryTimer); readyRetryTimer = null; }
   };
 
+  const remoteMedia = new MediaStream();
+
+  const clearRemoteMedia = () => {
+    for (const t of [...remoteMedia.getTracks()]) remoteMedia.removeTrack(t);
+  };
+
   const closeViewerPc = () => {
     clearAnswerRetry();
     if (pc && pc.signalingState !== "closed") pc.close();
     pc = null;
+    clearRemoteMedia();
+    gotRemoteTrack = false;
+  };
+
+  const emitRemoteStream = () => {
+    if (remoteMedia.getTracks().length === 0) return;
+    gotRemoteTrack = true;
+    onRemoteStream(new MediaStream(remoteMedia.getTracks()));
   };
 
   const wire = (p: RTCPeerConnection, offerUfrag: string) => {
     p.ontrack = (e) => {
       debug(`ontrack kind=${e.track.kind}`);
-      const s =
-        e.streams[0] ??
-        (() => {
-          const m = new MediaStream();
-          if (e.track) m.addTrack(e.track);
-          return m;
-        })();
-      onRemoteStream(s);
+      const stream = e.streams[0];
+      if (stream) {
+        for (const track of stream.getTracks()) {
+          if (!remoteMedia.getTracks().some((t) => t.id === track.id)) {
+            remoteMedia.addTrack(track);
+          }
+        }
+      } else if (e.track && !remoteMedia.getTracks().some((t) => t.id === e.track.id)) {
+        remoteMedia.addTrack(e.track);
+      }
+      emitRemoteStream();
     };
     p.onicegatheringstatechange = () => debug(`gather=${p.iceGatheringState}`);
     p.oniceconnectionstatechange = () => {
@@ -466,6 +516,9 @@ export async function startViewerP2p(
     p.onconnectionstatechange = () => {
       if (cleaned) return;
       debug(`pc=${p.connectionState}`);
+      if (p.connectionState === "connected" || p.connectionState === "connecting") {
+        clearStuck();
+      }
       if (p.connectionState === "failed" && p === pc) fail("Connection failed.");
     };
     p.onicecandidateerror = (e) => {
@@ -485,7 +538,9 @@ export async function startViewerP2p(
           debug(
             "no local ICE candidates — check TURN/STUN reachability (set NEXT_PUBLIC_ICE_RELAY_ONLY=0 for local dev)",
           );
-          fail("No local ICE candidates. TURN/STUN blocked or unreachable.");
+          if (iceConfig.iceTransportPolicy === "relay") {
+            fail("No local ICE candidates. TURN unreachable or blocked.");
+          }
         }
         return;
       }
@@ -516,11 +571,35 @@ export async function startViewerP2p(
     // An offer arrived — stop pestering the broadcaster with viewer-ready retries.
     offerEverReceived = true;
     clearReadyRetry();
-    if (seenUfrags.has(ufrag) || processingUfrag === ufrag) {
-      debug(`dup offer ufrag=${ufrag.slice(0, 6)} — ignore`);
+    if (processingUfrag === ufrag) {
+      debug(`dup offer ufrag=${ufrag.slice(0, 6)} — still processing`);
       return;
     }
+    if (seenUfrags.has(ufrag)) {
+      const cur = pc;
+      const ice = cur?.iceConnectionState;
+      const stalled =
+        !gotRemoteTrack &&
+        negotiationStartedAt > 0 &&
+        Date.now() - negotiationStartedAt > 18_000;
+      const canRetry =
+        !cur ||
+        cur.signalingState === "closed" ||
+        ice === "failed" ||
+        ice === "disconnected" ||
+        stalled;
+      if (!canRetry) {
+        debug(`dup offer ufrag=${ufrag.slice(0, 6)} — ignore`);
+        return;
+      }
+      debug(
+        `re-offer ufrag=${ufrag.slice(0, 6)} (ice=${ice ?? "none"} stalled=${stalled})`,
+      );
+      seenUfrags.delete(ufrag);
+    }
     processingUfrag = ufrag;
+    negotiationStartedAt = Date.now();
+    gotRemoteTrack = false;
     const g = ++negotiateId;
     closeViewerPc();
     if (cleaned) { processingUfrag = null; return; }
@@ -658,31 +737,57 @@ export async function startViewerP2p(
     startReadyRetry();
   }
 
-  // Stuck-recovery: every 6s if still not connected, blow everything away and
-  // resend viewer-ready. Broadcaster will rebuild its PC and send a fresh offer.
-  stuckTimer = setInterval(() => {
-    if (cleaned) { clearStuck(); return; }
-    const s = pc?.iceConnectionState;
-    if (s === "connected" || s === "completed") {
-      clearStuck();
-      return;
-    }
-    debug(`viewer-ready retry (stuck, ice=${s ?? "none"})`);
+  const resetNegotiation = (reason: string) => {
+    debug(`stuck: reset (${reason})`);
     seenUfrags.clear();
     processingUfrag = null;
+    negotiationStartedAt = 0;
+    gotRemoteTrack = false;
     offerEverReceived = false;
     bcBuf.clear();
     closeViewerPc();
     sendReady();
     startReadyRetry();
-  }, 6000);
+  };
+
+  // Do not reset while ice=checking for the first ~20s — the old 6s timer broke connections.
+  stuckTimer = setInterval(() => {
+    if (cleaned) { clearStuck(); return; }
+    const ice = pc?.iceConnectionState;
+    const conn = pc?.connectionState;
+    if (ice === "connected" || ice === "completed") {
+      clearStuck();
+      return;
+    }
+    if (!offerEverReceived) {
+      debug("stuck: no offer yet → viewer-ready");
+      sendReady();
+      startReadyRetry();
+      return;
+    }
+    const checkingTooLong =
+      (ice === "checking" || ice === "new" || conn === "connecting") &&
+      negotiationStartedAt > 0 &&
+      Date.now() - negotiationStartedAt > 20_000 &&
+      !gotRemoteTrack;
+    if (checkingTooLong) {
+      resetNegotiation(`ice=${ice ?? "none"} no tracks 20s+`);
+      return;
+    }
+    if (ice === "checking" || ice === "new" || conn === "connecting") {
+      return;
+    }
+    if (ice === "failed" || ice === "disconnected" || conn === "failed") {
+      resetNegotiation(`ice=${ice ?? "none"} conn=${conn ?? "none"}`);
+    }
+  }, 8_000);
 
   return () => {
     cleaned = true;
     clearStuck();
     clearAnswerRetry();
     clearReadyRetry();
-    void ch.unsubscribe();
+    teardownChannel(supabase, ch);
     closeViewerPc();
     bcBuf.clear();
     seenUfrags.clear();
