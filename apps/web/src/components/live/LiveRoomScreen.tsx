@@ -47,6 +47,7 @@ import {
 } from "./VideoStreamOverlay";
 import { LiveDecisionStatusRibbon } from "./LiveDecisionStatusRibbon";
 import { useCountdown } from "./useCountdown";
+import { useClientNow } from "./useClientNow";
 import { LiveEventToasts } from "./LiveEventToasts";
 import type { SkillFeedbackData } from "./SkillFeedbackCard";
 import { ReplaySheet } from "./ReplaySheet";
@@ -3082,13 +3083,10 @@ const ZoneExitCountdownWidget = memo(function ZoneExitCountdownWidget({
   deadlineMs: number;
   resolving?: boolean;
 }) {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, []);
-  const remainingSec = Math.max(0, Math.ceil((deadlineMs - now) / 1000));
-  const urgent = !resolving && remainingSec <= 5;
+  const now = useClientNow(1000);
+  const remainingSec =
+    now > 0 ? Math.max(0, Math.ceil((deadlineMs - now) / 1000)) : null;
+  const urgent = !resolving && remainingSec != null && remainingSec <= 5;
   return (
     <div
       className={`pointer-events-none flex h-11 w-11 items-center justify-center rounded-xl border text-sm font-bold tabular-nums transition-colors ${
@@ -3103,7 +3101,7 @@ const ZoneExitCountdownWidget = memo(function ZoneExitCountdownWidget({
       {resolving ? (
         <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-amber-300/40 border-t-amber-200" />
       ) : (
-        remainingSec
+        remainingSec ?? "—"
       )}
     </div>
   );
@@ -3127,13 +3125,8 @@ const NextStepCountdownWidget = memo(function NextStepCountdownWidget({
   pinLat?: number | null;
   pinLng?: number | null;
 }) {
-  const [now, setNow] = useState(() => Date.now());
+  const now = useClientNow(1000);
   const [landmark, setLandmark] = useState<NearbyLandmark | null>(null);
-
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, []);
 
   // Fetch nearest landmark (name + photo) when pin coords are available.
   useEffect(() => {
@@ -3145,10 +3138,14 @@ const NextStepCountdownWidget = memo(function NextStepCountdownWidget({
     return () => { cancelled = true; };
   }, [pinLat, pinLng]);
 
-  const remainingSec = Math.max(
-    0,
-    Math.round(remainingAtBetSec) - Math.floor((now - betPlacedAtMs) / 1000),
-  );
+  const remainingSec =
+    now > 0
+      ? Math.max(
+          0,
+          Math.round(remainingAtBetSec) -
+            Math.floor((now - betPlacedAtMs) / 1000),
+        )
+      : Math.max(0, Math.round(remainingAtBetSec));
   const urgent = !resolving && remainingSec <= 5;
 
   const bg = resolving
@@ -3558,13 +3555,9 @@ function betSheetUrgencyStyle(secondsLeft: number): {
 function useLiveReferenceSec(
   reference: { opensAtMs: number; estimatedSec: number } | null | undefined,
 ): number | null {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!reference) return;
-    const id = setInterval(() => setNow(Date.now()), 250);
-    return () => clearInterval(id);
-  }, [reference?.opensAtMs, reference?.estimatedSec]);
+  const now = useClientNow(250);
   if (!reference) return null;
+  if (now === 0) return reference.estimatedSec;
   return Math.max(
     0,
     reference.estimatedSec - Math.floor((now - reference.opensAtMs) / 1000),

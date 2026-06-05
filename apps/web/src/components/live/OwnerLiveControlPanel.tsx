@@ -163,7 +163,7 @@ export function OwnerLiveControlPanel({
   >(null);
   const [marketLocksAt, setMarketLocksAt] = useState<string | null>(null);
   const [marketRevealAt, setMarketRevealAt] = useState<string | null>(null);
-  const [nowTick, setNowTick] = useState(() => Date.now());
+  const [nowTick, setNowTick] = useState(0);
   const [mapExpanded, setMapExpanded] = useState(true);
   const [mapFollow, setMapFollow] = useState(true);
   const [osmZones, setOsmZones] = useState<MapZone[]>([]);
@@ -425,6 +425,7 @@ export function OwnerLiveControlPanel({
 
   // Drive rail-phase transitions smoothly between GPS polls.
   useEffect(() => {
+    setNowTick(Date.now());
     const id = setInterval(() => setNowTick(Date.now()), 500);
     return () => clearInterval(id);
   }, []);

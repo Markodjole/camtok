@@ -4,7 +4,8 @@
  * Viewer status: route countdown + engine headline + optional bet-type chips when several rounds are eligible.
  */
 
-import { memo, useState, useEffect } from "react";
+import { memo } from "react";
+import { useClientNow } from "./useClientNow";
 import type { BetTypeV2, RoundPlanV2 } from "@bettok/live";
 import { betTypeV2Label } from "@/lib/live/betting/betTypeV2Label";
 
@@ -53,12 +54,7 @@ function LiveDecisionStatusRibbonInner({
   onSelectEngineType,
   leftOffsetPx = 0,
 }: LiveDecisionStatusRibbonProps) {
-  // Own 1 s clock — only this tiny component re-renders on each tick.
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, []);
+  const now = useClientNow(1000);
 
   const distanceM =
     turnPoint && driverPos ? haversineMeters(driverPos, turnPoint) : null;
@@ -69,20 +65,27 @@ function LiveDecisionStatusRibbonInner({
   let dotTone: "muted" | "open" | "closed" = "muted";
 
   if (phase === "pending" && locksAt) {
-    const secToLock = Math.max(
-      0,
-      Math.round((Date.parse(locksAt) - now) / 1000),
-    );
-    mainLabel = `Bets open · lock ${secToLock}s${distLabel}`;
+    const secToLock =
+      now > 0
+        ? Math.max(0, Math.round((Date.parse(locksAt) - now) / 1000))
+        : null;
+    mainLabel =
+      secToLock != null
+        ? `Bets open · lock ${secToLock}s${distLabel}`
+        : `Bets open${distLabel}`;
     dotTone = "open";
   } else if (phase === "pending") {
     mainLabel = `Decision${distLabel}`;
     dotTone = "open";
   } else if (phase === "active") {
-    const secToTurn = revealAt
-      ? Math.max(0, Math.round((Date.parse(revealAt) - now) / 1000))
-      : null;
-    mainLabel = `Locked · ~${secToTurn ?? "?"}s${distLabel}`;
+    const secToTurn =
+      revealAt && now > 0
+        ? Math.max(0, Math.round((Date.parse(revealAt) - now) / 1000))
+        : null;
+    mainLabel =
+      secToTurn != null
+        ? `Locked · ~${secToTurn}s${distLabel}`
+        : `Locked${distLabel}`;
     dotTone = "closed";
   }
 

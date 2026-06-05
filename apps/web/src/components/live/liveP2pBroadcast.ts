@@ -427,6 +427,7 @@ export async function startViewerP2p(
   onRemoteStream: (stream: MediaStream) => void,
   onFailure?: (message: string) => void,
   onDebug?: (line: string) => void,
+  onIceState?: (state: RTCIceConnectionState) => void,
 ): Promise<() => void> {
   const debug = (line: string) => {
     onDebug?.(line);
@@ -507,11 +508,18 @@ export async function startViewerP2p(
       if (cleaned) return;
       const s = p.iceConnectionState;
       debug(`ice=${s}`);
+      onIceState?.(s);
       if (s === "connected" || s === "completed") {
         clearStuck();
         clearAnswerRetry();
       }
-      if (s === "failed" && p === pc) fail("ICE failed.");
+      if (s === "failed" && p === pc) {
+        fail(
+          hasTurnCredentials()
+            ? "ICE failed."
+            : "ICE failed — configure TURN (NEXT_PUBLIC_TURN_*) on web and mobile builds.",
+        );
+      }
     };
     p.onconnectionstatechange = () => {
       if (cleaned) return;

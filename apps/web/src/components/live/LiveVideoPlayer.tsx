@@ -60,6 +60,7 @@ export function LiveVideoPlayer({
   const [timedOut, setTimedOut] = useState(false);
   const [soundOn, setSoundOn] = useState(false);
   const [retryKey, setRetryKey] = useState(0);
+  const [iceState, setIceState] = useState<RTCIceConnectionState>("new");
 
   const retry = useCallback(() => {
     setRemoteStream(null);
@@ -80,6 +81,7 @@ export function LiveVideoPlayer({
       setSignalError(null);
       setTimedOut(false);
       setSoundOn(false);
+      setIceState("new");
       return;
     }
 
@@ -108,6 +110,9 @@ export function LiveVideoPlayer({
         webrtcDebugEnabled()
           ? (line) => console.log("[WebRTC viewer]", line)
           : undefined,
+        (state) => {
+          if (!cancelled) setIceState(state);
+        },
       )
         .then((cleanup) => {
           if (cancelled) cleanup();
@@ -158,8 +163,17 @@ export function LiveVideoPlayer({
     };
   }, [remoteStream, localStream, soundOn]);
 
+  const iceConnected =
+    iceState === "connected" || iceState === "completed";
   const viewerConnecting =
     !localStream && !!liveSessionId && !remoteStream && !signalError && !timedOut;
+  const buffering =
+    !localStream &&
+    !!liveSessionId &&
+    !!remoteStream &&
+    !iceConnected &&
+    !signalError &&
+    !timedOut;
   const showError = (signalError || timedOut) && !remoteStream;
 
   const videoClass =
@@ -175,8 +189,14 @@ export function LiveVideoPlayer({
         ref={ref}
         playsInline
         autoPlay
+        muted
         className={videoClass}
       />
+      {buffering ? (
+        <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/50 text-xs text-muted-foreground">
+          Buffering stream…
+        </div>
+      ) : null}
       {viewerConnecting ? (
         <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/60 text-xs text-muted-foreground">
           Connecting to live stream…
