@@ -5,6 +5,7 @@ import { Volume2, VolumeX, RefreshCw } from "lucide-react";
 import { startViewerP2p } from "./liveP2pBroadcast";
 
 const CONNECT_TIMEOUT_MS = 20_000;
+const BUFFERING_TIMEOUT_MS = 25_000;
 const IS_DEV = process.env.NODE_ENV === "development";
 
 function webrtcDebugEnabled(): boolean {
@@ -61,6 +62,8 @@ export function LiveVideoPlayer({
   const [soundOn, setSoundOn] = useState(false);
   const [retryKey, setRetryKey] = useState(0);
   const [iceState, setIceState] = useState<RTCIceConnectionState>("new");
+  const [connectionState, setConnectionState] =
+    useState<RTCPeerConnectionState>("new");
 
   const retry = useCallback(() => {
     setRemoteStream(null);
@@ -82,6 +85,7 @@ export function LiveVideoPlayer({
       setTimedOut(false);
       setSoundOn(false);
       setIceState("new");
+      setConnectionState("new");
       return;
     }
 
@@ -112,6 +116,9 @@ export function LiveVideoPlayer({
           : undefined,
         (state) => {
           if (!cancelled) setIceState(state);
+        },
+        (state) => {
+          if (!cancelled) setConnectionState(state);
         },
       )
         .then((cleanup) => {
@@ -163,15 +170,39 @@ export function LiveVideoPlayer({
     };
   }, [remoteStream, localStream, soundOn]);
 
-  const iceConnected =
-    iceState === "connected" || iceState === "completed";
+  useEffect(() => {
+    if (localStream || !liveSessionId || !remoteStream) return;
+    const iceReady =
+      iceState === "connected" || iceState === "completed";
+    const connReady = connectionState === "connected";
+    if (iceReady || connReady) return;
+
+    const handle = setTimeout(() => {
+      setSignalError("Stream stalled — retrying connection…");
+      retry();
+    }, BUFFERING_TIMEOUT_MS);
+
+    return () => clearTimeout(handle);
+  }, [
+    localStream,
+    liveSessionId,
+    remoteStream,
+    iceState,
+    connectionState,
+    retry,
+  ]);
+
+  const streamReady =
+    iceState === "connected" ||
+    iceState === "completed" ||
+    connectionState === "connected";
   const viewerConnecting =
     !localStream && !!liveSessionId && !remoteStream && !signalError && !timedOut;
   const buffering =
     !localStream &&
     !!liveSessionId &&
     !!remoteStream &&
-    !iceConnected &&
+    !streamReady &&
     !signalError &&
     !timedOut;
   const showError = (signalError || timedOut) && !remoteStream;

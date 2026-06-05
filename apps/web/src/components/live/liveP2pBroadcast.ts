@@ -146,6 +146,8 @@ export async function startBroadcasterP2p(
   let lastViewerReadyAt = 0;
   // Buffer vc-candidates that arrive before setRemoteDescription(answer)
   const vcBuf = new Map<string, RTCIceCandidateInit[]>();
+  // Keep bc-candidates per ufrag so we can re-send after answer (viewer may have missed trickle).
+  const bcSent = new Map<string, RTCIceCandidateInit[]>();
 
   const send = (payload: BcPayload) =>
     void ch.send({ type: "broadcast", event: EVENT, payload });
@@ -213,6 +215,7 @@ export async function startBroadcasterP2p(
       clearOfferResend();
       closePc();
       vcBuf.clear();
+      bcSent.clear();
       lastOffer = null;
       lastOfferUfrag = null;
 
@@ -237,7 +240,11 @@ export async function startBroadcasterP2p(
         debug(
           `bc-cand type=${(c as unknown as { type?: string }).type ?? "?"} proto=${c.protocol}`,
         );
-        send({ type: "bc-candidate", candidate: c.toJSON(), forOfferUfrag: ug });
+        const candJson = c.toJSON();
+        const sent = bcSent.get(ug) ?? [];
+        sent.push(candJson);
+        bcSent.set(ug, sent);
+        send({ type: "bc-candidate", candidate: candJson, forOfferUfrag: ug });
       };
       lastOfferUfrag = ug;
       await p.setLocalDescription(offer);
@@ -263,12 +270,14 @@ export async function startBroadcasterP2p(
           clearOfferResend();
           return;
         }
-        // If we've sent 4 offers, no answer arrived, AND a viewer signaled
+        // If we've sent 11 offers (~22s), no answer arrived, AND a viewer signaled
         // recently (so one is actually out there), rebuild with a fresh ufrag —
         // the viewer may have the previous ufrag cached as "already seen".
-        const viewerRecent = Date.now() - lastViewerReadyAt < 15000;
-        if (n === 4 && viewerRecent) {
-          debug("no answer after 4 resends + recent viewer → rebuild with fresh ufrag");
+        // Wait longer than the viewer's 10 answer retries (20s) so in-flight
+        // answers are not discarded by a premature ufrag rotation.
+        const viewerRecent = Date.now() - lastViewerReadyAt < 25000;
+        if (n === 11 && viewerRecent) {
+          debug("no answer after 11 resends + recent viewer → rebuild with fresh ufrag");
           clearOfferResend();
           void sendOffer();
           return;
@@ -325,6 +334,36 @@ export async function startBroadcasterP2p(
           );
           return;
         }
+        const key = ansUfrag ?? lastOfferUfrag ?? "";
+        const flushVcBuf = async () => {
+          const buffered = vcBuf.get(key) ?? [];
+          if (!buffered.length) return;
+          vcBuf.delete(key);
+          for (const cand of buffered) {
+            try { await pc!.addIceCandidate(cand); } catch { /* ignore stale */ }
+          }
+          debug(`flushed ${buffered.length} buffered vc-cands`);
+        };
+        const rebroadcastBc = () => {
+          const rebroadcast = bcSent.get(key) ?? [];
+          for (const cand of rebroadcast) {
+            send({ type: "bc-candidate", candidate: cand, forOfferUfrag: key });
+          }
+          if (rebroadcast.length) {
+            debug(`re-sent ${rebroadcast.length} bc-cands after answer`);
+          }
+        };
+        if (pc.signalingState === "stable") {
+          const ice = pc.iceConnectionState;
+          if (ice === "connected" || ice === "completed") {
+            debug("dup answer (stable+connected) — ignore");
+            return;
+          }
+          debug(`dup answer while ice=${ice} — flush vc + re-send bc`);
+          await flushVcBuf();
+          rebroadcastBc();
+          return;
+        }
         if (pc.signalingState !== "have-local-offer") {
           debug(`skip answer (state=${pc.signalingState})`);
           return;
@@ -337,14 +376,8 @@ export async function startBroadcasterP2p(
         }
         debug("answer applied");
         clearOfferResend();
-        // Flush buffered vc-candidates that arrived before answer
-        const key = ansUfrag ?? lastOfferUfrag ?? "";
-        const buffered = vcBuf.get(key) ?? [];
-        vcBuf.clear();
-        for (const cand of buffered) {
-          try { await pc.addIceCandidate(cand); } catch { /* ignore stale */ }
-        }
-        if (buffered.length) debug(`flushed ${buffered.length} buffered vc-cands`);
+        await flushVcBuf();
+        rebroadcastBc();
       } else if (
         msg.type === "vc-candidate" &&
         msg.candidate &&
@@ -410,6 +443,7 @@ export async function startBroadcasterP2p(
     teardownChannel(supabase, ch);
     closePc();
     vcBuf.clear();
+    bcSent.clear();
     lastOfferUfrag = null;
   };
 }
@@ -428,6 +462,7 @@ export async function startViewerP2p(
   onFailure?: (message: string) => void,
   onDebug?: (line: string) => void,
   onIceState?: (state: RTCIceConnectionState) => void,
+  onConnectionState?: (state: RTCPeerConnectionState) => void,
 ): Promise<() => void> {
   const debug = (line: string) => {
     onDebug?.(line);
@@ -452,6 +487,7 @@ export async function startViewerP2p(
   let offerEverReceived = false;
   let negotiationStartedAt = 0;
   let gotRemoteTrack = false;
+  let iceEverConnected = false;
   // Buffer bc-candidates that arrive before we finish setRemoteDescription(offer)
   const bcBuf = new Map<string, RTCIceCandidateInit[]>();
 
@@ -480,6 +516,7 @@ export async function startViewerP2p(
     pc = null;
     clearRemoteMedia();
     gotRemoteTrack = false;
+    iceEverConnected = false;
   };
 
   const emitRemoteStream = () => {
@@ -489,6 +526,10 @@ export async function startViewerP2p(
   };
 
   const wire = (p: RTCPeerConnection, offerUfrag: string) => {
+    const vcSent: RTCIceCandidateInit[] = [];
+    const sendVcCand = (cand: RTCIceCandidateInit) => {
+      send({ type: "vc-candidate", candidate: cand, forOfferUfrag: offerUfrag });
+    };
     p.ontrack = (e) => {
       debug(`ontrack kind=${e.track.kind}`);
       const stream = e.streams[0];
@@ -510,8 +551,10 @@ export async function startViewerP2p(
       debug(`ice=${s}`);
       onIceState?.(s);
       if (s === "connected" || s === "completed") {
+        iceEverConnected = true;
         clearStuck();
         clearAnswerRetry();
+        emitRemoteStream();
       }
       if (s === "failed" && p === pc) {
         fail(
@@ -523,11 +566,18 @@ export async function startViewerP2p(
     };
     p.onconnectionstatechange = () => {
       if (cleaned) return;
-      debug(`pc=${p.connectionState}`);
-      if (p.connectionState === "connected" || p.connectionState === "connecting") {
+      const s = p.connectionState;
+      debug(`pc=${s}`);
+      onConnectionState?.(s);
+      if (s === "connected") {
+        iceEverConnected = true;
+        clearStuck();
+        clearAnswerRetry();
+        emitRemoteStream();
+      } else if (s === "connecting") {
         clearStuck();
       }
-      if (p.connectionState === "failed" && p === pc) fail("Connection failed.");
+      if (s === "failed" && p === pc) fail("Connection failed.");
     };
     p.onicecandidateerror = (e) => {
       if (cleaned) return;
@@ -557,7 +607,9 @@ export async function startViewerP2p(
       debug(
         `vc-cand type=${(c as unknown as { type?: string }).type ?? "?"} proto=${c.protocol}`,
       );
-      send({ type: "vc-candidate", candidate: c.toJSON(), forOfferUfrag: offerUfrag });
+      const candJson = c.toJSON();
+      vcSent.push(candJson);
+      sendVcCand(candJson);
     };
     // Safety-net: if gathering is still "gathering" with zero candidates 4s
     // after wiring, complain loudly so users know it's not the app's fault.
@@ -569,6 +621,7 @@ export async function startViewerP2p(
         );
       }
     }, 4000);
+    return { vcSent, sendVcCand };
   };
 
   const fail = (m: string) => { if (!cleaned) onFailure?.(m); };
@@ -587,9 +640,9 @@ export async function startViewerP2p(
       const cur = pc;
       const ice = cur?.iceConnectionState;
       const stalled =
-        !gotRemoteTrack &&
         negotiationStartedAt > 0 &&
-        Date.now() - negotiationStartedAt > 18_000;
+        Date.now() - negotiationStartedAt > 18_000 &&
+        (!gotRemoteTrack || !iceEverConnected);
       const canRetry =
         !cur ||
         cur.signalingState === "closed" ||
@@ -612,7 +665,7 @@ export async function startViewerP2p(
     closeViewerPc();
     if (cleaned) { processingUfrag = null; return; }
     const newPc = new RTCPeerConnection(iceConfig);
-    wire(newPc, ufrag);
+    const { vcSent, sendVcCand } = wire(newPc, ufrag);
     pc = newPc;
     try {
       await newPc.setRemoteDescription({ type: "offer", sdp: om.sdp });
@@ -652,10 +705,14 @@ export async function startViewerP2p(
       if (cleaned) return;
       send({ type: "answer", sdp: answerSdp, forOfferUfrag: ufrag });
     };
-    sendAns();
+    const resendSignaling = () => {
+      sendAns();
+      for (const cand of vcSent) sendVcCand(cand);
+    };
+    resendSignaling();
 
-    // Retry answer until ICE connects — the broadcast can be dropped in transit
-    // and the broadcaster has no other way to recover.
+    // Retry answer + vc-candidates until ICE connects — broadcasts can be dropped
+    // in transit and the broadcaster has no other way to recover.
     clearAnswerRetry();
     let r = 0;
     answerRetryTimer = setInterval(() => {
@@ -665,15 +722,16 @@ export async function startViewerP2p(
       if (!cur || cur.signalingState === "closed") { clearAnswerRetry(); return; }
       if (
         cur.iceConnectionState === "connected" ||
-        cur.iceConnectionState === "completed"
+        cur.iceConnectionState === "completed" ||
+        cur.connectionState === "connected"
       ) {
         clearAnswerRetry();
         return;
       }
       r++;
       if (r > 10) { clearAnswerRetry(); return; }
-      debug(`retry answer #${r} ufrag=${ufrag.slice(0, 6)}`);
-      sendAns();
+      debug(`retry answer #${r} ufrag=${ufrag.slice(0, 6)} (+${vcSent.length} vc-cands)`);
+      resendSignaling();
     }, 2000);
   };
 
@@ -751,6 +809,7 @@ export async function startViewerP2p(
     processingUfrag = null;
     negotiationStartedAt = 0;
     gotRemoteTrack = false;
+    iceEverConnected = false;
     offerEverReceived = false;
     bcBuf.clear();
     closeViewerPc();
@@ -777,9 +836,11 @@ export async function startViewerP2p(
       (ice === "checking" || ice === "new" || conn === "connecting") &&
       negotiationStartedAt > 0 &&
       Date.now() - negotiationStartedAt > 20_000 &&
-      !gotRemoteTrack;
+      (!gotRemoteTrack || !iceEverConnected);
     if (checkingTooLong) {
-      resetNegotiation(`ice=${ice ?? "none"} no tracks 20s+`);
+      resetNegotiation(
+        `ice=${ice ?? "none"} tracks=${gotRemoteTrack} no-connect 20s+`,
+      );
       return;
     }
     if (ice === "checking" || ice === "new" || conn === "connecting") {
