@@ -9,6 +9,7 @@ import { createServiceClient } from "@/lib/supabase/server";
  * Returns `null` if there is no token or the token doesn't resolve to a
  * user — callers should return 401 in that case.
  */
+
 export async function getBearerUser(
   req: NextRequest | Request,
 ): Promise<{ id: string; email: string | null } | null> {
