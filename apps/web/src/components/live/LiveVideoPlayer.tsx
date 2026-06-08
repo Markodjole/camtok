@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Volume2, VolumeX, RefreshCw } from "lucide-react";
+import { Volume2, VolumeX, RefreshCw, Loader2 } from "lucide-react";
 import { startViewerP2p } from "./liveP2pBroadcast";
 
 const CONNECT_TIMEOUT_MS = 20_000;
@@ -15,6 +15,21 @@ function webrtcDebugEnabled(): boolean {
   } catch {
     return false;
   }
+}
+
+function StreamConnectOverlay() {
+  return (
+    <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-black/65 px-6 text-center backdrop-blur-[2px]">
+      <Loader2 className="h-7 w-7 animate-spin text-white/80" aria-hidden />
+      <div className="space-y-1">
+        <p className="text-sm font-medium text-white/90">Connecting to stream</p>
+        <p className="text-xs leading-relaxed text-white/55">
+          This usually takes a few seconds — hang tight while we link up with the
+          camera.
+        </p>
+      </div>
+    </div>
+  );
 }
 
 async function attachAndPlay(
@@ -223,16 +238,7 @@ export function LiveVideoPlayer({
         muted
         className={videoClass}
       />
-      {buffering ? (
-        <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/50 text-xs text-muted-foreground">
-          Buffering stream…
-        </div>
-      ) : null}
-      {viewerConnecting ? (
-        <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/60 text-xs text-muted-foreground">
-          Connecting to live stream…
-        </div>
-      ) : null}
+      {viewerConnecting || buffering ? <StreamConnectOverlay /> : null}
       {showError ? (
         <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-black/80 p-4 text-center">
           <p className="text-xs text-red-300">
