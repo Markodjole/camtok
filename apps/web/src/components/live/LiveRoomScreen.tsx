@@ -77,10 +77,11 @@ const LiveMap = dynamic(() => import("./LiveMap").then((m) => m.LiveMap), {
   ssr: false,
 });
 
-/** Dev-only YouTube stand-in; production always uses WebRTC LiveVideoPlayer. */
-const YOUTUBE_DASHCAM_DEV_ONLY = process.env.NODE_ENV === "development";
+/** YouTube embed when the viewer toggles test dashcam (sparkle button on room screen). */
 const DASHCAM_YOUTUBE_EMBED =
   "https://www.youtube.com/embed/8G1MiDfIDig?start=7&autoplay=1&mute=1&controls=0&loop=1&playlist=8G1MiDfIDig&modestbranding=1&rel=0";
+
+const YOUTUBE_DASHCAM_STORAGE_KEY = "camtok_youtube_dashcam";
 
 type MapZone = {
   id: string;
@@ -210,21 +211,27 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   const [selectedMapOptionId, setSelectedMapOptionId] = useState<string | null>(null);
   const [showZones, setShowZones] = useState(false);
   const [showCheckpoints, setShowCheckpoints] = useState(true);
-  /** Dev-only: sparkle toggles YouTube vs WebRTC. Production always shows live WebRTC. */
+  /** Sparkle toggles YouTube test feed vs streamer WebRTC dashcam (right rail). */
   const [useYoutubeDashcam, setUseYoutubeDashcam] = useState(false);
-  const showYoutubeDashcam = YOUTUBE_DASHCAM_DEV_ONLY && useYoutubeDashcam;
-  const toggleYoutubeDashcam = useCallback(() => {
-    if (!YOUTUBE_DASHCAM_DEV_ONLY) return;
-    setUseYoutubeDashcam((on) => !on);
-  }, []);
-  // Drop stale toggle from when YouTube replaced the live feed in production builds.
   useEffect(() => {
-    if (YOUTUBE_DASHCAM_DEV_ONLY) return;
     try {
-      localStorage.removeItem("camtok_youtube_dashcam");
+      setUseYoutubeDashcam(
+        localStorage.getItem(YOUTUBE_DASHCAM_STORAGE_KEY) === "1",
+      );
     } catch {
       /* ignore */
     }
+  }, []);
+  const toggleYoutubeDashcam = useCallback(() => {
+    setUseYoutubeDashcam((on) => {
+      const next = !on;
+      try {
+        localStorage.setItem(YOUTUBE_DASHCAM_STORAGE_KEY, next ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
   }, []);
   const [mapFollow, setMapFollow] = useState(true);
   const mapFollowRestoreRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -2441,7 +2448,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         className="absolute inset-x-0 top-0 z-[8] flex items-center justify-center overflow-hidden bg-black"
         style={{ height: "33dvh", minHeight: "33dvh" }}
       >
-        {showYoutubeDashcam ? (
+        {useYoutubeDashcam ? (
           <iframe
             src={DASHCAM_YOUTUBE_EMBED}
             className="absolute inset-0 h-full w-full border-0"
@@ -2471,7 +2478,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             Waiting for live session…
           </div>
         )}
-        {!showYoutubeDashcam ? (
+        {!useYoutubeDashcam ? (
         <VideoStreamOverlay
           routePoints={routePoints}
           pinTarget={videoOverlayPin}
@@ -2625,19 +2632,17 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           </IconRailButton>
           </div>
         ) : null}
-        {YOUTUBE_DASHCAM_DEV_ONLY ? (
-          <IconRailButton
-            active={useYoutubeDashcam}
-            onClick={toggleYoutubeDashcam}
-            title={
-              useYoutubeDashcam
-                ? "YouTube test feed — tap for live camera"
-                : "Live camera — tap for YouTube test feed"
-            }
-          >
-            <IconSparkle />
-          </IconRailButton>
-        ) : null}
+        <IconRailButton
+          active={useYoutubeDashcam}
+          onClick={toggleYoutubeDashcam}
+          title={
+            useYoutubeDashcam
+              ? "YouTube test feed — tap for live camera"
+              : "Live camera — tap for YouTube test feed"
+          }
+        >
+          <IconSparkle />
+        </IconRailButton>
         {zoneExitPending ? (
           <ZoneExitCountdownWidget
             deadlineMs={zoneExitDeadlineMs!}
