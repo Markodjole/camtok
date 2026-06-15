@@ -22,6 +22,8 @@ import {
   destinationStorageKey,
   loadRecentDriveDestinations,
   rememberDriveDestination,
+  resolveRecentDestination,
+  type StoredRecentDestination,
 } from "@/lib/live/recentDriveDestinations";
 import {
   DEFAULT_DRIVING_ROUTE_STYLE,
@@ -141,7 +143,7 @@ export function OwnerLiveControlPanel({
 }) {
   const [driverTransport, setDriverTransport] = useState<TransportMode>("car");
   const [destination, setDestination] = useState<PickedDestination | null>(null);
-  const [recentDestinations, setRecentDestinations] = useState<PickedDestination[]>([]);
+  const [recentDestinations, setRecentDestinations] = useState<StoredRecentDestination[]>([]);
   const [showNewPlaceSearch, setShowNewPlaceSearch] = useState(false);
   const [currentPos, setCurrentPos] = useState<{ lat: number; lng: number } | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -1016,8 +1018,12 @@ export function OwnerLiveControlPanel({
                 (d) => destinationStorageKey(d) === v,
               );
               if (hit) {
-                setDestination(hit);
-                setShowNewPlaceSearch(false);
+                void resolveRecentDestination(hit).then((resolved) => {
+                  if (resolved) {
+                    setDestination(resolved);
+                    setShowNewPlaceSearch(false);
+                  }
+                });
               }
             }}
             className="mt-1 w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 text-sm text-white"

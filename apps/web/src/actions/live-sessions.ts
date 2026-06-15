@@ -259,6 +259,9 @@ export async function startLiveSessionForUser(
           destination_lng: parsed.data.destination?.lng ?? null,
           destination_label: parsed.data.destination?.label ?? null,
           destination_place_id: parsed.data.destination?.placeId ?? null,
+          destination_google_coords_at: parsed.data.destination?.placeId
+            ? new Date().toISOString()
+            : null,
           last_heartbeat_at: new Date().toISOString(),
           status: "live",
         })
@@ -287,6 +290,9 @@ export async function startLiveSessionForUser(
       destination_lng: parsed.data.destination?.lng ?? null,
       destination_label: parsed.data.destination?.label ?? null,
       destination_place_id: parsed.data.destination?.placeId ?? null,
+      destination_google_coords_at: parsed.data.destination?.placeId
+        ? new Date().toISOString()
+        : null,
       safety_level: policy.safetyLevel,
       last_heartbeat_at: new Date().toISOString(),
     })

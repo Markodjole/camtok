@@ -6,6 +6,8 @@ import type { CityGridSpecCompact } from "@/lib/live/grid/cityGrid500";
 import type { DrivingRouteStyle } from "@/lib/live/routing/drivingRouteStyle";
 import { normalizeDrivingRouteStyle } from "@/lib/live/routing/drivingRouteStyle";
 import type { MarketOdds } from "@/lib/live/betting/marketOdds";
+import { isGoogleLatLngExpired } from "@/lib/google/mapsCachingPolicy";
+import { resolveSessionDestination } from "@/lib/live/destination/resolveSessionDestination";
 
 export type RoutePoint = {
   lat: number;
@@ -118,6 +120,28 @@ function buildMarketSlot(r: Record<string, unknown>, prefix: string): LiveMarket
   };
 }
 
+function destinationFromActiveRoomRow(
+  r: Record<string, unknown>,
+): LiveFeedRow["destination"] {
+  const placeId = (r.destination_place_id as string | null) ?? null;
+  const label =
+    ((r.destination_label as string | null) ?? "").trim() ||
+    (placeId ? "Destination" : "");
+  const lat = r.destination_lat as number | null;
+  const lng = r.destination_lng as number | null;
+  const coordsAt = (r.destination_google_coords_at as string | null) ?? null;
+
+  if (lat == null || lng == null || !Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return null;
+  }
+
+  if (coordsAt != null && isGoogleLatLngExpired(coordsAt)) {
+    return placeId ? null : { lat, lng, label, placeId };
+  }
+
+  return { lat, lng, label, placeId };
+}
+
 /** Map one `active_live_rooms` row — shared by feed list and single-room detail. */
 function liveFeedRowFromActiveRoomRow(r: Record<string, unknown>): LiveFeedRow {
   return {
@@ -140,17 +164,7 @@ function liveFeedRowFromActiveRoomRow(r: Record<string, unknown>): LiveFeedRow {
     sessionStartedAt: r.session_started_at as string,
     lastHeartbeatAt: (r.last_heartbeat_at as string | null) ?? null,
     routePoints: [],
-    destination:
-      r.destination_lat != null && r.destination_lng != null
-        ? {
-            lat: r.destination_lat as number,
-            lng: r.destination_lng as number,
-            label:
-              ((r.destination_label as string | null) ?? "").trim() ||
-              "Destination",
-            placeId: (r.destination_place_id as string | null) ?? null,
-          }
-        : null,
+    destination: destinationFromActiveRoomRow(r),
     drivingRouteStyle: normalizeDrivingRouteStyle(r.character_driving_route_style),
   };
 }
@@ -187,8 +201,17 @@ export async function getLiveRoomDetail(roomId: string): Promise<{
 
   const base = liveFeedRowFromActiveRoomRow(data as Record<string, unknown>);
 
-  // Fetch the last 100 GPS points for the map.
   const sessionId = data.live_session_id as string;
+  const resolvedDestination = await resolveSessionDestination(service, sessionId, {
+    destination_lat: (data.destination_lat as number | null) ?? null,
+    destination_lng: (data.destination_lng as number | null) ?? null,
+    destination_label: (data.destination_label as string | null) ?? null,
+    destination_place_id: (data.destination_place_id as string | null) ?? null,
+    destination_google_coords_at:
+      (data.destination_google_coords_at as string | null) ?? null,
+  });
+
+  // Fetch the last 100 GPS points for the map.
   const { data: snapshots } = await service
     .from("live_route_snapshots")
     .select(
@@ -216,5 +239,5 @@ export async function getLiveRoomDetail(roomId: string): Promise<{
     }))
     .reverse(); // oldest→newest for path drawing
 
-  return { room: { ...base, routePoints } };
+  return { room: { ...base, routePoints, destination: resolvedDestination } };
 }

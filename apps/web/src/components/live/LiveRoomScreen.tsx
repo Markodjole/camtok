@@ -664,6 +664,39 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   useEffect(() => {
     setLatestCityGridSpec(null);
   }, [room.roomId]);
+  /**
+   * Zones need a city_grid spec. That used to arrive only when a zone market
+   * opened — after refresh during next_turn, or before the first zone bet, the
+   * map had zero polygons. Fetch the room grid as soon as we have GPS.
+   */
+  useEffect(() => {
+    const haveSpec = cityGridSpec ?? latestCityGridSpec;
+    if (haveSpec || !room.roomId || routePoints.length === 0) return;
+
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await fetch(`/api/live/rooms/${room.roomId}/grid-spec`, {
+          cache: "no-store",
+        });
+        if (!res.ok || cancelled) return;
+        const json = (await res.json()) as {
+          gridSpec?: CityGridSpecCompact | null;
+        };
+        if (json.gridSpec && !cancelled) {
+          setLatestCityGridSpec(json.gridSpec);
+        }
+      } catch {
+        /* transient */
+      }
+    };
+    void load();
+    const id = setInterval(load, 12_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [cityGridSpec, latestCityGridSpec, room.roomId, routePoints.length]);
   const currentZoneId = useMemo(() => {
     const spec = cityGridSpec ?? latestCityGridSpec;
     if (!spec || routePoints.length === 0) return null;

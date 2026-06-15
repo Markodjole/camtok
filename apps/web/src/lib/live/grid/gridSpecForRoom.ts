@@ -5,9 +5,9 @@ import {
   buildCityGrid500,
   type CityGridSpecCompact,
 } from "@/lib/live/grid/cityGrid500";
-import { fetchCityViewportFromGoogle } from "@/lib/live/grid/googleCityViewport";
+import { bboxAroundGps } from "@/lib/live/grid/gpsCityBbox";
 
-/** In-process grid built before the first zone market persists spec to DB. */
+/** In-process grid for the current server tick — GPS-derived, not Google API data. */
 const GRID_SPEC_MEMORY = new Map<
   string,
   { spec: CityGridSpecCompact; builtAtMs: number }
@@ -16,17 +16,8 @@ const GRID_SPEC_MEMORY = new Map<
 /**
  * Reuse-or-build the 500 m city grid spec for a room.
  *
- * The grid spec is room-scoped and effectively permanent for the session —
- * every zone bet (`next_zone` AND `zone_exit_time`) needs to know "which
- * 500 m square is the driver in right now", so both openers call this.
- *
- * Resolution order:
- *   1. Reuse the spec from the most recent `city_grid` market in this room.
- *   2. Build a new one by geocoding the driver's latest GPS via Google.
- *
- * Returns `{ ok: false, error }` when neither path can produce a spec
- * (no GPS yet, missing Google key, or geocode failure) so callers can skip
- * eligibility without erroring loudly.
+ * Grid bounds are computed from driver GPS (no Google Geocoding) so the spec
+ * can be persisted without violating Maps caching rules.
  */
 export async function getOrBuildGridSpecForRoom(
   service: Awaited<ReturnType<typeof createServiceClient>>,
@@ -36,11 +27,6 @@ export async function getOrBuildGridSpecForRoom(
   | { ok: true; spec: CityGridSpecCompact; source: "reused" | "built" }
   | { ok: false; error: string }
 > {
-  /**
-   * Any market row in this room with a non-null `city_grid_spec` is fair
-   * game for reuse — both `next_zone` and `zone_exit_time` write the spec
-   * back so the second-ever zone bet doesn't have to round-trip Google.
-   */
   const { data: prevGrid } = await service
     .from("live_betting_markets")
     .select("city_grid_spec")
@@ -74,20 +60,13 @@ export async function getOrBuildGridSpecForRoom(
   const lat = g.normalized_lat ?? g.raw_lat;
   const lng = g.normalized_lng ?? g.raw_lng;
 
-  const key =
-    process.env.GOOGLE_MAPS_API_KEY ||
-    process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ||
-    "";
-  if (!key) return { ok: false, error: "grid_spec: missing Google API key" };
-
-  const vp = await fetchCityViewportFromGoogle(lat, lng, key);
-  if (!vp.ok) return { ok: false, error: `grid_spec: geocode ${vp.status}` };
+  const bbox = bboxAroundGps(lat, lng);
   const built = buildCityGrid500(
-    vp.viewport.swLat,
-    vp.viewport.swLng,
-    vp.viewport.neLat,
-    vp.viewport.neLng,
-    vp.viewport.cityLabel,
+    bbox.swLat,
+    bbox.swLng,
+    bbox.neLat,
+    bbox.neLng,
+    null,
     500,
     12000,
   );

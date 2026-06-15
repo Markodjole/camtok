@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { buildCityGrid500 } from "@/lib/live/grid/cityGrid500";
-import { fetchCityViewportFromGoogle } from "@/lib/live/grid/googleCityViewport";
+import { bboxAroundGps } from "@/lib/live/grid/gpsCityBbox";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -18,47 +18,20 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "lat_lng_required" }, { status: 400 });
   }
 
-  const key =
-    process.env.GOOGLE_MAPS_API_KEY ||
-    process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ||
-    "";
-  if (!key) {
-    return NextResponse.json({
-      squares: [],
-      cityLabel: null,
-      cellMeters: 500,
-      source: "city_grid",
-      reason: "missing_api_key",
-    });
-  }
-
-  const vp = await fetchCityViewportFromGoogle(lat, lng, key);
-  if (!vp.ok) {
-    return NextResponse.json({
-      squares: [],
-      cityLabel: null,
-      cellMeters: 500,
-      source: "city_grid",
-      reason: "geocode_failed",
-      googleStatus: vp.status,
-      googleError: vp.message,
-    });
-  }
-
-  const { viewport } = vp;
+  const bbox = bboxAroundGps(lat, lng);
   const built = buildCityGrid500(
-    viewport.swLat,
-    viewport.swLng,
-    viewport.neLat,
-    viewport.neLng,
-    viewport.cityLabel,
+    bbox.swLat,
+    bbox.swLng,
+    bbox.neLat,
+    bbox.neLng,
+    null,
     500,
     12000,
   );
   if ("error" in built) {
     return NextResponse.json({
       squares: [],
-      cityLabel: viewport.cityLabel,
+      cityLabel: null,
       cellMeters: 500,
       source: "city_grid",
       reason: built.error,
@@ -67,11 +40,11 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json({
     squares: built.cells,
-    cityLabel: viewport.cityLabel,
+    cityLabel: null,
     cellMeters: 500,
     bbox: {
-      sw: { lat: viewport.swLat, lng: viewport.swLng },
-      ne: { lat: viewport.neLat, lng: viewport.neLng },
+      sw: { lat: bbox.swLat, lng: bbox.swLng },
+      ne: { lat: bbox.neLat, lng: bbox.neLng },
     },
     gridSpec: built.spec,
     checkpoints: [],

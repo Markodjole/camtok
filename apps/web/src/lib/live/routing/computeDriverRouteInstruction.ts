@@ -5,10 +5,6 @@ import {
   type DetailedCrossroad,
 } from "@/lib/live/routing/findNextCrossroad";
 import {
-  bustGoogleRouteCache,
-  peekCachedDriverDestinationRoute,
-} from "@/lib/live/routing/googleRouteCache";
-import {
   isHardRejected,
   isMajorOrBetter,
   scoreRoadComfort,
@@ -40,9 +36,8 @@ import {
  *   3. Pull OSM crossroads and project onto the polyline for pin placement.
  *   4. Keep a per-room queue of three active pins (200–400 m road spacing).
  *
- * Google Routes (slow lane) is only for the map line — see googleRouteCache.ts
- * and refreshGoogleRouteForRoom.ts. If that cache is warm, pins may align to
- * the cached Google polyline via a read-only peek.
+ * Google Routes (slow lane) is only for the viewer map line — never cached.
+ * Pin planning always uses OSRM.
  *
  * Persistence lives in `ROOM_STATE` (in-process Map).
  */
@@ -115,10 +110,8 @@ type PlanningRoute = {
   source: "google" | "osrm";
 };
 
-/** Invalidate cached Google map route (slow lane). Pin planning stays on OSRM. */
-export function bustPlanningRouteCache(roomId: string): void {
-  bustGoogleRouteCache(roomId);
-}
+/** No-op — Google route responses are not cached (Maps Platform ToS). */
+export function bustPlanningRouteCache(_roomId: string): void {}
 
 function spacingWindowForSpeed(speedMps: number | null | undefined): {
   minSpacingM: number;
@@ -409,16 +402,14 @@ function topUpQueue(
 /**
  * Fast-lane planning polyline for blue-pin selection and bet triggers.
  *
- * Never calls Google — uses OSRM + OSM crossroads. If the slow-lane Google
- * map cache is already warm, pins may align to that polyline (read-only peek).
+ * Never calls Google — uses OSRM + OSM crossroads only.
  */
 async function resolvePlanningPolyline(params: {
-  roomId: string;
   driver: LatLng;
   heading: number;
   destination: { lat: number; lng: number } | null;
 }): Promise<PlanningRoute | null> {
-  const { roomId, driver, heading, destination } = params;
+  const { driver, heading, destination } = params;
 
   const trimPlanningPolyline = (polyline: LatLng[]): LatLng[] | null => {
     if (polyline.length < 2) return null;
@@ -431,14 +422,6 @@ async function resolvePlanningPolyline(params: {
   };
 
   if (destination) {
-    const peeked = peekCachedDriverDestinationRoute(roomId, destination);
-    if (peeked) {
-      const trimmed = trimPlanningPolyline(peeked.polyline);
-      if (trimmed) {
-        return { polyline: trimmed, source: "google" };
-      }
-    }
-
     const toDest = await fetchOsrmDrivingRoute(driver, destination);
     if (toDest && toDest.polyline.length >= 2) {
       const trimmed = trimPlanningPolyline(toDest.polyline);
@@ -498,7 +481,6 @@ export async function computeDriverRouteInstruction(
 
   const [planning, crossroads] = await Promise.all([
     resolvePlanningPolyline({
-      roomId,
       driver: position,
       heading,
       destination,
@@ -516,7 +498,7 @@ export async function computeDriverRouteInstruction(
 
   const polyline = planning.polyline;
   const candidates = projectCrossroadsOntoRoute(polyline, crossroads, {
-    onPlannedRoute: planning.source === "google",
+    onPlannedRoute: Boolean(destination),
     minBranchComfort,
   });
 
@@ -581,8 +563,7 @@ export async function computeDriverRouteInstruction(
     planningPolyline: polyline,
     planning: {
       source: planning.source,
-      destinationAware:
-        planning.source === "google" && Boolean(destination),
+      destinationAware: Boolean(destination),
       bestRoadClasses: queue.map((q) => q.bestRoadClass),
       meaningfulBranchesPerPin: queue.map((q) => q.meaningfulBranches),
       onlyMajorRoads: queue.every((q) => isMajorOrBetter(q.bestRoadClass)),

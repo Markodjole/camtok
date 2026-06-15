@@ -79,7 +79,6 @@ import {
   isBookendManeuver,
 } from "@/lib/live/routing/osrmSteps";
 import { computeDriverRouteInstruction } from "@/lib/live/routing/computeDriverRouteInstruction";
-import { refreshGoogleRouteForRoom } from "@/lib/live/routing/refreshGoogleRouteForRoom";
 import { analyzeStreakAhead } from "@/lib/live/routing/straightStreakAnalyzer";
 import {
   NEXT_STEP_BETS_ENABLED,
@@ -1454,10 +1453,6 @@ async function detectEligibleTriggers(
   const lng = g.normalized_lng ?? g.raw_lng;
   const driverHeadingDeg = g.heading_deg;
 
-  // Slow lane: refresh Google map route cache (~1× per 3 min per room).
-  void refreshGoogleRouteForRoom(service, roomId, sessionId, { lat, lng }).catch(
-    () => {},
-  );
 
   // ── Grid triggers ─────────────────────────────────────────────────────────
   const specRes = await getOrBuildGridSpecForRoom(service, roomId, sessionId);

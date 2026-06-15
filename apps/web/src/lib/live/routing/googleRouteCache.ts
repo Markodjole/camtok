@@ -4,186 +4,53 @@ import {
 } from "@/lib/live/routing/googleDirections";
 import { googleRoutesDisabled } from "@/lib/live/routing/googleRouteGuard";
 import type { DrivingRouteStyle } from "@/lib/live/routing/drivingRouteStyle";
-import {
-  metersBetween,
-  projectOntoPolyline,
-  type LatLng,
-} from "@/lib/live/routing/geometry";
+import { metersBetween, type LatLng } from "@/lib/live/routing/geometry";
 
-export type CachedDriverDestinationRoute = {
+export type DriverDestinationRoute = {
   polyline: LatLng[];
   distanceMeters: number;
   durationSec: number;
   trafficSegments: TrafficSegment[];
 };
 
-type CacheEntry = CachedDriverDestinationRoute & {
-  destinationLat: number;
-  destinationLng: number;
-  fetchedAtMs: number;
-};
-
-/** Shared in-process cache — one Google fetch per room per TTL window. */
-const ROUTE_CACHE = new Map<string, CacheEntry>();
-
-/** Google route refresh interval — traffic map uses Pro SKU; keep fetches rare. */
-export const GOOGLE_ROUTE_CACHE_MAX_AGE_MS = readCacheTtlMs();
-
-function readCacheTtlMs(): number {
-  const raw = process.env.GOOGLE_ROUTE_CACHE_TTL_SEC;
-  if (raw == null || raw === "") return 300_000; // 5 min default
-  const sec = Number(raw);
-  return Number.isFinite(sec) && sec > 0 ? Math.floor(sec * 1000) : 300_000;
-}
-
-/** Min cache age before an off-route driver position may trigger a refetch. */
-const OFF_ROUTE_REFETCH_MIN_AGE_MS = Math.min(
-  GOOGLE_ROUTE_CACHE_MAX_AGE_MS / 2,
-  120_000,
-);
-
-const OFF_ROUTE_THRESHOLD_M = 12;
-
 /** Perpendicular distance beyond which the map hides the stale Google path. */
 export const GOOGLE_ROUTE_OFF_PATH_DISPLAY_M = 22;
 
-export function bustGoogleRouteCache(roomId: string): void {
-  ROUTE_CACHE.delete(roomId);
-}
-
-/** Read cached Google route without fetching (safe for fast-lane polls). */
-export function peekCachedDriverDestinationRoute(
-  roomId: string,
-  destination?: LatLng | null,
-): CachedDriverDestinationRoute | null {
-  const cached = ROUTE_CACHE.get(roomId);
-  if (!cached) return null;
-  if (destination) {
-    if (
-      Math.abs(cached.destinationLat - destination.lat) > 1e-6 ||
-      Math.abs(cached.destinationLng - destination.lng) > 1e-6
-    ) {
-      return null;
-    }
-  }
-  if (Date.now() - cached.fetchedAtMs > GOOGLE_ROUTE_CACHE_MAX_AGE_MS) {
-    return null;
-  }
-  return {
-    polyline: cached.polyline,
-    distanceMeters: cached.distanceMeters,
-    durationSec: cached.durationSec,
-    trafficSegments: cached.trafficSegments,
-  };
-}
-
 /**
- * Fetch (or reuse) the driver→destination Google route for a live room.
- *
- * **Slow lane only** — call from destination-route polling or the server tick
- * refresher. Never from active-round / computeDriverRouteInstruction.
+ * Fetch driver→destination route from Google Routes API.
+ * No response caching — Maps Platform ToS prohibit storing route geometry.
  */
 export async function getDriverDestinationRoute(
-  roomId: string,
   driver: LatLng,
   destination: LatLng,
   opts: {
     transportMode?: string;
     drivingRouteStyle?: DrivingRouteStyle | null;
-    /** When true, refetch if the driver has drifted off the cached polyline. */
-    checkOffRoute?: boolean;
-    /** Bypass TTL — used when the client detected a turn off the cached path. */
-    forceRefetch?: boolean;
   } = {},
-): Promise<{ route: CachedDriverDestinationRoute; refetched: boolean } | null> {
-  if (googleRoutesDisabled()) {
-    const peek = peekCachedDriverDestinationRoute(roomId, destination);
-    return peek ? { route: peek, refetched: false } : null;
-  }
-
-  const cached = ROUTE_CACHE.get(roomId);
-  const destinationChanged =
-    cached != null &&
-    (Math.abs(cached.destinationLat - destination.lat) > 1e-6 ||
-      Math.abs(cached.destinationLng - destination.lng) > 1e-6);
-
-  let needsRefetch =
-    opts.forceRefetch === true ||
-    !cached ||
-    destinationChanged ||
-    Date.now() - cached.fetchedAtMs > GOOGLE_ROUTE_CACHE_MAX_AGE_MS;
-
-  if (!needsRefetch && cached && opts.checkOffRoute) {
-    const cacheAge = Date.now() - cached.fetchedAtMs;
-    if (cacheAge >= OFF_ROUTE_REFETCH_MIN_AGE_MS) {
-      const proj = projectOntoPolyline(cached.polyline, driver);
-      if (!proj || proj.distanceMeters > OFF_ROUTE_THRESHOLD_M) {
-        needsRefetch = true;
-      }
-    }
-  }
-
-  if (!needsRefetch && cached) {
-    return {
-      route: {
-        polyline: cached.polyline,
-        distanceMeters: cached.distanceMeters,
-        durationSec: cached.durationSec,
-        trafficSegments: cached.trafficSegments,
-      },
-      refetched: false,
-    };
-  }
+): Promise<DriverDestinationRoute | null> {
+  if (googleRoutesDisabled()) return null;
 
   const fresh = await fetchGoogleDirectionsRoute(driver, destination, {
     transportMode: opts.transportMode,
     drivingRouteStyle: opts.drivingRouteStyle,
-    // Pro SKU — traffic colors; only fetched on slow-lane cache miss (~5 min).
     includeTraffic: true,
   });
-  if (!fresh) {
-    if (!cached) return null;
-    return {
-      route: {
-        polyline: cached.polyline,
-        distanceMeters: cached.distanceMeters,
-        durationSec: cached.durationSec,
-        trafficSegments: cached.trafficSegments,
-      },
-      refetched: false,
-    };
-  }
+  if (!fresh) return null;
 
-  const entry: CacheEntry = {
+  return {
     polyline: fresh.polyline,
     distanceMeters: fresh.distanceMeters,
     durationSec: fresh.durationSec,
     trafficSegments: fresh.trafficSegments,
-    destinationLat: destination.lat,
-    destinationLng: destination.lng,
-    fetchedAtMs: Date.now(),
-  };
-  ROUTE_CACHE.set(roomId, entry);
-
-  if (ROUTE_CACHE.size > 256) {
-    const now = Date.now();
-    for (const [k, v] of ROUTE_CACHE) {
-      if (now - v.fetchedAtMs > 5 * 60_000) ROUTE_CACHE.delete(k);
-    }
-  }
-
-  return {
-    route: {
-      polyline: entry.polyline,
-      distanceMeters: entry.distanceMeters,
-      durationSec: entry.durationSec,
-      trafficSegments: entry.trafficSegments,
-    },
-    refetched: true,
   };
 }
 
-/** Distance from driver to destination — cheap, no Google call. */
-export function distanceToDestinationMeters(driver: LatLng, destination: LatLng): number {
+/** @deprecated Routes are not cached — no-op kept for call-site compatibility. */
+export function bustGoogleRouteCache(_roomId: string): void {}
+
+export function distanceToDestinationMeters(
+  driver: LatLng,
+  destination: LatLng,
+): number {
   return metersBetween(driver, destination);
 }
