@@ -292,3 +292,16 @@ registerResolutionPolicy({
     },
   ],
 });
+
+registerResolutionPolicy({
+  marketType: "overtake_30s",
+  description:
+    "Settle from lead-vehicle telemetry (lost while approaching = yes; " +
+    "30s window elapsed = no). reveal_at is the safety cap.",
+  conditions: [
+    {
+      label: "reveal_timeout",
+      event: { type: "reveal_timeout" },
+    },
+  ],
+});

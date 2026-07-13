@@ -19,8 +19,10 @@ import {
 import { openNextStepMarketForRoom } from "@/actions/live-next-step-market";
 import { openNextTurnMarketForRoom } from "@/actions/live-next-turn-market";
 import { openStraightStreakMarketForRoom } from "@/actions/live-straight-streak-market";
+import { openOvertake30sMarketForRoom } from "@/actions/live-overtake-market";
 import { lockAndSettleMarket, lockMarket, revealAndSettleMarket, cancelAndRefundMarket } from "@/actions/live-settlement";
 import { isEngineMarketType } from "@/lib/live/betting/engineMarketOptions";
+import { shouldSettleOvertakeMarket } from "@/lib/live/betting/shouldSettleOvertakeMarket";
 import {
   BET_OPEN_WINDOW_MS,
   BET_OPEN_WINDOW_IDLE_MS,
@@ -424,6 +426,12 @@ export async function runRoomTick(
   }
 
   if (phaseNow === "waiting_for_next_market") {
+    // Prefer vision overtake markets when lead vehicle is prediction-ready.
+    const overtake = await tryOpenOvertakeFromLeadState(service, roomId, sessionId);
+    if (overtake) {
+      return { action: "market_open_overtake_30s", ...overtake, settled: settleNotes };
+    }
+
     const result = await tryOpenPendingBets(
       service,
       roomId,
@@ -1877,6 +1885,13 @@ async function sweepPendingSettlements(
           liveSessionId: sessionId,
           roomId,
         });
+      } else if (mType === "overtake_30s") {
+        shouldSettle = await shouldSettleOvertakeMarket(service, {
+          liveSessionId: sessionId,
+          opensAt: (row as { opens_at: string }).opens_at,
+          revealAt: (row as { reveal_at: string }).reveal_at,
+          subtitle: (row as { subtitle: string | null }).subtitle,
+        });
       } else {
         // next_step / next_turn / straight_streak: run the same policy evaluator
         // used for locked markets so proximity/heading events fire immediately.
@@ -2027,5 +2042,36 @@ async function sweepPendingSettlements(
   }
 
   return notes;
+}
+
+async function tryOpenOvertakeFromLeadState(
+  service: Awaited<ReturnType<typeof createServiceClient>>,
+  roomId: string,
+  sessionId: string | null,
+): Promise<{ marketId: string; betType: "overtake_30s" } | null> {
+  if (!sessionId) return null;
+  const { data: lead } = await service
+    .from("character_lead_vehicle_state")
+    .select(
+      "track_id, vehicle_type, confidence, same_direction_confidence, relative_state, prediction_ready",
+    )
+    .eq("live_session_id", sessionId)
+    .maybeSingle();
+  if (!lead || !(lead as { prediction_ready?: boolean }).prediction_ready) {
+    return null;
+  }
+  const trackId = (lead as { track_id: string | null }).track_id;
+  if (!trackId) return null;
+
+  const res = await openOvertake30sMarketForRoom(roomId, {
+    trackId,
+    vehicleType: (lead as { vehicle_type: string | null }).vehicle_type ?? "unknown_vehicle",
+    confidence: (lead as { confidence: number | null }).confidence ?? 0,
+    sameDirectionConfidence:
+      (lead as { same_direction_confidence: number | null }).same_direction_confidence ?? 0,
+    relativeState: (lead as { relative_state: string | null }).relative_state ?? "uncertain",
+  });
+  if ("error" in res) return null;
+  return res;
 }
 

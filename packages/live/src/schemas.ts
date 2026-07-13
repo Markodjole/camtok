@@ -99,6 +99,57 @@ export const locationBatchInputSchema = z.object({
   points: z.array(locationPointSchema).min(1).max(50),
 });
 
+export const leadVehicleTelemetryEventSchema = z.object({
+  eventType: z.enum([
+    "lead_vehicle_acquired",
+    "lead_vehicle_updated",
+    "lead_vehicle_state_changed",
+    "lead_vehicle_changed",
+    "lead_vehicle_lost",
+  ]),
+  rideId: z.string().min(1).max(80),
+  riderId: z.string().min(1).max(80),
+  sessionId: z.string().uuid(),
+  timestampMs: z.number().finite().nonnegative(),
+  payload: z
+    .object({
+      trackId: z.string().max(64).optional(),
+      vehicleType: z.string().max(40).optional(),
+      confidence: z.number().finite().min(0).max(1).optional(),
+      sameDirectionConfidence: z.number().finite().min(0).max(1).optional(),
+      relativeState: z.string().max(64).optional(),
+      visibleDurationMs: z.number().finite().nonnegative().optional(),
+      lateralPosition: z.enum(["left", "center", "right"]).optional(),
+      normalizedBoundingBox: z
+        .object({
+          x: z.number().finite(),
+          y: z.number().finite(),
+          width: z.number().finite(),
+          height: z.number().finite(),
+        })
+        .optional(),
+      predictionReady: z.boolean().optional(),
+      predictionConfidence: z.number().finite().min(0).max(1).optional(),
+      predictionReasons: z.array(z.string().max(64)).max(20).optional(),
+      predictionBlockers: z.array(z.string().max(64)).max(20).optional(),
+    })
+    .default({}),
+  modelMetadata: z.object({
+    modelName: z.string().max(80),
+    modelVersion: z.string().max(40),
+    inferenceMode: z.enum(["on_device", "remote", "mock"]),
+  }),
+});
+
+export const leadVehicleEventsInputSchema = z.object({
+  sessionId: z.string().uuid(),
+  events: z.array(leadVehicleTelemetryEventSchema).min(1).max(20).optional(),
+  /** Single-event shorthand used by mobile client. */
+  event: leadVehicleTelemetryEventSchema.optional(),
+}).refine((v) => !!(v.event || (v.events && v.events.length > 0)), {
+  message: "event_or_events_required",
+});
+
 export const marketOptionSchema = z.object({
   id: z.string().min(1).max(64),
   label: z.string().min(1).max(80),
@@ -164,6 +215,10 @@ export type DestinationInput = z.infer<typeof destinationInputSchema>;
 export type HeartbeatInput = z.infer<typeof heartbeatInputSchema>;
 export type LocationPoint = z.infer<typeof locationPointSchema>;
 export type LocationBatchInput = z.infer<typeof locationBatchInputSchema>;
+export type LeadVehicleTelemetryEventInput = z.infer<
+  typeof leadVehicleTelemetryEventSchema
+>;
+export type LeadVehicleEventsInput = z.infer<typeof leadVehicleEventsInputSchema>;
 export type ProposeMarketInput = z.infer<typeof proposeMarketInputSchema>;
 export type PlaceLiveBetInput = z.infer<typeof placeLiveBetInputSchema>;
 export type MarketOption = z.infer<typeof marketOptionSchema>;

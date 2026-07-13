@@ -18,7 +18,8 @@ export type BetTypeV2 =
   | "next_step"
   | "next_zone"
   | "zone_exit_time"
-  | "straight_streak";
+  | "straight_streak"
+  | "overtake_30s";
 
 export type VoidReasonV2 =
   | "gps_uncertain"

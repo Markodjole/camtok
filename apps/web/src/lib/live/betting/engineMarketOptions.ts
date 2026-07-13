@@ -26,6 +26,7 @@ export const ENGINE_BET_TYPES = new Set<string>([
   "next_step",       // settle when driver reaches OSRM step maneuver point
   "zone_exit_time",  // settle when driver leaves start cell or countdown elapses
   "straight_streak", // settle when driver takes a non-straight at any intersection
+  "overtake_30s",    // settle from lead-vehicle lost / 30s window
 ]);
 
 export function isEngineMarketType(marketType: string): boolean {
@@ -109,6 +110,21 @@ export function provisionalOptionsForBetType(type: BetTypeV2): EngineMarketOptio
         { id: "step_under", label: "Reaches turn faster than estimated", shortLabel: "< ETA", displayOrder: 0 },
         { id: "step_at",    label: "Reaches turn at estimated time",      shortLabel: "≈ ETA", displayOrder: 1 },
         { id: "step_over",  label: "Reaches turn slower than estimated",  shortLabel: "> ETA", displayOrder: 2 },
+      ];
+    case "overtake_30s":
+      return [
+        {
+          id: "overtake_yes",
+          label: "Overtakes lead vehicle within 30s",
+          shortLabel: "Yes ≤30s",
+          displayOrder: 0,
+        },
+        {
+          id: "overtake_no",
+          label: "Does not overtake within 30s",
+          shortLabel: "No",
+          displayOrder: 1,
+        },
       ];
     default:
       return [];

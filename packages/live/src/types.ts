@@ -45,7 +45,12 @@ export type LiveMarketType =
   | "continue_vs_turn"
   | "route_choice"
   | "city_grid"
-  | "custom_validated";
+  | "custom_validated"
+  | "zone_exit_time"
+  | "next_turn"
+  | "straight_streak"
+  | "next_step"
+  | "overtake_30s";
 
 export type LiveMarketStatus =
   | "draft"
