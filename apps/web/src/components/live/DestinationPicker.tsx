@@ -14,6 +14,10 @@ type Suggestion = {
   primary: string;
   secondary: string | null;
   fullText: string;
+  /** Present for Nominatim / free geocoder hits — skip Google Details. */
+  lat?: number;
+  lng?: number;
+  source?: "nominatim" | "google";
 };
 
 function newSessionToken(): string {
@@ -98,6 +102,25 @@ export function DestinationPicker({
     setLoading(true);
     setError(null);
     try {
+      // Nominatim (and any suggestion that already includes coords) — no Google Details.
+      if (
+        typeof s.lat === "number" &&
+        typeof s.lng === "number" &&
+        Number.isFinite(s.lat) &&
+        Number.isFinite(s.lng)
+      ) {
+        const destination: PickedDestination = {
+          lat: s.lat,
+          lng: s.lng,
+          label: s.fullText || s.primary,
+          placeId: s.placeId?.startsWith("osm:") ? null : s.placeId || null,
+        };
+        onChange(destination);
+        setQuery(destination.label);
+        sessionTokenRef.current = newSessionToken();
+        return;
+      }
+
       const r = await fetch(
         `/api/live/places/details?placeId=${encodeURIComponent(s.placeId)}` +
           `&sessionToken=${sessionTokenRef.current}`,

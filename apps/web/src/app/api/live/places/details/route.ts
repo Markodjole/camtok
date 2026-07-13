@@ -4,9 +4,51 @@ import { assertApiAllowed } from "@/lib/usage/apiUsage";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+const NOMINATIM_UA =
+  "CamTok/1.0 (live destination search; contact: support@camtok.app)";
+
+async function resolveOsmPlaceId(osmPlaceId: string): Promise<{
+  lat: number;
+  lng: number;
+  label: string;
+} | null> {
+  const id = osmPlaceId.replace(/^osm:/i, "").trim();
+  if (!id) return null;
+  const url = new URL("https://nominatim.openstreetmap.org/details");
+  url.searchParams.set("place_id", id);
+  url.searchParams.set("format", "json");
+  try {
+    const res = await fetch(url.toString(), {
+      cache: "no-store",
+      headers: { "User-Agent": NOMINATIM_UA, Accept: "application/json" },
+    });
+    if (!res.ok) return null;
+    const json = (await res.json()) as {
+      centroid?: { coordinates?: [number, number] };
+      localname?: string;
+      names?: { name?: string };
+      addresstags?: Record<string, string>;
+    };
+    const coords = json.centroid?.coordinates;
+    if (!coords || coords.length < 2) return null;
+    const [lng, lat] = coords;
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    const label =
+      json.localname ||
+      json.names?.name ||
+      Object.values(json.addresstags ?? {})[0] ||
+      `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+    return { lat, lng, label };
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Resolve a Google Places `place_id` (or arbitrary `lat,lng`) into a
- * concrete destination point we can persist on the session.
+ * Resolve a place into a concrete destination point.
+ * - Google `place_id` → Places Details (when allowed)
+ * - `osm:*` → Nominatim details
+ * - lat/lng → reverse geocode (optional)
  */
 export async function GET(req: NextRequest) {
   const params = req.nextUrl.searchParams;
@@ -21,6 +63,25 @@ export async function GET(req: NextRequest) {
     "";
 
   if (placeId) {
+    // Free OSM path — never send osm: IDs to Google.
+    if (placeId.startsWith("osm:")) {
+      const osm = await resolveOsmPlaceId(placeId);
+      if (!osm) {
+        return NextResponse.json(
+          { destination: null, reason: "osm_lookup_failed" },
+          { status: 200 },
+        );
+      }
+      return NextResponse.json({
+        destination: {
+          lat: osm.lat,
+          lng: osm.lng,
+          label: osm.label,
+          placeId: null,
+        },
+      });
+    }
+
     if (!key) {
       return NextResponse.json(
         { destination: null, reason: "missing_api_key" },
@@ -105,14 +166,24 @@ export async function GET(req: NextRequest) {
   }
   if (!key) {
     return NextResponse.json({
-      destination: { lat, lng, label: `${lat.toFixed(5)}, ${lng.toFixed(5)}`, placeId: null },
+      destination: {
+        lat,
+        lng,
+        label: `${lat.toFixed(5)}, ${lng.toFixed(5)}`,
+        placeId: null,
+      },
       reason: "missing_api_key",
     });
   }
   const geoGuard = assertApiAllowed("google_geocode");
   if (!geoGuard.allowed) {
     return NextResponse.json({
-      destination: { lat, lng, label: `${lat.toFixed(5)}, ${lng.toFixed(5)}`, placeId: null },
+      destination: {
+        lat,
+        lng,
+        label: `${lat.toFixed(5)}, ${lng.toFixed(5)}`,
+        placeId: null,
+      },
       reason: geoGuard.reason,
     });
   }
