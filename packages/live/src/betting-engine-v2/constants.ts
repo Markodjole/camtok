@@ -31,6 +31,7 @@ export const TURN_COUNT_HEADING_DELTA_MIN_DEG = 35;
 /** Priority when choosing / replacing rounds. Higher = more important. */
 export const BET_TYPE_PRIORITY_V2: Record<BetTypeV2, number> = {
   next_turn: 100,
+  overtake_30s: 95,
   next_step: 90,
   next_zone: 80,
   zone_exit_time: 75,

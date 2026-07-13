@@ -78,16 +78,16 @@ export async function overtake30sResolver(
 
   if (lostWithinWindow && sawApproaching) {
     return {
-      outcome: "winner",
-      winningOptionId: "overtake_yes",
+      outcome: "win",
+      optionId: "overtake_yes",
       reason: "overtake_lead_lost_while_approaching",
     };
   }
 
   if (lostWithinWindow && !sawApproaching) {
     return {
-      outcome: "winner",
-      winningOptionId: "overtake_no",
+      outcome: "win",
+      optionId: "overtake_no",
       reason: "lead_lost_without_approach",
     };
   }
@@ -95,8 +95,8 @@ export async function overtake30sResolver(
   // Deadline passed without overtake signal.
   if (Date.now() >= deadline) {
     return {
-      outcome: "winner",
-      winningOptionId: "overtake_no",
+      outcome: "win",
+      optionId: "overtake_no",
       reason: "overtake_window_elapsed",
     };
   }
