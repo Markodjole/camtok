@@ -4,6 +4,10 @@ import {
 } from "@/lib/live/routing/googleDirections";
 import { googleRoutesDisabled } from "@/lib/live/routing/googleRouteGuard";
 import type { DrivingRouteStyle } from "@/lib/live/routing/drivingRouteStyle";
+import {
+  fetchOsrmRoute,
+  osrmProfileForTransportMode,
+} from "@/lib/live/routing/osrm";
 import { metersBetween, type LatLng } from "@/lib/live/routing/geometry";
 
 export type DriverDestinationRoute = {
@@ -11,14 +15,17 @@ export type DriverDestinationRoute = {
   distanceMeters: number;
   durationSec: number;
   trafficSegments: TrafficSegment[];
+  /** Who produced the polyline — OSRM is free; Google is billable. */
+  source: "google" | "osrm";
 };
 
 /** Perpendicular distance beyond which the map hides the stale Google path. */
 export const GOOGLE_ROUTE_OFF_PATH_DISPLAY_M = 22;
 
 /**
- * Fetch driver→destination route from Google Routes API.
- * No response caching — Maps Platform ToS prohibit storing route geometry.
+ * Fetch driver→destination road polyline.
+ * Prefers Google Routes when enabled; otherwise (and on Google failure) uses
+ * free OSRM so the suggested line still shows without Maps billing.
  */
 export async function getDriverDestinationRoute(
   driver: LatLng,
@@ -28,20 +35,34 @@ export async function getDriverDestinationRoute(
     drivingRouteStyle?: DrivingRouteStyle | null;
   } = {},
 ): Promise<DriverDestinationRoute | null> {
-  if (googleRoutesDisabled()) return null;
+  if (!googleRoutesDisabled()) {
+    const fresh = await fetchGoogleDirectionsRoute(driver, destination, {
+      transportMode: opts.transportMode,
+      drivingRouteStyle: opts.drivingRouteStyle,
+      includeTraffic: true,
+    });
+    if (fresh) {
+      return {
+        polyline: fresh.polyline,
+        distanceMeters: fresh.distanceMeters,
+        durationSec: fresh.durationSec,
+        trafficSegments: fresh.trafficSegments,
+        source: "google",
+      };
+    }
+  }
 
-  const fresh = await fetchGoogleDirectionsRoute(driver, destination, {
-    transportMode: opts.transportMode,
-    drivingRouteStyle: opts.drivingRouteStyle,
-    includeTraffic: true,
+  const osrm = await fetchOsrmRoute(driver, destination, {
+    profile: osrmProfileForTransportMode(opts.transportMode),
   });
-  if (!fresh) return null;
+  if (!osrm || osrm.polyline.length < 2) return null;
 
   return {
-    polyline: fresh.polyline,
-    distanceMeters: fresh.distanceMeters,
-    durationSec: fresh.durationSec,
-    trafficSegments: fresh.trafficSegments,
+    polyline: osrm.polyline,
+    distanceMeters: osrm.distanceMeters,
+    durationSec: osrm.durationSec,
+    trafficSegments: [],
+    source: "osrm",
   };
 }
 

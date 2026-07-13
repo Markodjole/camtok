@@ -1,28 +1,26 @@
 import type { LatLng } from "./geometry";
 import { assertApiAllowed } from "@/lib/usage/apiUsage";
 
+export type OsrmProfile = "driving" | "cycling" | "walking";
+
 /**
- * Query the public OSRM demo server for a driving route between two points.
+ * Query OSRM for a route between two points (free — no Google Routes cost).
  *
- * Returns the full route geometry as a list of `LatLng` coordinates or
- * `null` if OSRM could not produce a route (network error, invalid coords,
- * no road nearby, etc). Kept intentionally small — we only need `geometry`
- * so betting timing stays tight.
- *
- * NOTE: router.project-osrm.org is a free shared endpoint; we cache results
- * aggressively upstream (per `decisionId` + coarse position bucket) so we
- * don't hit it on every viewer poll.
+ * Default endpoint is the public demo server; override with `OSRM_BASE_URL`
+ * for production self-hosting. Callers should cache / throttle via
+ * `assertApiAllowed("osrm")`.
  */
-export async function fetchOsrmDrivingRoute(
+export async function fetchOsrmRoute(
   from: LatLng,
   to: LatLng,
-  opts: { signal?: AbortSignal } = {},
+  opts: { signal?: AbortSignal; profile?: OsrmProfile } = {},
 ): Promise<{ polyline: LatLng[]; distanceMeters: number; durationSec: number } | null> {
   const base =
     process.env.OSRM_BASE_URL?.replace(/\/$/, "") ||
     "https://router.project-osrm.org";
+  const profile = opts.profile ?? "driving";
   const coords = `${from.lng.toFixed(6)},${from.lat.toFixed(6)};${to.lng.toFixed(6)},${to.lat.toFixed(6)}`;
-  const url = `${base}/route/v1/driving/${coords}?overview=full&geometries=geojson&steps=false&alternatives=false`;
+  const url = `${base}/route/v1/${profile}/${coords}?overview=full&geometries=geojson&steps=false&alternatives=false`;
 
   const guard = assertApiAllowed("osrm");
   if (!guard.allowed) return null;
@@ -30,7 +28,6 @@ export async function fetchOsrmDrivingRoute(
   try {
     const res = await fetch(url, {
       signal: opts.signal,
-      // Route shape does not change per user, allow CDN-level caching.
       next: { revalidate: 60 },
     });
     if (!res.ok) return null;
@@ -56,4 +53,24 @@ export async function fetchOsrmDrivingRoute(
   } catch {
     return null;
   }
+}
+
+/** @deprecated Prefer `fetchOsrmRoute` — kept for existing call sites. */
+export async function fetchOsrmDrivingRoute(
+  from: LatLng,
+  to: LatLng,
+  opts: { signal?: AbortSignal } = {},
+): Promise<{ polyline: LatLng[]; distanceMeters: number; durationSec: number } | null> {
+  return fetchOsrmRoute(from, to, { ...opts, profile: "driving" });
+}
+
+export function osrmProfileForTransportMode(
+  transportMode?: string | null,
+): OsrmProfile {
+  const m = (transportMode ?? "drive").toLowerCase();
+  if (m === "walking" || m === "walk") return "walking";
+  if (m === "bike" || m === "bicycle" || m === "cycle" || m === "scooter") {
+    return "cycling";
+  }
+  return "driving";
 }

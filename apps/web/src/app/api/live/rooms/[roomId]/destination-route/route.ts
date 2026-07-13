@@ -58,6 +58,7 @@ export async function GET(
     distanceToDestinationMeters: distanceToDest,
     refetched: true,
     lastFetchOk: route != null,
-    reason: route ? "ok" : "google_error",
+    source: route?.source ?? null,
+    reason: route ? "ok" : "routing_unavailable",
   });
 }

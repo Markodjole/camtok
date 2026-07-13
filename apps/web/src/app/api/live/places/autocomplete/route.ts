@@ -9,12 +9,88 @@ type Suggestion = {
   primary: string;
   secondary: string | null;
   fullText: string;
+  /** Present for Nominatim hits — client can resolve without Places Details. */
+  lat?: number;
+  lng?: number;
+  source?: "nominatim" | "google";
 };
 
+const NOMINATIM_UA =
+  "CamTok/1.0 (live destination search; contact: support@camtok.app)";
+
+function splitDisplayName(displayName: string): {
+  primary: string;
+  secondary: string | null;
+} {
+  const parts = displayName
+    .split(",")
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (parts.length <= 1) return { primary: displayName, secondary: null };
+  return { primary: parts[0]!, secondary: parts.slice(1, 4).join(", ") || null };
+}
+
+async function searchNominatim(
+  input: string,
+  lat: number,
+  lng: number,
+): Promise<Suggestion[]> {
+  const url = new URL("https://nominatim.openstreetmap.org/search");
+  url.searchParams.set("q", input);
+  url.searchParams.set("format", "json");
+  url.searchParams.set("limit", "6");
+  url.searchParams.set("addressdetails", "1");
+  if (Number.isFinite(lat) && Number.isFinite(lng)) {
+    const d = 0.35;
+    url.searchParams.set(
+      "viewbox",
+      `${lng - d},${lat + d},${lng + d},${lat - d}`,
+    );
+  }
+
+  const res = await fetch(url.toString(), {
+    cache: "no-store",
+    headers: {
+      "User-Agent": NOMINATIM_UA,
+      Accept: "application/json",
+    },
+  });
+  if (!res.ok) return [];
+
+  const rows = (await res.json()) as Array<{
+    place_id?: number;
+    lat?: string;
+    lon?: string;
+    display_name?: string;
+    name?: string;
+  }>;
+
+  return rows
+    .filter((r) => r.place_id != null && r.lat && r.lon && r.display_name)
+    .map((r) => {
+      const fullText = r.display_name!;
+      const labeled =
+        r.name && !fullText.startsWith(r.name)
+          ? `${r.name}, ${fullText}`
+          : fullText;
+      const { primary, secondary } = splitDisplayName(labeled);
+      return {
+        placeId: `osm:${r.place_id}`,
+        primary,
+        secondary,
+        fullText,
+        lat: Number(r.lat),
+        lng: Number(r.lon),
+        source: "nominatim" as const,
+      };
+    })
+    .filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lng));
+}
+
 /**
- * Server-side proxy to Google Places Autocomplete. Keeps the API key
- * private and lets us bias results toward the driver's current GPS so
- * "town hall" or "main square" pulls up the right city.
+ * Destination autocomplete:
+ * 1. Nominatim (free, server-side UA — React Native cannot call OSM directly)
+ * 2. Google Places only if Nominatim empty and API guard allows it
  */
 export async function GET(req: NextRequest) {
   const params = req.nextUrl.searchParams;
@@ -25,6 +101,15 @@ export async function GET(req: NextRequest) {
 
   if (input.length < 2) {
     return NextResponse.json({ suggestions: [] satisfies Suggestion[] });
+  }
+
+  try {
+    const nominatim = await searchNominatim(input, lat, lng);
+    if (nominatim.length > 0) {
+      return NextResponse.json({ suggestions: nominatim, source: "nominatim" });
+    }
+  } catch {
+    // fall through to Google
   }
 
   const key =
@@ -96,8 +181,9 @@ export async function GET(req: NextRequest) {
         primary: p.structured_formatting?.main_text ?? p.description!,
         secondary: p.structured_formatting?.secondary_text ?? null,
         fullText: p.description as string,
+        source: "google" as const,
       }));
-    return NextResponse.json({ suggestions });
+    return NextResponse.json({ suggestions, source: "google" });
   } catch (err) {
     return NextResponse.json(
       {
