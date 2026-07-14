@@ -9,9 +9,8 @@ type Props = {
 };
 
 /**
- * Viewer-only overlay: draws lead (green) + other vehicle boxes from
- * character_lead_vehicle_state, plus on-screen / passed counters.
- * Rider app never shows these.
+ * Viewer-only overlay: draws vehicle boxes + Passed counter from
+ * character_lead_vehicle_state. Rider app never shows these.
  */
 export function LeadVehicleViewerOverlay({ liveSessionId, className }: Props) {
   const [state, setState] = useState<LeadVehicleOverlayState | null>(null);
@@ -70,9 +69,6 @@ export function LeadVehicleViewerOverlay({ liveSessionId, className }: Props) {
           ]
         : [];
 
-  const vehiclesOnScreen =
-    state?.vehiclesOnScreen ??
-    detections.filter((d) => d.normalizedBoundingBox?.width > 0).length;
   const showHud = liveSessionId && (detections.length > 0 || vehiclesPassed > 0);
 
   if (!liveSessionId || !showHud) return null;
@@ -84,11 +80,10 @@ export function LeadVehicleViewerOverlay({ liveSessionId, className }: Props) {
     >
       <div className="absolute left-3 top-3 flex items-center gap-2">
         <div className="rounded-md bg-black/70 px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-white shadow-sm backdrop-blur-sm">
-          <span className="text-white/70">Ahead </span>
-          <span className="tabular-nums text-amber-300">{vehiclesOnScreen}</span>
-          <span className="mx-1.5 text-white/30">·</span>
           <span className="text-white/70">Passed </span>
-          <span className="tabular-nums text-emerald-400">{vehiclesPassed}</span>
+          <span className="tabular-nums text-emerald-400">
+            {vehiclesPassed}
+          </span>
         </div>
         {plusOneKey > 0 ? (
           <span
