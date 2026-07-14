@@ -219,6 +219,7 @@ export type LeadVehicleOverlayState = {
     trackId: string;
     vehicleType?: string;
     timestampMs: number;
+    delta?: 1 | -1;
   } | null;
   updatedAt: string | null;
 };

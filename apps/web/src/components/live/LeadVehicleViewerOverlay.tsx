@@ -8,14 +8,17 @@ type Props = {
   className?: string;
 };
 
+type Flash = { key: number; delta: 1 | -1 };
+
 /**
- * Viewer-only overlay: draws vehicle boxes + Passed counter from
- * character_lead_vehicle_state. Rider app never shows these.
+ * Viewer-only overlay: vehicle boxes + signed Passed score
+ * (+ we passed them, − they passed us).
  */
 export function LeadVehicleViewerOverlay({ liveSessionId, className }: Props) {
   const [state, setState] = useState<LeadVehicleOverlayState | null>(null);
-  const [plusOneKey, setPlusOneKey] = useState(0);
+  const [flash, setFlash] = useState<Flash | null>(null);
   const prevPassed = useRef(0);
+  const flashKey = useRef(0);
 
   useEffect(() => {
     if (!liveSessionId) {
@@ -48,11 +51,20 @@ export function LeadVehicleViewerOverlay({ liveSessionId, className }: Props) {
 
   const vehiclesPassed = state?.vehiclesPassed ?? 0;
   useEffect(() => {
-    if (vehiclesPassed > prevPassed.current) {
-      setPlusOneKey((k) => k + 1);
+    const prev = prevPassed.current;
+    if (vehiclesPassed !== prev) {
+      const fromPayload = state?.lastPass?.delta;
+      const delta: 1 | -1 =
+        fromPayload === 1 || fromPayload === -1
+          ? fromPayload
+          : vehiclesPassed > prev
+            ? 1
+            : -1;
+      flashKey.current += 1;
+      setFlash({ key: flashKey.current, delta });
     }
     prevPassed.current = vehiclesPassed;
-  }, [vehiclesPassed]);
+  }, [vehiclesPassed, state?.lastPass?.delta]);
 
   const detections =
     state?.detections?.length && state.detections.length > 0
@@ -69,9 +81,17 @@ export function LeadVehicleViewerOverlay({ liveSessionId, className }: Props) {
           ]
         : [];
 
-  const showHud = liveSessionId && (detections.length > 0 || vehiclesPassed > 0);
+  const showHud =
+    liveSessionId && (detections.length > 0 || vehiclesPassed !== 0);
 
   if (!liveSessionId || !showHud) return null;
+
+  const scoreColor =
+    vehiclesPassed > 0
+      ? "text-emerald-400"
+      : vehiclesPassed < 0
+        ? "text-rose-400"
+        : "text-white";
 
   return (
     <div
@@ -81,16 +101,18 @@ export function LeadVehicleViewerOverlay({ liveSessionId, className }: Props) {
       <div className="absolute left-3 top-3 flex items-center gap-2">
         <div className="rounded-md bg-black/70 px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-white shadow-sm backdrop-blur-sm">
           <span className="text-white/70">Passed </span>
-          <span className="tabular-nums text-emerald-400">
-            {vehiclesPassed}
+          <span className={`tabular-nums ${scoreColor}`}>
+            {vehiclesPassed > 0 ? `+${vehiclesPassed}` : vehiclesPassed}
           </span>
         </div>
-        {plusOneKey > 0 ? (
+        {flash ? (
           <span
-            key={plusOneKey}
-            className="camtok-pass-plus-one rounded-md bg-emerald-500 px-2 py-1 text-xs font-bold text-black"
+            key={flash.key}
+            className={`camtok-pass-plus-one rounded-md px-2 py-1 text-xs font-bold text-black ${
+              flash.delta === 1 ? "bg-emerald-500" : "bg-rose-500"
+            }`}
           >
-            +1
+            {flash.delta === 1 ? "+1" : "−1"}
           </span>
         ) : null}
       </div>
