@@ -128,6 +128,23 @@ export const leadVehicleTelemetryEventSchema = z.object({
           height: z.number().finite(),
         })
         .optional(),
+      detections: z
+        .array(
+          z.object({
+            trackId: z.string().max(64).optional(),
+            vehicleType: z.string().max(40).optional(),
+            confidence: z.number().finite().min(0).max(1).optional(),
+            isLead: z.boolean().optional(),
+            normalizedBoundingBox: z.object({
+              x: z.number().finite(),
+              y: z.number().finite(),
+              width: z.number().finite(),
+              height: z.number().finite(),
+            }),
+          }),
+        )
+        .max(20)
+        .optional(),
       predictionReady: z.boolean().optional(),
       predictionConfidence: z.number().finite().min(0).max(1).optional(),
       predictionReasons: z.array(z.string().max(64)).max(20).optional(),

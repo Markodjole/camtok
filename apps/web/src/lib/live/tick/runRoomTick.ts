@@ -2057,11 +2057,10 @@ async function tryOpenOvertakeFromLeadState(
     )
     .eq("live_session_id", sessionId)
     .maybeSingle();
-  if (!lead || !(lead as { prediction_ready?: boolean }).prediction_ready) {
+  if (!lead || !(lead as { track_id?: string | null }).track_id) {
     return null;
   }
-  const trackId = (lead as { track_id: string | null }).track_id;
-  if (!trackId) return null;
+  const trackId = (lead as { track_id: string }).track_id;
 
   const res = await openOvertake30sMarketForRoom(roomId, {
     trackId,

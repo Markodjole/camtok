@@ -45,6 +45,7 @@ import {
   VideoStreamOverlay,
   resolveVideoOverlayPin,
 } from "./VideoStreamOverlay";
+import { LeadVehicleViewerOverlay } from "./LeadVehicleViewerOverlay";
 import { LiveDecisionStatusRibbon } from "./LiveDecisionStatusRibbon";
 import { useCountdown } from "./useCountdown";
 import { useClientNow } from "./useClientNow";
@@ -2512,12 +2513,15 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           </div>
         )}
         {!useYoutubeDashcam ? (
+        <>
         <VideoStreamOverlay
           routePoints={routePoints}
           pinTarget={videoOverlayPin}
           zoneGridSpec={zonesSpec}
           zoneLabel={room.regionLabel}
         />
+        <LeadVehicleViewerOverlay liveSessionId={room.liveSessionId} />
+        </>
         ) : null}
       </div>
 

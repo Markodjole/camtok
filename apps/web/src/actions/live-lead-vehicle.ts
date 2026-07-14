@@ -77,12 +77,50 @@ export async function ingestLeadVehicleEventsForUser(
   if (insertError) return { error: insertError.message };
 
   const latest = events[events.length - 1]!;
-  await service.from("character_lead_vehicle_state").upsert(
-    {
-      live_session_id: parsed.data.sessionId,
-      character_id: characterId,
-      room_id: roomId,
-      track_id: latest.payload.trackId ?? null,
+  const isLost = latest.eventType === "lead_vehicle_lost";
+  const overlayDetections = isLost
+    ? []
+    : (latest.payload.detections ??
+      (latest.payload.normalizedBoundingBox
+        ? [
+            {
+              trackId: latest.payload.trackId,
+              vehicleType: latest.payload.vehicleType,
+              confidence: latest.payload.confidence,
+              isLead: true,
+              normalizedBoundingBox: latest.payload.normalizedBoundingBox,
+            },
+          ]
+        : []));
+
+  const statePatch: Record<string, unknown> = {
+    live_session_id: parsed.data.sessionId,
+    character_id: characterId,
+    room_id: roomId,
+    overlay_detections: overlayDetections,
+    last_event_type: latest.eventType,
+    last_event_at: new Date(latest.timestampMs).toISOString(),
+    updated_at: new Date().toISOString(),
+    prediction_reasons: latest.payload.predictionReasons ?? [],
+    prediction_blockers: latest.payload.predictionBlockers ?? [],
+  };
+
+  if (isLost) {
+    Object.assign(statePatch, {
+      track_id: null,
+      vehicle_type: null,
+      confidence: null,
+      same_direction_confidence: null,
+      relative_state: null,
+      visible_duration_ms: null,
+      lateral_position: null,
+      prediction_ready: false,
+      prediction_confidence: null,
+      normalized_bbox: null,
+    });
+  } else if (latest.payload.trackId) {
+    Object.assign(statePatch, {
+      track_id: latest.payload.trackId,
       vehicle_type: latest.payload.vehicleType ?? null,
       confidence: latest.payload.confidence ?? null,
       same_direction_confidence: latest.payload.sameDirectionConfidence ?? null,
@@ -91,24 +129,35 @@ export async function ingestLeadVehicleEventsForUser(
       lateral_position: latest.payload.lateralPosition ?? null,
       prediction_ready: latest.payload.predictionReady === true,
       prediction_confidence: latest.payload.predictionConfidence ?? null,
-      prediction_reasons: latest.payload.predictionReasons ?? [],
-      prediction_blockers: latest.payload.predictionBlockers ?? [],
-      last_event_type: latest.eventType,
-      last_event_at: new Date(latest.timestampMs).toISOString(),
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: "live_session_id" },
-  );
+      normalized_bbox: latest.payload.normalizedBoundingBox ?? null,
+    });
+  } else {
+    // Overlay-only frame (searching): update boxes, do not clear lead fields.
+    statePatch.prediction_ready = latest.payload.predictionReady === true;
+    if (latest.payload.predictionConfidence != null) {
+      statePatch.prediction_confidence = latest.payload.predictionConfidence;
+    }
+    if (overlayDetections.length === 0) {
+      statePatch.normalized_bbox = null;
+    }
+  }
 
+  await service.from("character_lead_vehicle_state").upsert(statePatch, {
+    onConflict: "live_session_id",
+  });
+
+  // Open overtake market whenever a lead track is present and no other
+  // market is active (room phase waiting_for_next_market).
   let market: { marketId: string; betType: "overtake_30s" } | { error: string } | null =
     null;
   if (
     roomId &&
-    latest.payload.predictionReady === true &&
+    !isLost &&
     latest.payload.trackId &&
     (latest.eventType === "lead_vehicle_acquired" ||
       latest.eventType === "lead_vehicle_updated" ||
-      latest.eventType === "lead_vehicle_state_changed")
+      latest.eventType === "lead_vehicle_state_changed" ||
+      latest.eventType === "lead_vehicle_changed")
   ) {
     market = await openOvertake30sMarketForRoom(roomId, {
       trackId: latest.payload.trackId,
@@ -127,5 +176,69 @@ export async function ingestLeadVehicleEventsForUser(
         ? { marketId: market.marketId, betType: market.betType }
         : null,
     marketError: market && "error" in market ? market.error : null,
+  };
+}
+
+export type LeadVehicleOverlayState = {
+  trackId: string | null;
+  vehicleType: string | null;
+  confidence: number | null;
+  relativeState: string | null;
+  predictionReady: boolean;
+  normalizedBoundingBox: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  } | null;
+  detections: Array<{
+    trackId?: string;
+    vehicleType?: string;
+    confidence?: number;
+    isLead?: boolean;
+    normalizedBoundingBox: {
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+    };
+  }>;
+  updatedAt: string | null;
+};
+
+export async function getLeadVehicleOverlayState(
+  sessionId: string,
+): Promise<LeadVehicleOverlayState | null> {
+  unstable_noStore();
+  const service = await createServiceClient();
+  const { data } = await service
+    .from("character_lead_vehicle_state")
+    .select(
+      "track_id, vehicle_type, confidence, relative_state, prediction_ready, normalized_bbox, overlay_detections, updated_at",
+    )
+    .eq("live_session_id", sessionId)
+    .maybeSingle();
+  if (!data) return null;
+  const row = data as {
+    track_id: string | null;
+    vehicle_type: string | null;
+    confidence: number | null;
+    relative_state: string | null;
+    prediction_ready: boolean;
+    normalized_bbox: LeadVehicleOverlayState["normalizedBoundingBox"];
+    overlay_detections: LeadVehicleOverlayState["detections"] | null;
+    updated_at: string | null;
+  };
+  return {
+    trackId: row.track_id,
+    vehicleType: row.vehicle_type,
+    confidence: row.confidence,
+    relativeState: row.relative_state,
+    predictionReady: row.prediction_ready === true,
+    normalizedBoundingBox: row.normalized_bbox,
+    detections: Array.isArray(row.overlay_detections)
+      ? row.overlay_detections
+      : [],
+    updatedAt: row.updated_at,
   };
 }
