@@ -105,6 +105,16 @@ export async function ingestLeadVehicleEventsForUser(
     prediction_blockers: latest.payload.predictionBlockers ?? [],
   };
 
+  if (typeof latest.payload.vehiclesOnScreen === "number") {
+    statePatch.vehicles_on_screen = latest.payload.vehiclesOnScreen;
+  }
+  if (typeof latest.payload.vehiclesPassed === "number") {
+    statePatch.vehicles_passed = latest.payload.vehiclesPassed;
+  }
+  if (latest.payload.lastPass) {
+    statePatch.last_pass = latest.payload.lastPass;
+  }
+
   if (isLost) {
     Object.assign(statePatch, {
       track_id: null,
@@ -203,6 +213,13 @@ export type LeadVehicleOverlayState = {
       height: number;
     };
   }>;
+  vehiclesOnScreen: number;
+  vehiclesPassed: number;
+  lastPass: {
+    trackId: string;
+    vehicleType?: string;
+    timestampMs: number;
+  } | null;
   updatedAt: string | null;
 };
 
@@ -214,7 +231,7 @@ export async function getLeadVehicleOverlayState(
   const { data } = await service
     .from("character_lead_vehicle_state")
     .select(
-      "track_id, vehicle_type, confidence, relative_state, prediction_ready, normalized_bbox, overlay_detections, updated_at",
+      "track_id, vehicle_type, confidence, relative_state, prediction_ready, normalized_bbox, overlay_detections, vehicles_on_screen, vehicles_passed, last_pass, updated_at",
     )
     .eq("live_session_id", sessionId)
     .maybeSingle();
@@ -227,6 +244,9 @@ export async function getLeadVehicleOverlayState(
     prediction_ready: boolean;
     normalized_bbox: LeadVehicleOverlayState["normalizedBoundingBox"];
     overlay_detections: LeadVehicleOverlayState["detections"] | null;
+    vehicles_on_screen: number | null;
+    vehicles_passed: number | null;
+    last_pass: LeadVehicleOverlayState["lastPass"];
     updated_at: string | null;
   };
   return {
@@ -239,6 +259,14 @@ export async function getLeadVehicleOverlayState(
     detections: Array.isArray(row.overlay_detections)
       ? row.overlay_detections
       : [],
+    vehiclesOnScreen: row.vehicles_on_screen ?? 0,
+    vehiclesPassed: row.vehicles_passed ?? 0,
+    lastPass:
+      row.last_pass &&
+      typeof row.last_pass === "object" &&
+      typeof (row.last_pass as { trackId?: unknown }).trackId === "string"
+        ? (row.last_pass as LeadVehicleOverlayState["lastPass"])
+        : null,
     updatedAt: row.updated_at,
   };
 }

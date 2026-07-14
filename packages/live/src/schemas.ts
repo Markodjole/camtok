@@ -145,6 +145,15 @@ export const leadVehicleTelemetryEventSchema = z.object({
         )
         .max(20)
         .optional(),
+      vehiclesOnScreen: z.number().int().nonnegative().max(100).optional(),
+      vehiclesPassed: z.number().int().nonnegative().max(100000).optional(),
+      lastPass: z
+        .object({
+          trackId: z.string().max(64),
+          vehicleType: z.string().max(40).optional(),
+          timestampMs: z.number().finite().nonnegative(),
+        })
+        .optional(),
       predictionReady: z.boolean().optional(),
       predictionConfidence: z.number().finite().min(0).max(1).optional(),
       predictionReasons: z.array(z.string().max(64)).max(20).optional(),

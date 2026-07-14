@@ -16,4 +16,9 @@ elapsed → no). See:
 - `apps/web/src/lib/live/market-resolvers/overtake30sResolver.ts`
 - migration `supabase/migrations/00065_lead_vehicle_events_and_overtake_market.sql`
 
+Viewer HUD also shows **ahead / passed** counters from the same vision pipeline
+(grow-then-disappear ≈ pass). Stored on `character_lead_vehicle_state`
+(`vehicles_on_screen`, `vehicles_passed`) and drawn in
+`LeadVehicleViewerOverlay`.
+
 Bettors use the existing live room market UI on web — no new screen for v1.

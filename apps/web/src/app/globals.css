@@ -200,6 +200,29 @@ body {
   transform-box: fill-box;
 }
 
+@keyframes camtokPassPlusOne {
+  0% {
+    opacity: 0;
+    transform: translateY(6px) scale(0.85);
+  }
+  18% {
+    opacity: 1;
+    transform: translateY(0) scale(1.05);
+  }
+  70% {
+    opacity: 1;
+    transform: translateY(-4px) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-14px) scale(0.95);
+  }
+}
+
+.camtok-pass-plus-one {
+  animation: camtokPassPlusOne 900ms ease-out forwards;
+}
+
 /* Mobile viewport fix */
 @supports (height: 100dvh) {
   body {
