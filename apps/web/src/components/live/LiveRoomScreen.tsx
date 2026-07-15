@@ -2503,8 +2503,8 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             key={room.liveSessionId}
             liveSessionId={room.liveSessionId}
             className="h-full w-full"
-            objectFit={isMobileViewport ? "cover" : "contain"}
-            objectPosition={isMobileViewport ? "top" : "center"}
+            objectFit="contain"
+            objectPosition="top"
           />
         ) : (
           <div className="flex h-full w-full items-center justify-center text-xs text-muted-foreground">
