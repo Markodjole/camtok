@@ -187,6 +187,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     message: string;
   } | null>(null);
   const [showReplay, setShowReplay] = useState(false);
+  /** Viewer layout toggle: false = classic (top 1/3 video, map below),
+   *  true = fullscreen stream with the map hidden (for detection testing). */
+  const [streamFullscreen, setStreamFullscreen] = useState(false);
   /** Big center readout: stake committed, then win (green +) or loss (red -). */
   const [centerMoneyFlash, setCenterMoneyFlash] = useState<{
     kind: "stake" | "win" | "loss";
@@ -2477,9 +2480,25 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         />
       )}
 
-      {/* ── Fullscreen video with map overlaid over the bottom ── */}
+      {/* Layout toggle: fullscreen stream vs classic (top video + map) */}
+      <button
+        type="button"
+        onClick={() => setStreamFullscreen((v) => !v)}
+        className="fixed right-3 top-[max(0.75rem,env(safe-area-inset-top))] z-[56] flex h-10 items-center gap-1.5 rounded-full border border-white/20 bg-black/80 px-3 text-xs font-medium text-white/90 active:bg-black/95"
+        title={streamFullscreen ? "Show map" : "Fullscreen stream"}
+        aria-label={streamFullscreen ? "Show map" : "Fullscreen stream"}
+      >
+        {streamFullscreen ? "▣ Map" : "⛶ Fullscreen"}
+      </button>
+
+      {/* ── Video: fullscreen when toggled, else top 1/3 with map below ── */}
       <div
-        className="absolute inset-0 z-[8] flex items-center justify-center overflow-hidden bg-black"
+        className="absolute inset-x-0 top-0 z-[8] flex items-center justify-center overflow-hidden bg-black"
+        style={
+          streamFullscreen
+            ? { bottom: 0 }
+            : { height: "33dvh", minHeight: "33dvh" }
+        }
       >
         {useYoutubeDashcam ? (
           <iframe
@@ -2503,7 +2522,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             key={room.liveSessionId}
             liveSessionId={room.liveSessionId}
             className="h-full w-full"
-            objectFit="contain"
+            objectFit={
+              streamFullscreen ? "contain" : isMobileViewport ? "cover" : "contain"
+            }
             objectPosition="top"
           />
         ) : (
@@ -2524,10 +2545,10 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         ) : null}
       </div>
 
-      {/* Map panel — semi-transparent overlay over the bottom of the video */}
+      {/* Map panel — hidden in fullscreen mode; classic bottom 2/3 otherwise */}
       <div
-        className="absolute inset-x-0 bottom-0 z-[9] overflow-hidden"
-        style={{ height: "58dvh", opacity: 0.7 }}
+        className="absolute inset-x-0 bottom-0 z-0 overflow-hidden"
+        style={{ top: "33dvh", display: streamFullscreen ? "none" : undefined }}
       >
         <LiveMap
           routePoints={routePoints}
