@@ -11,6 +11,17 @@ const VEHICLE_CLASSES = new Set([
 
 export type DetectedVehicle = ServerVehicleDetection;
 
+export type VehicleDetectionResult = {
+  detections: DetectedVehicle[];
+  /** True only when a real object detector ran (boxes reliable enough to count). */
+  countable: boolean;
+};
+
+/** A real detector is configured (Roboflow). LLM vision is not countable. */
+export function hasCountableDetector(): boolean {
+  return !!process.env.ROBOFLOW_API_KEY;
+}
+
 function normalizeBox(
   x: number,
   y: number,
@@ -130,15 +141,17 @@ async function detectWithOpenAi(
 }
 
 /**
- * Server vehicle detector — Roboflow (fast) when configured, else OpenAI vision.
+ * Server vehicle detector — Roboflow (fast, countable) when configured,
+ * else OpenAI vision (overlay-only; too noisy to count reliably).
  */
 export async function detectVehiclesFromJpeg(
   imageBase64: string,
-): Promise<DetectedVehicle[]> {
+): Promise<VehicleDetectionResult> {
   const roboflowKey = process.env.ROBOFLOW_API_KEY;
   if (roboflowKey) {
     try {
-      return await detectWithRoboflow(imageBase64, roboflowKey);
+      const detections = await detectWithRoboflow(imageBase64, roboflowKey);
+      return { detections, countable: true };
     } catch (e) {
       console.warn("[vehicle-infer] Roboflow failed", e);
     }
@@ -147,11 +160,12 @@ export async function detectVehiclesFromJpeg(
   const llmKey = process.env.LLM_API_KEY;
   if (process.env.LLM_PROVIDER === "openai" && llmKey) {
     try {
-      return await detectWithOpenAi(imageBase64, llmKey);
+      const detections = await detectWithOpenAi(imageBase64, llmKey);
+      return { detections, countable: false };
     } catch (e) {
       console.warn("[vehicle-infer] OpenAI vision failed", e);
     }
   }
 
-  return [];
+  return { detections: [], countable: false };
 }

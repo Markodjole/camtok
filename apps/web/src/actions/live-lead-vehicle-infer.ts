@@ -54,11 +54,15 @@ export async function inferLeadVehicleForUser(
   }
 
   const t0 = Date.now();
-  const detections = await detectVehiclesFromJpeg(data.imageBase64);
+  const { detections, countable } = await detectVehiclesFromJpeg(
+    data.imageBase64,
+  );
   const inferenceDurationMs = Date.now() - t0;
 
+  // Only produce an authoritative count when a real detector ran — LLM boxes
+  // are far too noisy to count and would randomize the result.
   let roundCount: number | undefined;
-  if (data.roundId) {
+  if (data.roundId && countable) {
     const counter = getServerRoundCounter(data.sessionId, data.roundId);
     roundCount = counter.observe(detections);
   }
