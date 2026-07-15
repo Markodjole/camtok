@@ -118,6 +118,19 @@ export async function ingestLeadVehicleEventsForUser(
     statePatch.last_pass = latest.payload.lastPass;
   }
 
+  if (latest.eventType === "vehicle_count_round") {
+    if (latest.payload.roundId) {
+      statePatch.count_round_id = latest.payload.roundId;
+    }
+    if (typeof latest.payload.roundCount === "number") {
+      statePatch.count_round_count = latest.payload.roundCount;
+      statePatch.vehicles_passed = latest.payload.roundCount;
+    }
+    statePatch.count_round_counting = latest.payload.roundCounting === true;
+    statePatch.count_round_final = latest.payload.roundFinal === true;
+    statePatch.count_round_updated_at = new Date(latest.timestampMs).toISOString();
+  }
+
   if (isLost) {
     Object.assign(statePatch, {
       track_id: null,
@@ -165,6 +178,7 @@ export async function ingestLeadVehicleEventsForUser(
     null;
   if (
     roomId &&
+    latest.eventType !== "vehicle_count_round" &&
     !isLost &&
     latest.payload.trackId &&
     (latest.eventType === "lead_vehicle_acquired" ||
@@ -218,6 +232,8 @@ export type LeadVehicleOverlayState = {
   }>;
   vehiclesOnScreen: number;
   vehiclesPassed: number;
+  countRoundId: string | null;
+  countRoundCounting: boolean;
   lastPass: {
     trackId: string;
     vehicleType?: string;
@@ -235,7 +251,7 @@ export async function getLeadVehicleOverlayState(
   const { data } = await service
     .from("character_lead_vehicle_state")
     .select(
-      "track_id, vehicle_type, confidence, relative_state, prediction_ready, normalized_bbox, overlay_detections, vehicles_on_screen, vehicles_passed, last_pass, updated_at",
+      "track_id, vehicle_type, confidence, relative_state, prediction_ready, normalized_bbox, overlay_detections, vehicles_on_screen, vehicles_passed, last_pass, count_round_id, count_round_count, count_round_counting, updated_at",
     )
     .eq("live_session_id", sessionId)
     .maybeSingle();
@@ -250,6 +266,9 @@ export async function getLeadVehicleOverlayState(
     overlay_detections: LeadVehicleOverlayState["detections"] | null;
     vehicles_on_screen: number | null;
     vehicles_passed: number | null;
+    count_round_id: string | null;
+    count_round_count: number | null;
+    count_round_counting: boolean | null;
     last_pass: LeadVehicleOverlayState["lastPass"];
     updated_at: string | null;
   };
@@ -264,7 +283,9 @@ export async function getLeadVehicleOverlayState(
       ? row.overlay_detections
       : [],
     vehiclesOnScreen: row.vehicles_on_screen ?? 0,
-    vehiclesPassed: row.vehicles_passed ?? 0,
+    vehiclesPassed: row.vehicles_passed ?? row.count_round_count ?? 0,
+    countRoundId: row.count_round_id,
+    countRoundCounting: row.count_round_counting === true,
     lastPass:
       row.last_pass &&
       typeof row.last_pass === "object" &&

@@ -27,6 +27,7 @@ export const ENGINE_BET_TYPES = new Set<string>([
   "zone_exit_time",  // settle when driver leaves start cell or countdown elapses
   "straight_streak", // settle when driver takes a non-straight at any intersection
   "overtake_30s",    // settle from lead-vehicle lost / 30s window
+  "vehicle_count_30s", // Rush Hour–style count window after bet lock
 ]);
 
 export function isEngineMarketType(marketType: string): boolean {
@@ -124,6 +125,27 @@ export function provisionalOptionsForBetType(type: BetTypeV2): EngineMarketOptio
           label: "Does not overtake within 30s",
           shortLabel: "No",
           displayOrder: 1,
+        },
+      ];
+    case "vehicle_count_30s":
+      return [
+        {
+          id: "count_under_2",
+          label: "Fewer than 2 vehicles",
+          shortLabel: "< 2",
+          displayOrder: 0,
+        },
+        {
+          id: "count_2_to_4",
+          label: "2 to 4 vehicles",
+          shortLabel: "2–4",
+          displayOrder: 1,
+        },
+        {
+          id: "count_over_4",
+          label: "More than 4 vehicles",
+          shortLabel: "> 4",
+          displayOrder: 2,
         },
       ];
     default:

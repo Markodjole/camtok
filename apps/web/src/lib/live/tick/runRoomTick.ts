@@ -20,9 +20,11 @@ import { openNextStepMarketForRoom } from "@/actions/live-next-step-market";
 import { openNextTurnMarketForRoom } from "@/actions/live-next-turn-market";
 import { openStraightStreakMarketForRoom } from "@/actions/live-straight-streak-market";
 import { openOvertake30sMarketForRoom } from "@/actions/live-overtake-market";
+import { openVehicleCount30sMarketForRoom } from "@/actions/live-vehicle-count-market";
 import { lockAndSettleMarket, lockMarket, revealAndSettleMarket, cancelAndRefundMarket } from "@/actions/live-settlement";
 import { isEngineMarketType } from "@/lib/live/betting/engineMarketOptions";
 import { shouldSettleOvertakeMarket } from "@/lib/live/betting/shouldSettleOvertakeMarket";
+import { shouldSettleVehicleCountMarket } from "@/lib/live/betting/shouldSettleVehicleCountMarket";
 import {
   BET_OPEN_WINDOW_MS,
   BET_OPEN_WINDOW_IDLE_MS,
@@ -426,7 +428,12 @@ export async function runRoomTick(
   }
 
   if (phaseNow === "waiting_for_next_market") {
-    // Prefer vision overtake markets when lead vehicle is prediction-ready.
+    // Rush Hour–style vehicle count rounds (no continuous lead tracking required).
+    const countRound = await tryOpenVehicleCountRound(service, roomId);
+    if (countRound) {
+      return { action: "market_open_vehicle_count_30s", ...countRound, settled: settleNotes };
+    }
+
     const overtake = await tryOpenOvertakeFromLeadState(service, roomId, sessionId);
     if (overtake) {
       return { action: "market_open_overtake_30s", ...overtake, settled: settleNotes };
@@ -1892,6 +1899,12 @@ async function sweepPendingSettlements(
           revealAt: (row as { reveal_at: string }).reveal_at,
           subtitle: (row as { subtitle: string | null }).subtitle,
         });
+      } else if (mType === "vehicle_count_30s") {
+        shouldSettle = shouldSettleVehicleCountMarket({
+          locksAt: (row as { locks_at: string }).locks_at,
+          revealAt: (row as { reveal_at: string }).reveal_at,
+          subtitle: (row as { subtitle: string | null }).subtitle,
+        });
       } else {
         // next_step / next_turn / straight_streak: run the same policy evaluator
         // used for locked markets so proximity/heading events fire immediately.
@@ -2042,6 +2055,15 @@ async function sweepPendingSettlements(
   }
 
   return notes;
+}
+
+async function tryOpenVehicleCountRound(
+  service: Awaited<ReturnType<typeof createServiceClient>>,
+  roomId: string,
+): Promise<{ marketId: string; betType: "vehicle_count_30s" } | null> {
+  const res = await openVehicleCount30sMarketForRoom(roomId);
+  if ("error" in res) return null;
+  return res;
 }
 
 async function tryOpenOvertakeFromLeadState(

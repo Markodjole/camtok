@@ -32,6 +32,7 @@ export const TURN_COUNT_HEADING_DELTA_MIN_DEG = 35;
 export const BET_TYPE_PRIORITY_V2: Record<BetTypeV2, number> = {
   next_turn: 100,
   overtake_30s: 95,
+  vehicle_count_30s: 98,
   next_step: 90,
   next_zone: 80,
   zone_exit_time: 75,

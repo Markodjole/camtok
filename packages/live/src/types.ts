@@ -50,7 +50,8 @@ export type LiveMarketType =
   | "next_turn"
   | "straight_streak"
   | "next_step"
-  | "overtake_30s";
+  | "overtake_30s"
+  | "vehicle_count_30s";
 
 export type LiveMarketStatus =
   | "draft"

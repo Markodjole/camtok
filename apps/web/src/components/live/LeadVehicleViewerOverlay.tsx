@@ -50,7 +50,9 @@ export function LeadVehicleViewerOverlay({ liveSessionId, className }: Props) {
   }, [liveSessionId]);
 
   const vehiclesPassed = state?.vehiclesPassed ?? 0;
+  const isCountRound = !!state?.countRoundId;
   useEffect(() => {
+    if (isCountRound) return;
     const prev = prevPassed.current;
     if (vehiclesPassed !== prev) {
       const fromPayload = state?.lastPass?.delta;
@@ -64,7 +66,7 @@ export function LeadVehicleViewerOverlay({ liveSessionId, className }: Props) {
       setFlash({ key: flashKey.current, delta });
     }
     prevPassed.current = vehiclesPassed;
-  }, [vehiclesPassed, state?.lastPass?.delta]);
+  }, [vehiclesPassed, state?.lastPass?.delta, isCountRound]);
 
   const detections =
     state?.detections?.length && state.detections.length > 0
@@ -86,8 +88,9 @@ export function LeadVehicleViewerOverlay({ liveSessionId, className }: Props) {
 
   if (!liveSessionId || !showHud) return null;
 
-  const scoreColor =
-    vehiclesPassed > 0
+  const scoreColor = isCountRound
+    ? "text-emerald-400"
+    : vehiclesPassed > 0
       ? "text-emerald-400"
       : vehiclesPassed < 0
         ? "text-rose-400"
@@ -100,12 +103,21 @@ export function LeadVehicleViewerOverlay({ liveSessionId, className }: Props) {
     >
       <div className="absolute left-3 top-3 flex items-center gap-2">
         <div className="rounded-md bg-black/70 px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-white shadow-sm backdrop-blur-sm">
-          <span className="text-white/70">Passed </span>
-          <span className={`tabular-nums ${scoreColor}`}>
-            {vehiclesPassed > 0 ? `+${vehiclesPassed}` : vehiclesPassed}
+          <span className="text-white/70">
+            {isCountRound ? "Vehicles " : "Passed "}
           </span>
+          <span className={`tabular-nums ${scoreColor}`}>
+            {isCountRound
+              ? vehiclesPassed
+              : vehiclesPassed > 0
+                ? `+${vehiclesPassed}`
+                : vehiclesPassed}
+          </span>
+          {isCountRound && state?.countRoundCounting ? (
+            <span className="ml-2 text-[10px] font-bold text-amber-300">LIVE</span>
+          ) : null}
         </div>
-        {flash ? (
+        {!isCountRound && flash ? (
           <span
             key={flash.key}
             className={`camtok-pass-plus-one rounded-md px-2 py-1 text-xs font-bold text-black ${
@@ -122,9 +134,11 @@ export function LeadVehicleViewerOverlay({ liveSessionId, className }: Props) {
         if (!box || box.width <= 0 || box.height <= 0) return null;
         const isLead = d.isLead === true;
         const color = isLead ? "#22c55e" : "#f59e0b";
-        const label = isLead
-          ? `LEAD ${(d.vehicleType ?? "vehicle").replace("_", " ")}`
-          : (d.vehicleType ?? "vehicle").replace("_", " ");
+        const label = isCountRound
+          ? "vehicle"
+          : isLead
+            ? `LEAD ${(d.vehicleType ?? "vehicle").replace("_", " ")}`
+            : (d.vehicleType ?? "vehicle").replace("_", " ");
         return (
           <div
             key={d.trackId ?? `det-${i}`}

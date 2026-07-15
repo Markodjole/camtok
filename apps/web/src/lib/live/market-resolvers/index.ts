@@ -17,6 +17,7 @@ import { nextTurnResolver } from "./nextTurnResolver";
 import { straightStreakResolver } from "./straightStreakResolver";
 import { zoneExitTimeResolver } from "./zoneExitTimeResolver";
 import { overtake30sResolver } from "./overtake30sResolver";
+import { vehicleCount30sResolver } from "./vehicleCount30sResolver";
 
 export type {
   MarketForResolution,
@@ -39,6 +40,7 @@ const resolverRegistry = new Map<string, MarketResolverFnLocal>([
   ["zone_exit_time", zoneExitTimeResolver],
   ["straight_streak", straightStreakResolver],
   ["overtake_30s", overtake30sResolver],
+  ["vehicle_count_30s", vehicleCount30sResolver],
 ]);
 
 /**

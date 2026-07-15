@@ -19,7 +19,8 @@ export type BetTypeV2 =
   | "next_zone"
   | "zone_exit_time"
   | "straight_streak"
-  | "overtake_30s";
+  | "overtake_30s"
+  | "vehicle_count_30s";
 
 export type VoidReasonV2 =
   | "gps_uncertain"

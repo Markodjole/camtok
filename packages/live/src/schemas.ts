@@ -106,6 +106,7 @@ export const leadVehicleTelemetryEventSchema = z.object({
     "lead_vehicle_state_changed",
     "lead_vehicle_changed",
     "lead_vehicle_lost",
+    "vehicle_count_round",
   ]),
   rideId: z.string().min(1).max(80),
   riderId: z.string().min(1).max(80),
@@ -148,6 +149,10 @@ export const leadVehicleTelemetryEventSchema = z.object({
       vehiclesOnScreen: z.number().int().nonnegative().max(100).optional(),
       /** Net: + we passed them, − they passed us. */
       vehiclesPassed: z.number().int().min(-100000).max(100000).optional(),
+      roundId: z.string().max(80).optional(),
+      roundCount: z.number().int().min(0).max(1000).optional(),
+      roundCounting: z.boolean().optional(),
+      roundFinal: z.boolean().optional(),
       lastPass: z
         .object({
           trackId: z.string().max(64),
@@ -165,7 +170,7 @@ export const leadVehicleTelemetryEventSchema = z.object({
   modelMetadata: z.object({
     modelName: z.string().max(80),
     modelVersion: z.string().max(40),
-    inferenceMode: z.enum(["on_device", "remote", "mock"]),
+    inferenceMode: z.enum(["on_device", "remote", "hybrid", "mock"]),
   }),
 });
 
