@@ -78,9 +78,12 @@ export async function ingestLeadVehicleEventsForUser(
 
   const latest = events[events.length - 1]!;
   const isLost = latest.eventType === "lead_vehicle_lost";
+  const payloadDetections = latest.payload.detections;
   const overlayDetections = isLost
-    ? []
-    : (latest.payload.detections ??
+    ? Array.isArray(payloadDetections)
+      ? payloadDetections
+      : []
+    : (payloadDetections ??
       (latest.payload.normalizedBoundingBox
         ? [
             {
