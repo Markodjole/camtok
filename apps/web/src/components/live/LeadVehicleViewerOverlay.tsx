@@ -166,7 +166,12 @@ export function LeadVehicleViewerOverlay({ liveSessionId, className }: Props) {
           ]
         : [];
 
-  if (!liveSessionId || detections.length === 0) return null;
+  const validDetections = detections.filter((d) => {
+    const box = d.normalizedBoundingBox;
+    return box && box.width > 0 && box.height > 0;
+  });
+
+  if (!liveSessionId || validDetections.length === 0) return null;
 
   return (
     <div
@@ -174,7 +179,17 @@ export function LeadVehicleViewerOverlay({ liveSessionId, className }: Props) {
       className={`pointer-events-none absolute inset-0 z-[12] ${className ?? ""}`}
       aria-hidden
     >
-      {detections.map((d, i) => {
+      <div
+        className="absolute left-2 top-2 rounded-md px-2 py-1 text-sm font-semibold tabular-nums"
+        style={{
+          color: "#22c55e",
+          background: "rgba(0,0,0,0.55)",
+          border: "1px solid #22c55e",
+        }}
+      >
+        {validDetections.length} vehicle{validDetections.length === 1 ? "" : "s"}
+      </div>
+      {validDetections.map((d, i) => {
         const box = d.normalizedBoundingBox;
         if (!box || box.width <= 0 || box.height <= 0) return null;
         const style = content
