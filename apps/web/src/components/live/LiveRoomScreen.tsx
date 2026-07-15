@@ -2477,10 +2477,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         />
       )}
 
-      {/* ── Split layout: dashcam (top 1/3) + map (bottom 2/3) ── */}
+      {/* ── Fullscreen video with map overlaid over the bottom ── */}
       <div
-        className="absolute inset-x-0 top-0 z-[8] flex items-center justify-center overflow-hidden bg-black"
-        style={{ height: "33dvh", minHeight: "33dvh" }}
+        className="absolute inset-0 z-[8] flex items-center justify-center overflow-hidden bg-black"
       >
         {useYoutubeDashcam ? (
           <iframe
@@ -2525,10 +2524,10 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         ) : null}
       </div>
 
-      {/* Map panel — bottom 67% of screen; clip rotated map bleed */}
+      {/* Map panel — semi-transparent overlay over the bottom of the video */}
       <div
-        className="absolute inset-x-0 bottom-0 z-0 overflow-hidden"
-        style={{ top: "33dvh" }}
+        className="absolute inset-x-0 bottom-0 z-[9] overflow-hidden"
+        style={{ height: "58dvh", opacity: 0.7 }}
       >
         <LiveMap
           routePoints={routePoints}
