@@ -8,6 +8,7 @@ const LABELS: Record<BetTypeV2, string> = {
   zone_exit_time: "Time to exit zone",
   straight_streak: "Straights in a row",
   overtake_30s: "Overtake in 30s",
+  vehicle_count_30s: "Vehicle count 30s",
 };
 
 export function betTypeV2Label(type: BetTypeV2): string {

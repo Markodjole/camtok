@@ -31,8 +31,10 @@ export async function vehicleCount30sResolver(
     return { outcome: "refund", reason: "vehicle_count_missing_subtitle" };
   }
 
-  const locksAt = new Date(market.locks_at).getTime();
-  const countDeadline = locksAt + meta.countWindowMs;
+  const opensAt = new Date(market.opens_at).getTime();
+  const countStart = opensAt + meta.betLockMs;
+  const countDeadline = countStart + meta.countWindowMs;
+  const countStartIso = new Date(countStart).toISOString();
 
   const { data: state } = await service
     .from("character_lead_vehicle_state")
@@ -61,7 +63,7 @@ export async function vehicleCount30sResolver(
     .select("payload, client_timestamp_ms, recorded_at")
     .eq("live_session_id", market.live_session_id)
     .eq("event_type", "vehicle_count_round")
-    .gte("recorded_at", market.locks_at)
+    .gte("recorded_at", countStartIso)
     .order("recorded_at", { ascending: false })
     .limit(50);
 
