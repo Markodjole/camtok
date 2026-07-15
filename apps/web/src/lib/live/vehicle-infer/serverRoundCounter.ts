@@ -8,41 +8,44 @@ export type ServerVehicleDetection = {
   boundingBox: { x: number; y: number; width: number; height: number };
 };
 
-const VEHICLE_COUNT_ZONE_TOP = 0.22;
-const VEHICLE_COUNT_ZONE_BOTTOM = 0.9;
-const VEHICLE_COUNT_LINE_Y = 0.55;
-const ROUND_TRACK_MATCH_IOU = 0.18;
+const VEHICLE_COUNT_NEAR_FIELD_Y = 0.5;
+const VEHICLE_COUNT_MIN_DOWNWARD_TRAVEL = 0.06;
+const ROUND_TRACK_MATCH_IOU = 0.15;
+const ROUND_TRACK_MATCH_DIST = 0.14;
 const ROUND_TRACK_MAX_MISSES = 6;
-const ROUND_MIN_HITS = 1;
-const ROUND_MIN_HITS_LOW_CONF = 2;
-const ROUND_MIN_CONFIDENCE = 0.42;
-const ROUND_HIGH_CONFIDENCE = 0.62;
+const ROUND_MIN_HITS = 3;
+const ROUND_MIN_CONFIDENCE = 0.5;
+
+type Box = { x: number; y: number; width: number; height: number };
 
 type RoundTrack = {
   id: string;
   hits: number;
   misses: number;
-  wasAboveLine: boolean;
-  crossed: boolean;
-  inZone: boolean;
+  counted: boolean;
   peakConfidence: number;
-  lastBox: { x: number; y: number; width: number; height: number };
+  minBottomY: number;
+  maxBottomY: number;
+  lastBox: Box;
 };
 
 let nextTrackId = 1;
 
-function boxCenter(box: { x: number; y: number; width: number; height: number }) {
+function boxCenter(box: Box) {
   return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
 }
 
-function boxBottomCenter(box: { x: number; y: number; width: number; height: number }) {
-  return { x: box.x + box.width / 2, y: box.y + box.height };
+function bottomY(box: Box): number {
+  return box.y + box.height;
 }
 
-function iou(
-  a: { x: number; y: number; width: number; height: number },
-  b: { x: number; y: number; width: number; height: number },
-): number {
+function centerDistance(a: Box, b: Box): number {
+  const ca = boxCenter(a);
+  const cb = boxCenter(b);
+  return Math.hypot(ca.x - cb.x, ca.y - cb.y);
+}
+
+function iou(a: Box, b: Box): number {
   const ix1 = Math.max(a.x, b.x);
   const iy1 = Math.max(a.y, b.y);
   const ix2 = Math.min(a.x + a.width, b.x + b.width);
@@ -57,28 +60,24 @@ function iou(
   return inter / union;
 }
 
-function minHitsFor(confidence: number): number {
-  return confidence >= ROUND_HIGH_CONFIDENCE
-    ? ROUND_MIN_HITS
-    : ROUND_MIN_HITS_LOW_CONF;
-}
-
-function centerInCountZone(centerY: number): boolean {
-  return centerY >= VEHICLE_COUNT_ZONE_TOP && centerY <= VEHICLE_COUNT_ZONE_BOTTOM;
+function associationScore(track: RoundTrack, det: ServerVehicleDetection): number {
+  const overlap = iou(track.lastBox, det.boundingBox);
+  if (overlap >= ROUND_TRACK_MATCH_IOU) return 1 + overlap;
+  const dist = centerDistance(track.lastBox, det.boundingBox);
+  if (dist <= ROUND_TRACK_MATCH_DIST) return 1 - dist / ROUND_TRACK_MATCH_DIST;
+  return 0;
 }
 
 export class ServerVehicleCountRoundCounter {
   private roundId: string | null = null;
   private count = 0;
   private tracks = new Map<string, RoundTrack>();
-  private countedIds = new Set<string>();
 
   beginRound(roundId: string): void {
     if (this.roundId === roundId) return;
     this.roundId = roundId;
     this.count = 0;
     this.tracks.clear();
-    this.countedIds.clear();
     nextTrackId = 1;
   }
 
@@ -92,10 +91,8 @@ export class ServerVehicleCountRoundCounter {
 
     for (const [trackId, track] of this.tracks) {
       usable.forEach((det, detIdx) => {
-        const score = iou(track.lastBox, det.boundingBox);
-        if (score >= ROUND_TRACK_MATCH_IOU) {
-          pairs.push({ trackId, detIdx, score });
-        }
+        const score = associationScore(track, det);
+        if (score > 0) pairs.push({ trackId, detIdx, score });
       });
     }
     pairs.sort((a, b) => b.score - a.score);
@@ -117,49 +114,45 @@ export class ServerVehicleCountRoundCounter {
 
     usable.forEach((det, idx) => {
       if (used.has(idx)) return;
-      const center = boxCenter(det.boundingBox);
+      const by = bottomY(det.boundingBox);
       const id = `srv_${nextTrackId++}`;
-      this.tracks.set(id, {
+      const track: RoundTrack = {
         id,
         hits: 1,
         misses: 0,
-        wasAboveLine: center.y < VEHICLE_COUNT_LINE_Y,
-        crossed: false,
-        inZone: centerInCountZone(center.y),
+        counted: false,
         peakConfidence: det.confidence,
+        minBottomY: by,
+        maxBottomY: by,
         lastBox: det.boundingBox,
-      });
+      };
+      this.tracks.set(id, track);
+      this.tryCount(track);
     });
 
     return this.count;
   }
 
   private bump(track: RoundTrack, det: ServerVehicleDetection): void {
-    const center = boxCenter(det.boundingBox);
-    const bottom = boxBottomCenter(det.boundingBox);
+    const by = bottomY(det.boundingBox);
     track.hits += 1;
     track.misses = 0;
     track.peakConfidence = Math.max(track.peakConfidence, det.confidence);
     track.lastBox = det.boundingBox;
-    track.inZone = centerInCountZone(center.y);
-
-    const aboveNow = bottom.y < VEHICLE_COUNT_LINE_Y;
-    if (track.wasAboveLine && !aboveNow && bottom.y >= VEHICLE_COUNT_LINE_Y) {
-      this.tryCount(track);
-    }
-    if (!track.crossed && track.inZone) {
-      this.tryCount(track);
-    }
-    track.wasAboveLine = aboveNow || center.y < VEHICLE_COUNT_LINE_Y;
+    track.minBottomY = Math.min(track.minBottomY, by);
+    track.maxBottomY = Math.max(track.maxBottomY, by);
+    this.tryCount(track);
   }
 
   private tryCount(track: RoundTrack): void {
-    if (track.crossed || this.countedIds.has(track.id)) return;
-    if (track.hits < minHitsFor(track.peakConfidence)) return;
+    if (track.counted) return;
+    if (track.hits < ROUND_MIN_HITS) return;
     if (track.peakConfidence < ROUND_MIN_CONFIDENCE) return;
-    if (!track.inZone && track.hits < ROUND_MIN_HITS_LOW_CONF) return;
-    track.crossed = true;
-    this.countedIds.add(track.id);
+    if (track.maxBottomY < VEHICLE_COUNT_NEAR_FIELD_Y) return;
+    if (track.maxBottomY - track.minBottomY < VEHICLE_COUNT_MIN_DOWNWARD_TRAVEL) {
+      return;
+    }
+    track.counted = true;
     this.count += 1;
   }
 }
