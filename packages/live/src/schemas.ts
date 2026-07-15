@@ -183,6 +183,16 @@ export const leadVehicleEventsInputSchema = z.object({
   message: "event_or_events_required",
 });
 
+export const leadVehicleInferInputSchema = z.object({
+  sessionId: z.string().uuid(),
+  timestampMs: z.number().finite().nonnegative(),
+  frameWidth: z.number().int().positive().max(8192).optional(),
+  frameHeight: z.number().int().positive().max(8192).optional(),
+  rotationDegrees: z.number().int().min(0).max(360).optional(),
+  roundId: z.string().max(80).optional(),
+  imageBase64: z.string().min(32).max(2_000_000).optional(),
+});
+
 export const marketOptionSchema = z.object({
   id: z.string().min(1).max(64),
   label: z.string().min(1).max(80),
@@ -252,6 +262,7 @@ export type LeadVehicleTelemetryEventInput = z.infer<
   typeof leadVehicleTelemetryEventSchema
 >;
 export type LeadVehicleEventsInput = z.infer<typeof leadVehicleEventsInputSchema>;
+export type LeadVehicleInferInput = z.infer<typeof leadVehicleInferInputSchema>;
 export type ProposeMarketInput = z.infer<typeof proposeMarketInputSchema>;
 export type PlaceLiveBetInput = z.infer<typeof placeLiveBetInputSchema>;
 export type MarketOption = z.infer<typeof marketOptionSchema>;
