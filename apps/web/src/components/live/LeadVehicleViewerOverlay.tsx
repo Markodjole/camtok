@@ -154,24 +154,38 @@ export function LeadVehicleViewerOverlay({ liveSessionId, className }: Props) {
     };
   }, [liveSessionId]);
 
-  const detections =
-    state?.detections?.length && state.detections.length > 0
-      ? state.detections
-      : state?.normalizedBoundingBox
-        ? [
-            {
-              trackId: state.trackId ?? undefined,
-              normalizedBoundingBox: state.normalizedBoundingBox,
-            },
-          ]
-        : [];
+  // Single lead vehicle we're following (first isLead detection, else the first).
+  const lead =
+    state?.detections?.find((d) => d.isLead) ??
+    state?.detections?.[0] ??
+    (state?.normalizedBoundingBox
+      ? {
+          trackId: state.trackId ?? undefined,
+          status: state.relativeState ?? undefined,
+          normalizedBoundingBox: state.normalizedBoundingBox,
+        }
+      : undefined);
 
-  const validDetections = detections.filter((d) => {
-    const box = d.normalizedBoundingBox;
-    return box && box.width > 0 && box.height > 0;
-  });
+  const box = lead?.normalizedBoundingBox;
+  if (!liveSessionId || !box || box.width <= 0 || box.height <= 0) return null;
 
-  if (!liveSessionId || validDetections.length === 0) return null;
+  const status = (lead as { status?: string }).status ?? "holding";
+  const label = STATUS_LABELS[status] ?? "Following";
+  const color = STATUS_COLORS[status] ?? "#22c55e";
+
+  const boxStyle = content
+    ? {
+        left: `${content.offsetX + box.x * content.width}px`,
+        top: `${content.offsetY + box.y * content.height}px`,
+        width: `${box.width * content.width}px`,
+        height: `${box.height * content.height}px`,
+      }
+    : {
+        left: `${box.x * 100}%`,
+        top: `${box.y * 100}%`,
+        width: `${box.width * 100}%`,
+        height: `${box.height * 100}%`,
+      };
 
   return (
     <div
@@ -179,44 +193,38 @@ export function LeadVehicleViewerOverlay({ liveSessionId, className }: Props) {
       className={`pointer-events-none absolute inset-0 z-[12] ${className ?? ""}`}
       aria-hidden
     >
-      <div
-        className="absolute left-2 top-2 rounded-md px-2 py-1 text-sm font-semibold tabular-nums"
-        style={{
-          color: "#22c55e",
-          background: "rgba(0,0,0,0.55)",
-          border: "1px solid #22c55e",
-        }}
-      >
-        {validDetections.length} vehicle{validDetections.length === 1 ? "" : "s"}
+      <div className="absolute" style={boxStyle}>
+        <div
+          className="absolute inset-0"
+          style={{ border: `2px solid ${color}`, borderRadius: 4 }}
+        />
+        <div
+          className="absolute left-0 top-0 -translate-y-full whitespace-nowrap rounded px-1.5 py-0.5 text-xs font-semibold"
+          style={{ background: color, color: "#04120a" }}
+        >
+          {label}
+        </div>
       </div>
-      {validDetections.map((d, i) => {
-        const box = d.normalizedBoundingBox;
-        if (!box || box.width <= 0 || box.height <= 0) return null;
-        const style = content
-          ? {
-              left: `${content.offsetX + box.x * content.width}px`,
-              top: `${content.offsetY + box.y * content.height}px`,
-              width: `${box.width * content.width}px`,
-              height: `${box.height * content.height}px`,
-            }
-          : {
-              left: `${box.x * 100}%`,
-              top: `${box.y * 100}%`,
-              width: `${box.width * 100}%`,
-              height: `${box.height * 100}%`,
-            };
-        return (
-          <div
-            key={d.trackId ?? `det-${i}`}
-            className="absolute"
-            style={{
-              ...style,
-              border: "1px solid #22c55e",
-              borderRadius: 2,
-            }}
-          />
-        );
-      })}
     </div>
   );
 }
+
+const STATUS_LABELS: Record<string, string> = {
+  approaching: "Approaching",
+  holding: "Holding",
+  pulling_away: "Pulling away",
+  passed: "Passed ✓",
+  searching: "Searching…",
+  stable_ahead: "Holding",
+  moving_away: "Pulling away",
+};
+
+const STATUS_COLORS: Record<string, string> = {
+  approaching: "#22c55e",
+  holding: "#38bdf8",
+  pulling_away: "#f59e0b",
+  passed: "#22c55e",
+  searching: "#94a3b8",
+  stable_ahead: "#38bdf8",
+  moving_away: "#f59e0b",
+};

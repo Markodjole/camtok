@@ -223,6 +223,7 @@ export type LeadVehicleOverlayState = {
     vehicleType?: string;
     confidence?: number;
     isLead?: boolean;
+    status?: string;
     normalizedBoundingBox: {
       x: number;
       y: number;
