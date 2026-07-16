@@ -259,7 +259,9 @@ export function LeadVehicleViewerOverlay({ liveSessionId, className }: Props) {
         : undefined));
 
   const box = lead?.normalizedBoundingBox;
-  const hasBox = !!box && box.width > 0 && box.height > 0;
+  // "initial" phase = first second of a new follow — draw nothing yet.
+  const hasBox =
+    !!box && box.width > 0 && box.height > 0 && lead?.phase !== "initial";
   if (!liveSessionId || (!hasBox && !passFlash)) return null;
 
   const boxStyle =
@@ -313,8 +315,8 @@ export function LeadVehicleViewerOverlay({ liveSessionId, className }: Props) {
                   }}
                 />
                 <div
-                  className="absolute left-0 top-0 -translate-y-full whitespace-nowrap rounded px-1 py-px text-[10px] font-bold uppercase tracking-wide"
-                  style={{ background: color, color: "#04120a" }}
+                  className="absolute left-0 top-0 -translate-y-full whitespace-nowrap rounded px-1 py-px text-[10px] font-medium"
+                  style={{ background: "rgba(0,0,0,0.55)", color }}
                 >
                   {vehicleLabel(lead)}
                 </div>
@@ -337,9 +339,9 @@ export function LeadVehicleViewerOverlay({ liveSessionId, className }: Props) {
 }
 
 /**
- * Label for the tracked vehicle: class + its two-digit follow number
- * ("Car 🚗 #47"). The number changes only when the follower genuinely
- * switches to another vehicle, making switches visible to the viewer.
+ * Label for the tracked vehicle: plain class + its two-digit follow number
+ * ("car #47"). The number changes only when the follower genuinely switches
+ * to another vehicle, making switches visible to the viewer.
  */
 function vehicleLabel(
   lead: { vehicleType?: string; trackId?: string } | undefined,
@@ -347,22 +349,20 @@ function vehicleLabel(
   let cls: string;
   switch ((lead?.vehicleType ?? "").toLowerCase()) {
     case "motorcycle":
-      cls = "Moto 🏍";
+    case "bicycle":
+      cls = "bike";
       break;
     case "car":
-      cls = "Car 🚗";
+      cls = "car";
       break;
     case "bus":
-      cls = "Bus 🚌";
+      cls = "bus";
       break;
     case "truck":
-      cls = "Truck 🚚";
-      break;
-    case "bicycle":
-      cls = "Bike 🚲";
+      cls = "truck";
       break;
     default:
-      cls = "Tracking";
+      cls = "vehicle";
   }
   const num = /^lead_(\d{2})$/.exec(lead?.trackId ?? "")?.[1];
   return num ? `${cls} #${num}` : cls;
