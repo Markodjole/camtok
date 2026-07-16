@@ -83,6 +83,23 @@ export function LeadVehicleViewerOverlay({ liveSessionId, className }: Props) {
   const [state, setState] = useState<LeadVehicleOverlayState | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [content, setContent] = useState<ContentRect | null>(null);
+  // "+1" flash when the broadcaster passes the vehicle they were following.
+  // Keyed on lastPass identity (not wall clock) so device clock skew is moot.
+  const [passFlash, setPassFlash] = useState(false);
+  const lastPassKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    const lp = state?.lastPass;
+    if (!lp) return;
+    const key = `${lp.trackId}:${lp.timestampMs}`;
+    if (lastPassKeyRef.current === key) return;
+    const isFirst = lastPassKeyRef.current === null;
+    lastPassKeyRef.current = key;
+    // Skip the flash for a stale pass already in state when we first mount.
+    if (isFirst) return;
+    setPassFlash(true);
+    const t = setTimeout(() => setPassFlash(false), 2200);
+    return () => clearTimeout(t);
+  }, [state?.lastPass]);
 
   useEffect(() => {
     if (!liveSessionId) {
@@ -167,21 +184,25 @@ export function LeadVehicleViewerOverlay({ liveSessionId, className }: Props) {
       : undefined);
 
   const box = lead?.normalizedBoundingBox;
-  if (!liveSessionId || !box || box.width <= 0 || box.height <= 0) return null;
+  const hasBox = !!box && box.width > 0 && box.height > 0;
+  if (!liveSessionId || (!hasBox && !passFlash)) return null;
 
-  const boxStyle = content
-    ? {
-        left: `${content.offsetX + box.x * content.width}px`,
-        top: `${content.offsetY + box.y * content.height}px`,
-        width: `${box.width * content.width}px`,
-        height: `${box.height * content.height}px`,
-      }
-    : {
-        left: `${box.x * 100}%`,
-        top: `${box.y * 100}%`,
-        width: `${box.width * 100}%`,
-        height: `${box.height * 100}%`,
-      };
+  const boxStyle =
+    hasBox && box
+      ? content
+        ? {
+            left: `${content.offsetX + box.x * content.width}px`,
+            top: `${content.offsetY + box.y * content.height}px`,
+            width: `${box.width * content.width}px`,
+            height: `${box.height * content.height}px`,
+          }
+        : {
+            left: `${box.x * 100}%`,
+            top: `${box.y * 100}%`,
+            width: `${box.width * 100}%`,
+            height: `${box.height * 100}%`,
+          }
+      : null;
 
   return (
     <div
@@ -190,14 +211,25 @@ export function LeadVehicleViewerOverlay({ liveSessionId, className }: Props) {
       aria-hidden
     >
       {/* One thin square around the followed lead vehicle — nothing else. */}
-      <div
-        className="absolute"
-        style={{
-          ...boxStyle,
-          border: "1.5px solid #22c55e",
-          borderRadius: 3,
-        }}
-      />
+      {boxStyle ? (
+        <div
+          className="absolute"
+          style={{
+            ...boxStyle,
+            border: "1.5px solid #22c55e",
+            borderRadius: 3,
+          }}
+        />
+      ) : null}
+      {/* Brief "+1" when the broadcaster overtakes the followed vehicle. */}
+      {passFlash ? (
+        <div
+          className="absolute left-1/2 top-[22%] -translate-x-1/2 rounded-full px-3 py-1 text-lg font-bold"
+          style={{ color: "#22c55e", background: "rgba(0,0,0,0.6)" }}
+        >
+          +1 passed
+        </div>
+      ) : null}
     </div>
   );
 }
