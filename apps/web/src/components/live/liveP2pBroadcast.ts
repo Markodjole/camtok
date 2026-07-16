@@ -665,6 +665,21 @@ export async function startViewerP2p(
     closeViewerPc();
     if (cleaned) { processingUfrag = null; return; }
     const newPc = new RTCPeerConnection(iceConfig);
+    // Realtime lead-vehicle boxes from the broadcaster phone — skips the
+    // HTTP/DB round-trip so the overlay square tracks with ~50ms latency.
+    newPc.ondatachannel = (e) => {
+      if (e.channel.label !== "camtok-lead") return;
+      e.channel.onmessage = (m) => {
+        try {
+          const data = JSON.parse(String(m.data));
+          window.dispatchEvent(
+            new CustomEvent("camtok:lead-vehicle", { detail: data }),
+          );
+        } catch {
+          // malformed frame — ignore
+        }
+      };
+    };
     const { vcSent, sendVcCand } = wire(newPc, ufrag);
     pc = newPc;
     try {

@@ -79,26 +79,81 @@ function measureContent(video: HTMLVideoElement | null): ContentRect | null {
  * Viewer-only overlay: one thin green square around the single lead vehicle
  * the broadcaster is following. No labels, no counting, no status colors.
  */
+/** Wire format of realtime box messages from the broadcaster's data channel. */
+type RtWire = {
+  v: 1;
+  t: number;
+  lead: {
+    id: string;
+    type: string;
+    status: string;
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+  } | null;
+  pass?: { id: string; t: number };
+};
+
+/** Realtime data considered live for this long after the last message. */
+const RT_FRESH_MS = 1500;
+
 export function LeadVehicleViewerOverlay({ liveSessionId, className }: Props) {
   const [state, setState] = useState<LeadVehicleOverlayState | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [content, setContent] = useState<ContentRect | null>(null);
+  // Realtime boxes over the P2P data channel (~50ms). HTTP polling below is
+  // the fallback when the channel is absent (old app build, channel dropped).
+  const [rt, setRt] = useState<{ lead: RtWire["lead"]; at: number } | null>(
+    null,
+  );
+  const rtLastMsgRef = useRef(0);
   // "+1" flash when the broadcaster passes the vehicle they were following.
-  // Keyed on lastPass identity (not wall clock) so device clock skew is moot.
+  // Keyed on pass identity (not wall clock) so device clock skew is moot.
   const [passFlash, setPassFlash] = useState(false);
   const lastPassKeyRef = useRef<string | null>(null);
-  useEffect(() => {
-    const lp = state?.lastPass;
-    if (!lp) return;
-    const key = `${lp.trackId}:${lp.timestampMs}`;
+  const passFlashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const triggerPassFlash = (key: string, skipIfFirst: boolean) => {
     if (lastPassKeyRef.current === key) return;
     const isFirst = lastPassKeyRef.current === null;
     lastPassKeyRef.current = key;
-    // Skip the flash for a stale pass already in state when we first mount.
-    if (isFirst) return;
+    // Skip a stale pass already present when we first mount.
+    if (isFirst && skipIfFirst) return;
     setPassFlash(true);
-    const t = setTimeout(() => setPassFlash(false), 2200);
-    return () => clearTimeout(t);
+    if (passFlashTimerRef.current) clearTimeout(passFlashTimerRef.current);
+    passFlashTimerRef.current = setTimeout(() => setPassFlash(false), 2200);
+  };
+
+  useEffect(() => {
+    const onMsg = (e: Event) => {
+      const d = (e as CustomEvent).detail as RtWire | undefined;
+      if (!d || d.v !== 1) return;
+      rtLastMsgRef.current = Date.now();
+      setRt({ lead: d.lead, at: Date.now() });
+      if (d.pass) triggerPassFlash(`${d.pass.id}:${d.pass.t}`, false);
+    };
+    window.addEventListener("camtok:lead-vehicle", onMsg);
+    // Sweep: when messages stop (stream ended, channel dropped), clear the
+    // frozen realtime box and let HTTP fallback take over.
+    const sweep = setInterval(() => {
+      if (rtLastMsgRef.current && Date.now() - rtLastMsgRef.current > RT_FRESH_MS) {
+        setRt(null);
+      }
+    }, 500);
+    return () => {
+      window.removeEventListener("camtok:lead-vehicle", onMsg);
+      clearInterval(sweep);
+      if (passFlashTimerRef.current) clearTimeout(passFlashTimerRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const lp = state?.lastPass;
+    if (!lp) return;
+    triggerPassFlash(`${lp.trackId}:${lp.timestampMs}`, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state?.lastPass]);
 
   useEffect(() => {
@@ -108,6 +163,8 @@ export function LeadVehicleViewerOverlay({ liveSessionId, className }: Props) {
     }
     let stopped = false;
     const tick = async () => {
+      // Realtime channel is live — don't waste requests on the fallback.
+      if (Date.now() - rtLastMsgRef.current < RT_FRESH_MS) return;
       try {
         const res = await fetch(
           `/api/live/sessions/${liveSessionId}/lead-vehicle`,
@@ -171,18 +228,32 @@ export function LeadVehicleViewerOverlay({ liveSessionId, className }: Props) {
     };
   }, [liveSessionId]);
 
-  // Single lead vehicle we're following (first isLead detection, else the first).
-  const lead =
-    state?.detections?.find((d) => d.isLead) ??
-    state?.detections?.[0] ??
-    (state?.normalizedBoundingBox
+  // Single lead vehicle we're following. Realtime channel wins when live;
+  // otherwise fall back to the polled server state.
+  const lead = rt
+    ? rt.lead
       ? {
-          trackId: state.trackId ?? undefined,
-          vehicleType: state.vehicleType ?? undefined,
-          status: state.relativeState ?? undefined,
-          normalizedBoundingBox: state.normalizedBoundingBox,
+          trackId: rt.lead.id,
+          vehicleType: rt.lead.type,
+          status: rt.lead.status,
+          normalizedBoundingBox: {
+            x: rt.lead.x,
+            y: rt.lead.y,
+            width: rt.lead.w,
+            height: rt.lead.h,
+          },
         }
-      : undefined);
+      : undefined
+    : (state?.detections?.find((d) => d.isLead) ??
+      state?.detections?.[0] ??
+      (state?.normalizedBoundingBox
+        ? {
+            trackId: state.trackId ?? undefined,
+            vehicleType: state.vehicleType ?? undefined,
+            status: state.relativeState ?? undefined,
+            normalizedBoundingBox: state.normalizedBoundingBox,
+          }
+        : undefined));
 
   const box = lead?.normalizedBoundingBox;
   const hasBox = !!box && box.width > 0 && box.height > 0;
@@ -212,9 +283,18 @@ export function LeadVehicleViewerOverlay({ liveSessionId, className }: Props) {
       aria-hidden
     >
       {/* One thin square around the followed lead vehicle, labeled with the
-          vehicle class so the viewer knows exactly what is being tracked. */}
+          vehicle class so the viewer knows exactly what is being tracked.
+          The CSS transition interpolates between ~5Hz box updates so the
+          square glides with the vehicle instead of stepping. */}
       {boxStyle ? (
-        <div className="absolute" style={boxStyle}>
+        <div
+          className="absolute"
+          style={{
+            ...boxStyle,
+            transition:
+              "left 200ms linear, top 200ms linear, width 200ms linear, height 200ms linear",
+          }}
+        >
           <div
             className="absolute inset-0"
             style={{ border: "1.5px solid #22c55e", borderRadius: 3 }}
