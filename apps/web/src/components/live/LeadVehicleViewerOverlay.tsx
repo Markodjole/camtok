@@ -178,6 +178,7 @@ export function LeadVehicleViewerOverlay({ liveSessionId, className }: Props) {
     (state?.normalizedBoundingBox
       ? {
           trackId: state.trackId ?? undefined,
+          vehicleType: state.vehicleType ?? undefined,
           status: state.relativeState ?? undefined,
           normalizedBoundingBox: state.normalizedBoundingBox,
         }
@@ -210,16 +211,21 @@ export function LeadVehicleViewerOverlay({ liveSessionId, className }: Props) {
       className={`pointer-events-none absolute inset-0 z-[12] ${className ?? ""}`}
       aria-hidden
     >
-      {/* One thin square around the followed lead vehicle — nothing else. */}
+      {/* One thin square around the followed lead vehicle, labeled with the
+          vehicle class so the viewer knows exactly what is being tracked. */}
       {boxStyle ? (
-        <div
-          className="absolute"
-          style={{
-            ...boxStyle,
-            border: "1.5px solid #22c55e",
-            borderRadius: 3,
-          }}
-        />
+        <div className="absolute" style={boxStyle}>
+          <div
+            className="absolute inset-0"
+            style={{ border: "1.5px solid #22c55e", borderRadius: 3 }}
+          />
+          <div
+            className="absolute left-0 top-0 -translate-y-full whitespace-nowrap rounded px-1 py-px text-[10px] font-bold uppercase tracking-wide"
+            style={{ background: "#22c55e", color: "#04120a" }}
+          >
+            {vehicleLabel(lead)}
+          </div>
+        </div>
       ) : null}
       {/* Brief "+1" when the broadcaster overtakes the followed vehicle. */}
       {passFlash ? (
@@ -232,4 +238,22 @@ export function LeadVehicleViewerOverlay({ liveSessionId, className }: Props) {
       ) : null}
     </div>
   );
+}
+
+/** Human label for the tracked vehicle class ("motorcycle" → "Moto 🏍"). */
+function vehicleLabel(lead: { vehicleType?: string } | undefined): string {
+  switch ((lead?.vehicleType ?? "").toLowerCase()) {
+    case "motorcycle":
+      return "Moto 🏍";
+    case "car":
+      return "Car 🚗";
+    case "bus":
+      return "Bus 🚌";
+    case "truck":
+      return "Truck 🚚";
+    case "bicycle":
+      return "Bike 🚲";
+    default:
+      return "Tracking";
+  }
 }
