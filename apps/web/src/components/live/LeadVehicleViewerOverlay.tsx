@@ -87,6 +87,7 @@ type RtWire = {
     id: string;
     type: string;
     status: string;
+    phase?: string;
     x: number;
     y: number;
     w: number;
@@ -236,6 +237,7 @@ export function LeadVehicleViewerOverlay({ liveSessionId, className }: Props) {
           trackId: rt.lead.id,
           vehicleType: rt.lead.type,
           status: rt.lead.status,
+          phase: rt.lead.phase,
           normalizedBoundingBox: {
             x: rt.lead.x,
             y: rt.lead.y,
@@ -251,6 +253,7 @@ export function LeadVehicleViewerOverlay({ liveSessionId, className }: Props) {
             trackId: state.trackId ?? undefined,
             vehicleType: state.vehicleType ?? undefined,
             status: state.relativeState ?? undefined,
+            phase: undefined as string | undefined,
             normalizedBoundingBox: state.normalizedBoundingBox,
           }
         : undefined));
@@ -282,10 +285,10 @@ export function LeadVehicleViewerOverlay({ liveSessionId, className }: Props) {
       className={`pointer-events-none absolute inset-0 z-[12] ${className ?? ""}`}
       aria-hidden
     >
-      {/* One thin square around the followed lead vehicle, labeled with the
-          vehicle class so the viewer knows exactly what is being tracked.
-          The CSS transition interpolates between ~5Hz box updates so the
-          square glides with the vehicle instead of stepping. */}
+      {/* One thin square around the followed lead vehicle:
+          dashed blue while the speed match is being verified (~3s of stable
+          distance), solid green once locked. The CSS transition interpolates
+          between ~5Hz box updates so the square glides with the vehicle. */}
       {boxStyle ? (
         <div
           className="absolute"
@@ -295,16 +298,29 @@ export function LeadVehicleViewerOverlay({ liveSessionId, className }: Props) {
               "left 200ms linear, top 200ms linear, width 200ms linear, height 200ms linear",
           }}
         >
-          <div
-            className="absolute inset-0"
-            style={{ border: "1.5px solid #22c55e", borderRadius: 3 }}
-          />
-          <div
-            className="absolute left-0 top-0 -translate-y-full whitespace-nowrap rounded px-1 py-px text-[10px] font-bold uppercase tracking-wide"
-            style={{ background: "#22c55e", color: "#04120a" }}
-          >
-            {vehicleLabel(lead)}
-          </div>
+          {(() => {
+            const evaluating = lead?.phase === "evaluating";
+            const color = evaluating ? "#38bdf8" : "#22c55e";
+            return (
+              <>
+                <div
+                  className="absolute inset-0"
+                  style={{
+                    border: evaluating
+                      ? `1.5px dashed ${color}`
+                      : `1.5px solid ${color}`,
+                    borderRadius: 3,
+                  }}
+                />
+                <div
+                  className="absolute left-0 top-0 -translate-y-full whitespace-nowrap rounded px-1 py-px text-[10px] font-bold uppercase tracking-wide"
+                  style={{ background: color, color: "#04120a" }}
+                >
+                  {vehicleLabel(lead)}
+                </div>
+              </>
+            );
+          })()}
         </div>
       ) : null}
       {/* Brief "+1" when the broadcaster overtakes the followed vehicle. */}

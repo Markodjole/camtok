@@ -224,6 +224,8 @@ export type LeadVehicleOverlayState = {
     confidence?: number;
     isLead?: boolean;
     status?: string;
+    /** "evaluating" (dashed blue) / "locked" (solid green). */
+    phase?: string;
     normalizedBoundingBox: {
       x: number;
       y: number;

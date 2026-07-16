@@ -136,6 +136,11 @@ export const leadVehicleTelemetryEventSchema = z.object({
             vehicleType: z.string().max(40).optional(),
             confidence: z.number().finite().min(0).max(1).optional(),
             isLead: z.boolean().optional(),
+            /** Follow status (approaching/holding/…) — zod strips unknown
+             *  keys, so these must be declared or the viewer never sees them. */
+            status: z.string().max(32).optional(),
+            /** "evaluating" (dashed blue) / "locked" (solid green). */
+            phase: z.string().max(16).optional(),
             normalizedBoundingBox: z.object({
               x: z.number().finite(),
               y: z.number().finite(),
