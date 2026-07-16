@@ -76,8 +76,8 @@ function measureContent(video: HTMLVideoElement | null): ContentRect | null {
 }
 
 /**
- * Viewer-only overlay: draws a very thin green square around every vehicle the
- * broadcaster's on-device detector currently sees. No labels, no counting.
+ * Viewer-only overlay: one thin green square around the single lead vehicle
+ * the broadcaster is following. No labels, no counting, no status colors.
  */
 export function LeadVehicleViewerOverlay({ liveSessionId, className }: Props) {
   const [state, setState] = useState<LeadVehicleOverlayState | null>(null);
@@ -169,10 +169,6 @@ export function LeadVehicleViewerOverlay({ liveSessionId, className }: Props) {
   const box = lead?.normalizedBoundingBox;
   if (!liveSessionId || !box || box.width <= 0 || box.height <= 0) return null;
 
-  const status = (lead as { status?: string }).status ?? "holding";
-  const label = STATUS_LABELS[status] ?? "Following";
-  const color = STATUS_COLORS[status] ?? "#22c55e";
-
   const boxStyle = content
     ? {
         left: `${content.offsetX + box.x * content.width}px`,
@@ -193,38 +189,15 @@ export function LeadVehicleViewerOverlay({ liveSessionId, className }: Props) {
       className={`pointer-events-none absolute inset-0 z-[12] ${className ?? ""}`}
       aria-hidden
     >
-      <div className="absolute" style={boxStyle}>
-        <div
-          className="absolute inset-0"
-          style={{ border: `2px solid ${color}`, borderRadius: 4 }}
-        />
-        <div
-          className="absolute left-0 top-0 -translate-y-full whitespace-nowrap rounded px-1.5 py-0.5 text-xs font-semibold"
-          style={{ background: color, color: "#04120a" }}
-        >
-          {label}
-        </div>
-      </div>
+      {/* One thin square around the followed lead vehicle — nothing else. */}
+      <div
+        className="absolute"
+        style={{
+          ...boxStyle,
+          border: "1.5px solid #22c55e",
+          borderRadius: 3,
+        }}
+      />
     </div>
   );
 }
-
-const STATUS_LABELS: Record<string, string> = {
-  approaching: "Approaching",
-  holding: "Holding",
-  pulling_away: "Pulling away",
-  passed: "Passed ✓",
-  searching: "Searching…",
-  stable_ahead: "Holding",
-  moving_away: "Pulling away",
-};
-
-const STATUS_COLORS: Record<string, string> = {
-  approaching: "#22c55e",
-  holding: "#38bdf8",
-  pulling_away: "#f59e0b",
-  passed: "#22c55e",
-  searching: "#94a3b8",
-  stable_ahead: "#38bdf8",
-  moving_away: "#f59e0b",
-};
