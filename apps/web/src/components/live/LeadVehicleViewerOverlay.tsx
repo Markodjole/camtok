@@ -320,20 +320,34 @@ export function LeadVehicleViewerOverlay({ liveSessionId, className }: Props) {
   );
 }
 
-/** Human label for the tracked vehicle class ("motorcycle" → "Moto 🏍"). */
-function vehicleLabel(lead: { vehicleType?: string } | undefined): string {
+/**
+ * Label for the tracked vehicle: class + its two-digit follow number
+ * ("Car 🚗 #47"). The number changes only when the follower genuinely
+ * switches to another vehicle, making switches visible to the viewer.
+ */
+function vehicleLabel(
+  lead: { vehicleType?: string; trackId?: string } | undefined,
+): string {
+  let cls: string;
   switch ((lead?.vehicleType ?? "").toLowerCase()) {
     case "motorcycle":
-      return "Moto 🏍";
+      cls = "Moto 🏍";
+      break;
     case "car":
-      return "Car 🚗";
+      cls = "Car 🚗";
+      break;
     case "bus":
-      return "Bus 🚌";
+      cls = "Bus 🚌";
+      break;
     case "truck":
-      return "Truck 🚚";
+      cls = "Truck 🚚";
+      break;
     case "bicycle":
-      return "Bike 🚲";
+      cls = "Bike 🚲";
+      break;
     default:
-      return "Tracking";
+      cls = "Tracking";
   }
+  const num = /^lead_(\d{2})$/.exec(lead?.trackId ?? "")?.[1];
+  return num ? `${cls} #${num}` : cls;
 }
