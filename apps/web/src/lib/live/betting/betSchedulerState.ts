@@ -61,6 +61,10 @@ export function buildBetOpenContext(
   mainMarketType: string | null,
   stepMarketOpen: boolean,
   nowMs: number = Date.now(),
+  singleGate?: {
+    activeMarketId: string | null;
+    msSinceLastClose: number | null;
+  },
 ): BetOpenContext {
   return {
     nowMs,
@@ -76,6 +80,7 @@ export function buildBetOpenContext(
       marketId: room.current_step_market_id,
       bettingOpen: room.current_step_market_id != null && stepMarketOpen,
     },
+    singleGate,
   };
 }
 

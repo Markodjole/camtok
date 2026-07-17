@@ -21,8 +21,8 @@ import {
 export const BET_SCHEDULE_RULES = {
   /** Min ms between opening any two bet popups. */
   minGapBetweenOpensMs: 5_000,
-  /** Max popups where viewers can still place bets at the same time. */
-  maxBettingPopups: 2,
+  /** ONE bet at a time — viewers must be able to track a single thing. */
+  maxBettingPopups: 1,
 } as const;
 
 // ─── Trigger ↔ market mapping ────────────────────────────────────────────────
@@ -141,6 +141,15 @@ export type BetOpenContext = {
     /** True when step market status is open. */
     bettingOpen: boolean;
   };
+  /**
+   * One-bet-at-a-time gate (any unsettled market of any type, and time since
+   * the previous market closed). When present it takes precedence over the
+   * slot-based popup accounting.
+   */
+  singleGate?: {
+    activeMarketId: string | null;
+    msSinceLastClose: number | null;
+  };
 };
 
 export type BetOpenEvaluation = {
@@ -179,6 +188,9 @@ function activeBettingPopupCount(ctx: BetOpenContext): number {
   return n;
 }
 
+/** New bets must wait this long after the previous bet closed. */
+export const MIN_GAP_AFTER_CLOSE_MS = 10_000;
+
 export function evaluateBetOpen(
   triggerType: BetTriggerType,
   ctx: BetOpenContext,
@@ -196,6 +208,25 @@ export function evaluateBetOpen(
       code: "MIN_GAP",
       retryAfterMs: BET_SCHEDULE_RULES.minGapBetweenOpensMs - sinceLast,
     };
+  }
+
+  // One bet at a time, 10s of air after the previous one closes — viewers
+  // must always be able to tell what they are betting on.
+  if (ctx.singleGate) {
+    if (ctx.singleGate.activeMarketId) {
+      return { allowed: false, code: "ANY_BETTING_ACTIVE" };
+    }
+    if (
+      ctx.singleGate.msSinceLastClose != null &&
+      ctx.singleGate.msSinceLastClose < MIN_GAP_AFTER_CLOSE_MS
+    ) {
+      return {
+        allowed: false,
+        code: "MIN_GAP",
+        retryAfterMs:
+          MIN_GAP_AFTER_CLOSE_MS - ctx.singleGate.msSinceLastClose,
+      };
+    }
   }
 
   if (rule.cellDwellMs != null) {

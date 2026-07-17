@@ -24,6 +24,10 @@ import { openVehicleCount30sMarketForRoom } from "@/actions/live-vehicle-count-m
 import { lockAndSettleMarket, lockMarket, revealAndSettleMarket, cancelAndRefundMarket } from "@/actions/live-settlement";
 import { isEngineMarketType } from "@/lib/live/betting/engineMarketOptions";
 import { shouldSettleOvertakeMarket } from "@/lib/live/betting/shouldSettleOvertakeMarket";
+import {
+  loadSingleMarketGate,
+  singleMarketGateAllows,
+} from "@/lib/live/betting/singleMarketGate";
 import { shouldSettleVehicleCountMarket } from "@/lib/live/betting/shouldSettleVehicleCountMarket";
 import {
   BET_OPEN_WINDOW_MS,
@@ -376,6 +380,9 @@ export async function runRoomTick(
 
   const mainMarketType = await resolveMainMarketType(service, marketIdNow);
   const stepMarketOpen = await resolveStepMarketOpen(service, stepMarketIdNow);
+  // One-bet-at-a-time: any unsettled market of any type blocks new opens,
+  // and new opens must wait 10s after the previous market closed.
+  const singleGate = await loadSingleMarketGate(service, sessionId);
   const openCtx = buildBetOpenContext(
     scheduler,
     {
@@ -385,6 +392,8 @@ export async function runRoomTick(
     },
     mainMarketType,
     stepMarketOpen,
+    Date.now(),
+    singleGate,
   );
 
   if (phaseNow === "market_open") {
@@ -396,45 +405,25 @@ export async function runRoomTick(
         .eq("id", roomId);
     }
 
-    if (
-      !stepMarketIdNow &&
-      NEXT_STEP_BETS_ENABLED &&
-      evaluateBetOpen("next_step", openCtx).allowed
-    ) {
-      const stepTrigger = rawFreshTriggers.find((t) => t.type === "next_step");
-      if (stepTrigger) {
-        const res = await openNextStepMarketForRoom(roomId, {
-          windowMs: BET_OPEN_WINDOW_IDLE_MS,
-          stepKey: stepTrigger.stepKey,
-          stepLat: stepTrigger.stepLat,
-          stepLng: stepTrigger.stepLng,
-          maneuverType: stepTrigger.maneuverType,
-          maneuverModifier: stepTrigger.maneuverModifier,
-          stepName: stepTrigger.maneuverType === "camera" ? undefined : stepTrigger.stepName,
-        });
-        if ("marketId" in res && res.marketId) {
-          scheduler = await recordBetOpened(service, roomId, scheduler);
-          return {
-            action: "opened_next_step_concurrent",
-            marketId: res.marketId,
-            queued: updatedQueue.length,
-            settled: settleNotes,
-          };
-        }
-      }
-    }
-
+    // One bet at a time: no concurrent step market while the main bet runs.
     return { action: "market_open_queued", queued: updatedQueue.length, settled: settleNotes };
   }
 
   if (phaseNow === "waiting_for_next_market") {
+    // One-bet-at-a-time + 10s-after-close gate applies to vehicle markets too.
+    const vehicleGateOk = singleMarketGateAllows(singleGate).allowed;
+
     // Rush Hour–style vehicle count rounds (no continuous lead tracking required).
-    const countRound = await tryOpenVehicleCountRound(service, roomId);
+    const countRound = vehicleGateOk
+      ? await tryOpenVehicleCountRound(service, roomId)
+      : null;
     if (countRound) {
       return { action: "market_open_vehicle_count_30s", ...countRound, settled: settleNotes };
     }
 
-    const overtake = await tryOpenOvertakeFromLeadState(service, roomId, sessionId);
+    const overtake = vehicleGateOk
+      ? await tryOpenOvertakeFromLeadState(service, roomId, sessionId)
+      : null;
     if (overtake) {
       return { action: "market_open_overtake_30s", ...overtake, settled: settleNotes };
     }

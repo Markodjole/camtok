@@ -2035,7 +2035,25 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
     [betFeedEntries],
   );
 
-  const betFeedVisible = sortedBetFeedEntries.length > 0;
+  /**
+   * ONE clear bet at a time, matched to what the viewer is looking at:
+   * video fullscreen → only stream-relation bets (lead vehicle / counting);
+   * map fullscreen → only map bets. Server enforces single active market;
+   * the slice(0, 1) is a belt-and-suspenders guarantee for the UI.
+   */
+  const visibleBetFeedEntries = useMemo(() => {
+    const isStreamBet = (t: string) =>
+      t === "overtake_30s" || t === "vehicle_count_30s";
+    return sortedBetFeedEntries
+      .filter((e) =>
+        videoFullscreen
+          ? isStreamBet(e.market.marketType)
+          : !isStreamBet(e.market.marketType),
+      )
+      .slice(0, 1);
+  }, [sortedBetFeedEntries, videoFullscreen]);
+
+  const betFeedVisible = visibleBetFeedEntries.length > 0;
 
   const betMapHighlights = useMemo(() => {
     const now = Date.now();
@@ -2858,9 +2876,9 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
       {/* ── Bottom gradient scrim ────────────────────────── */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-44 bg-gradient-to-t from-black/70 to-transparent" />
 
-      {/* ── Bet feed (full-width stacked cards) ───────────── */}
-      {sortedBetFeedEntries.length > 0 ? (
-        <BetFeedStack entries={sortedBetFeedEntries}>
+      {/* ── Bet feed: one clear bet card, matched to the current view ── */}
+      {visibleBetFeedEntries.length > 0 ? (
+        <BetFeedStack entries={visibleBetFeedEntries}>
           {(entry) => {
             const market = entry.market;
             const isLive = feedEntryIsLive(entry);
@@ -2894,7 +2912,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
               <BetFeedCard
                 key={entry.marketId}
                 stackSlot={entry.stackSlot}
-                maxStackSlot={Math.max(...sortedBetFeedEntries.map((e) => e.stackSlot))}
+                maxStackSlot={Math.max(...visibleBetFeedEntries.map((e) => e.stackSlot))}
                 marketType={market.marketType}
                 title={title}
                 betPlaced={entry.betPlaced}

@@ -4,6 +4,10 @@ import { unstable_noStore } from "next/cache";
 import { createServiceClient } from "@/lib/supabase/server";
 import type { LiveMarketOption } from "@bettok/live";
 import { computeEqualOdds } from "@/lib/live/betting/marketOdds";
+import {
+  loadSingleMarketGate,
+  singleMarketGateAllows,
+} from "@/lib/live/betting/singleMarketGate";
 
 export type Overtake30sSubtitle = {
   trackId: string;
@@ -50,6 +54,17 @@ export async function openOvertake30sMarketForRoom(
 
   const sessionId = (room as { live_session_id: string | null }).live_session_id;
   if (!sessionId) return { error: "no_live_session" };
+
+  // One bet at a time, 10s after the previous one closes — this action is
+  // also reachable from telemetry ingest, so the gate lives here too.
+  const gate = singleMarketGateAllows(
+    await loadSingleMarketGate(service, sessionId),
+  );
+  if (!gate.allowed) {
+    return {
+      error: gate.code === "MARKET_ACTIVE" ? "market_active" : "close_gap",
+    };
+  }
 
   // De-dupe: one open overtake market per trackId per session.
   const { data: prior } = await service
