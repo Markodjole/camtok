@@ -192,6 +192,29 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
   /** false = fullscreen map with mini video (top-left); true = fullscreen
    *  video with mini map (bottom-left). Tap the mini tile to swap. */
   const [videoFullscreen, setVideoFullscreen] = useState(false);
+
+  /** True while the broadcaster is locked (green) on a lead vehicle — used to
+   *  make the mini video tile pulse green so map-mode viewers know there's a
+   *  live follow worth tapping into. Fed by the P2P data channel. */
+  const [leadLocked, setLeadLocked] = useState(false);
+  useEffect(() => {
+    let staleTimer: ReturnType<typeof setTimeout> | null = null;
+    const onLead = (e: Event) => {
+      const d = (e as CustomEvent).detail as
+        | { lead?: { phase?: string } | null }
+        | undefined;
+      const locked = !!(d?.lead && d.lead.phase === "locked");
+      setLeadLocked(locked);
+      if (staleTimer) clearTimeout(staleTimer);
+      // Messages stop when the stream/channel drops — don't blink forever.
+      staleTimer = setTimeout(() => setLeadLocked(false), 2500);
+    };
+    window.addEventListener("camtok:lead-vehicle", onLead);
+    return () => {
+      window.removeEventListener("camtok:lead-vehicle", onLead);
+      if (staleTimer) clearTimeout(staleTimer);
+    };
+  }, []);
   /** Big center readout: stake committed, then win (green +) or loss (red -). */
   const [centerMoneyFlash, setCenterMoneyFlash] = useState<{
     kind: "stake" | "win" | "loss";
@@ -2506,9 +2529,15 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         className={
           videoFullscreen
             ? "absolute inset-0 z-[8] flex items-center justify-center overflow-hidden bg-black"
-            : "absolute left-3 top-[max(0.75rem,env(safe-area-inset-top))] z-[20] aspect-[9/16] w-[34%] max-w-[190px] overflow-hidden rounded-xl border border-white/15 bg-black shadow-lg"
+            : `absolute left-3 top-[max(0.75rem,env(safe-area-inset-top))] z-[20] aspect-[9/16] w-[34%] max-w-[190px] overflow-hidden rounded-xl bg-black shadow-lg ${
+                leadLocked
+                  ? "animate-pulse border-2 border-emerald-400 shadow-[0_0_20px_rgba(34,197,94,0.8)]"
+                  : "border border-white/15"
+              }`
         }
-        style={videoFullscreen ? undefined : { opacity: 0.7 }}
+        style={
+          videoFullscreen ? undefined : { opacity: leadLocked ? 1 : 0.7 }
+        }
       >
         {useYoutubeDashcam ? (
           <iframe
