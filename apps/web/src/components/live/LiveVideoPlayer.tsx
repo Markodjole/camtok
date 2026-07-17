@@ -17,6 +17,29 @@ function webrtcDebugEnabled(): boolean {
   }
 }
 
+/** Tiny receive-side stats badge — visible with ?p2pstats=1 in the URL. */
+function ViewerStatsBadge() {
+  const [line, setLine] = useState<string | null>(null);
+  useEffect(() => {
+    if (
+      typeof window === "undefined" ||
+      !window.location.search.includes("p2pstats=1")
+    ) {
+      return;
+    }
+    const onStats = (e: Event) =>
+      setLine(String((e as CustomEvent).detail ?? ""));
+    window.addEventListener("camtok:viewer-stats", onStats);
+    return () => window.removeEventListener("camtok:viewer-stats", onStats);
+  }, []);
+  if (!line) return null;
+  return (
+    <div className="pointer-events-none absolute bottom-1 left-1 z-[30] rounded bg-black/70 px-1.5 py-0.5 font-mono text-[10px] text-lime-300">
+      {line}
+    </div>
+  );
+}
+
 function StreamConnectOverlay() {
   return (
     <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-black/65 px-6 text-center backdrop-blur-[2px]">
@@ -238,6 +261,7 @@ export function LiveVideoPlayer({
         muted
         className={videoClass}
       />
+      <ViewerStatsBadge />
       {viewerConnecting || buffering ? <StreamConnectOverlay /> : null}
       {showError ? (
         <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-black/80 p-4 text-center">

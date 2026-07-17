@@ -523,6 +523,66 @@ export async function startViewerP2p(
     if (remoteMedia.getTracks().length === 0) return;
     gotRemoteTrack = true;
     onRemoteStream(new MediaStream(remoteMedia.getTracks()));
+    startViewerStats();
+  };
+
+  // Receiver-side truth: is the VIEWER the bottleneck? Sender-side stats can
+  // only see the network estimate; this shows what the receiving machine
+  // actually decoded vs dropped. Enable with ?p2pstats=1 (badge + console).
+  let viewerStatsTimer: ReturnType<typeof setInterval> | null = null;
+  let lastFramesDecoded = 0;
+  let lastBytesRecv = 0;
+  let lastStatsAt = 0;
+  const startViewerStats = () => {
+    if (typeof window === "undefined") return;
+    if (!window.location.search.includes("p2pstats=1")) return;
+    if (viewerStatsTimer) return;
+    viewerStatsTimer = setInterval(async () => {
+      const cur = pc;
+      if (!cur || cur.signalingState === "closed") return;
+      try {
+        const stats = await cur.getStats();
+        let inb: Record<string, number | string> | null = null;
+        stats.forEach((v) => {
+          const r = v as unknown as Record<string, number | string> & {
+            type?: string;
+            kind?: string;
+          };
+          if (r.type === "inbound-rtp" && r.kind === "video") inb = r;
+        });
+        if (!inb) return;
+        const rec = inb as Record<string, number>;
+        const now = Date.now();
+        const dtS = lastStatsAt ? (now - lastStatsAt) / 1000 : 0;
+        const decFps =
+          dtS > 0
+            ? Math.round((rec.framesDecoded - lastFramesDecoded) / dtS)
+            : 0;
+        const kbps =
+          dtS > 0
+            ? Math.round(((rec.bytesReceived - lastBytesRecv) * 8) / 1000 / dtS)
+            : 0;
+        lastFramesDecoded = rec.framesDecoded ?? 0;
+        lastBytesRecv = rec.bytesReceived ?? 0;
+        lastStatsAt = now;
+        const jbMs =
+          rec.jitterBufferEmittedCount > 0
+            ? Math.round(
+                (rec.jitterBufferDelay / rec.jitterBufferEmittedCount) * 1000,
+              )
+            : 0;
+        const line =
+          `recv ${rec.frameWidth ?? "?"}x${rec.frameHeight ?? "?"}` +
+          ` dec=${decFps}fps drop=${rec.framesDropped ?? 0}` +
+          ` ${kbps}kbps lost=${rec.packetsLost ?? 0} jb=${jbMs}ms`;
+        console.warn(`[viewer-stats] ${line}`);
+        window.dispatchEvent(
+          new CustomEvent("camtok:viewer-stats", { detail: line }),
+        );
+      } catch {
+        // best-effort
+      }
+    }, 5000);
   };
 
   const wire = (p: RTCPeerConnection, offerUfrag: string) => {
@@ -871,6 +931,10 @@ export async function startViewerP2p(
     clearStuck();
     clearAnswerRetry();
     clearReadyRetry();
+    if (viewerStatsTimer) {
+      clearInterval(viewerStatsTimer);
+      viewerStatsTimer = null;
+    }
     teardownChannel(supabase, ch);
     closeViewerPc();
     bcBuf.clear();
