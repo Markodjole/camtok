@@ -2494,7 +2494,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         <button
           type="button"
           onClick={() => router.push("/live")}
-          className="fixed bottom-[max(0.75rem,env(safe-area-inset-bottom))] left-3 z-[55] flex h-10 w-10 items-center justify-center rounded-full border border-white/20 bg-black/80 text-base text-white/90 active:bg-black/95"
+          className="fixed bottom-[max(0.75rem,env(safe-area-inset-bottom))] right-3 z-[55] flex h-10 w-10 items-center justify-center rounded-full border border-white/20 bg-black/80 text-base text-white/90 active:bg-black/95"
           title="Leave room"
           aria-label="Leave room"
         >
@@ -2529,14 +2529,19 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
         className={
           videoFullscreen
             ? "absolute inset-0 z-[8] flex items-center justify-center overflow-hidden bg-black"
-            : `absolute left-3 top-[max(0.75rem,env(safe-area-inset-top))] z-[20] aspect-[9/16] w-[34%] max-w-[190px] overflow-hidden rounded-xl bg-black shadow-lg ${
+            : `absolute left-3 z-[20] aspect-[9/16] w-[34%] max-w-[190px] overflow-hidden rounded-xl bg-black shadow-lg ${
                 leadLocked
                   ? "animate-pulse border-2 border-emerald-400 shadow-[0_0_20px_rgba(34,197,94,0.8)]"
                   : "border border-white/15"
               }`
         }
         style={
-          videoFullscreen ? undefined : { opacity: leadLocked ? 1 : 0.7 }
+          videoFullscreen
+            ? undefined
+            : {
+                opacity: leadLocked ? 1 : 0.7,
+                bottom: "calc(env(safe-area-inset-bottom, 0px) + 4rem)",
+              }
         }
       >
         {useYoutubeDashcam ? (
