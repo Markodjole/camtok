@@ -2540,7 +2540,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
             ? undefined
             : {
                 opacity: leadLocked ? 1 : 0.7,
-                bottom: "calc(env(safe-area-inset-bottom, 0px) + 4rem)",
+                bottom: "max(0.75rem, env(safe-area-inset-bottom, 0px))",
               }
         }
       >
@@ -2607,7 +2607,7 @@ export function LiveRoomScreen({ initialRoom }: { initialRoom: LiveFeedRow }) {
           videoFullscreen
             ? {
                 opacity: 0.7,
-                bottom: "calc(env(safe-area-inset-bottom, 0px) + 4rem)",
+                bottom: "max(0.75rem, env(safe-area-inset-bottom, 0px))",
               }
             : undefined
         }
